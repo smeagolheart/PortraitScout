@@ -713,6 +713,14 @@ def run_gui() -> None:
                     command=lambda: show_view()).pack(side="left", padx=(16, 0))
     ttk.Radiobutton(btns, text="Gallery", value="gallery", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(2, 0))
+    search_var = tk.StringVar(value="")
+    ttk.Label(btns, text="Search:").pack(side="left", padx=(22, 4))
+    search_entry = ttk.Entry(btns, textvariable=search_var, width=24)
+    search_entry.pack(side="left")
+    search_clear = ttk.Button(btns, text="x", width=2, command=lambda: search_var.set(""))
+    search_clear.pack(side="left", padx=(2, 0))
+    count_var = tk.StringVar(value="")
+    ttk.Label(btns, textvariable=count_var, foreground="#555").pack(side="left", padx=8)
     loading_var = tk.StringVar(value="")
     ttk.Label(btns, textvariable=loading_var, foreground="#b45309",
               font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=14)
@@ -844,12 +852,21 @@ def run_gui() -> None:
     tree.bind("<Button-1>", table_click, add="+")
     ttk.Label(root, textvariable=status, anchor="w", padding=(8, 2)).pack(fill="x")
 
-    def sorted_rows() -> List[dict]:
+    def row_text(r: dict) -> str:
+        pp = props.get(rowkey(r))
+        return " ".join([str(r.get("name", "")), " ".join(r.get("cre_list", [])), str(r.get("large", "")),
+                         str(r.get("small", "")), str(r.get("race", "")), str(r.get("sex", "")), str(r.get("anim", "")),
+                         " ".join(r.get("dialogs", [])), Path(pp).name if pp else ""]).lower()
+
+    def sorted_rows(filtered: bool = True) -> List[dict]:
         res = state["res"]
         if not res:
             return []
         key, desc = state["sort"]                                    # type: ignore[misc]
         rows = list(res["rows"])                                     # type: ignore[index]
+        terms = search_var.get().lower().split() if filtered else []
+        if terms:
+            rows = [r for r in rows if all(t in row_text(r) for t in terms)]
         rows.sort(key=lambda r: (r[key] if key == "lines" else str(r[key]).lower()), reverse=desc)
         return rows
 
@@ -862,8 +879,23 @@ def run_gui() -> None:
         key, desc = state["sort"]                                    # type: ignore[misc]
         for k, h in COLUMNS:
             tree.heading(k, text=h + ((" ▼" if desc else " ▲") if k == key else ""))
+        total = len(state["res"]["rows"]) if state["res"] else 0          # type: ignore[index]
+        count_var.set(f"{len(rows)} of {total}" if search_var.get().strip() and total else "")
         if view_var.get() == "gallery":
             build_gallery(rows)
+
+    def on_search(*_a: object) -> None:
+        if state.get("search_job"):
+            root.after_cancel(state["search_job"])                   # type: ignore[arg-type]
+
+        def go() -> None:
+            state["search_job"] = None
+            state["page"] = 0
+            refresh()
+        state["search_job"] = root.after(250, go)
+
+    search_var.trace_add("write", on_search)
+    root.bind("<Control-f>", lambda e: (search_entry.focus_set(), search_entry.select_range(0, "end")))
 
     def sort_by(col: str) -> None:
         key, desc = state["sort"]                                    # type: ignore[misc]
@@ -1022,7 +1054,7 @@ def run_gui() -> None:
 
     def export_props() -> None:
         res = state["res"]
-        rows = [r for r in sorted_rows() if rowkey(r) in props]
+        rows = [r for r in sorted_rows(False) if rowkey(r) in props]
         if not res or not rows:
             messagebox.showinfo("Portrait Scout", "No portraits proposed yet. Use 'Propose portrait...' on a gallery card.")
             return
@@ -1320,7 +1352,7 @@ def run_gui() -> None:
             b.config(state="normal")
         out = Path(__file__).resolve().parent / f"{res['mod']}-creatures.txt"       # type: ignore[index]
         try:
-            out.write_text(as_text(res, sorted_rows()), encoding="utf-8")            # type: ignore[arg-type]
+            out.write_text(as_text(res, sorted_rows(False)), encoding="utf-8")            # type: ignore[arg-type]
             status.set(f"{len(res['rows'])} creature(s). Saved {out}")               # type: ignore[index]
         except OSError:
             status.set(f"{len(res['rows'])} creature(s).")                           # type: ignore[index]
@@ -1353,7 +1385,7 @@ def run_gui() -> None:
         p = filedialog.asksaveasfilename(defaultextension=".txt", initialfile=f"{res['mod']}-creatures.txt",   # type: ignore[index]
                                          filetypes=[("Text", "*.txt")])
         if p:
-            Path(p).write_text(as_text(res, sorted_rows()), encoding="utf-8")            # type: ignore[arg-type]
+            Path(p).write_text(as_text(res, sorted_rows(False)), encoding="utf-8")            # type: ignore[arg-type]
             status.set(f"Saved {p}")
 
     def save_csv() -> None:
@@ -1363,7 +1395,7 @@ def run_gui() -> None:
         p = filedialog.asksaveasfilename(defaultextension=".csv", initialfile=f"{res['mod']}-creatures.csv",    # type: ignore[index]
                                          filetypes=[("CSV", "*.csv")])
         if p:
-            write_csv(res, p, sorted_rows())                                             # type: ignore[arg-type]
+            write_csv(res, p, sorted_rows(False))                                             # type: ignore[arg-type]
             status.set(f"Saved {p}")
 
     go_btn.config(command=analyze_clicked)

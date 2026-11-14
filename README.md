@@ -23,6 +23,7 @@ Use it to plan NPC portraits: who talks, how much, which portrait each uses (spo
 2. Pick the **Mod folder**. Leave it empty, or pick the game folder, to list the whole install.
 3. Press **Analyze** (can take a minute or two on a large install).
 4. Switch **Table** / **Gallery** with the buttons beside it. Click table headers to sort. Clicking a CRE name copies it.
+   **Search** (or **Ctrl+F**) filters both views as you type, by name, CRE file, portrait, race, gender, animation or proposed image. Several words must all match. **x** clears it. Saving and exporting always include every creature.
    In the gallery, scroll with the mouse wheel, **Up/Down**, **Page Up/Down** or **Ctrl+Home/End**. It shows 200 creatures per page: use **Previous/Next** or type a page number and press **Enter**.
 5. **Double-click** a creature to see its portrait and lines (**Copy all lines** copies them) and, for speakers that needed explaining, "Where this comes from".
 6. A `<ModName>-creatures.txt` report is saved next to the script. **Save as text file...** and **Save as CSV...** save elsewhere.
