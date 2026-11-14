@@ -713,6 +713,9 @@ def run_gui() -> None:
                     command=lambda: show_view()).pack(side="left", padx=(16, 0))
     ttk.Radiobutton(btns, text="Gallery", value="gallery", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(2, 0))
+    loading_var = tk.StringVar(value="")
+    ttk.Label(btns, textvariable=loading_var, foreground="#b45309",
+              font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=14)
 
     content = ttk.Frame(root)
     content.pack(fill="both", expand=True, padx=8, pady=4)
@@ -1011,6 +1014,14 @@ def run_gui() -> None:
     clear_btn.config(command=clear_all)
 
     def build_gallery(rows: List[dict]) -> None:
+        loading_var.set("Loading...")
+        root.update_idletasks()
+        try:
+            _build_gallery(rows)
+        finally:
+            loading_var.set("")
+
+    def _build_gallery(rows: List[dict]) -> None:
         state["resize_job"] = None
         for w in ginner.winfo_children():
             w.destroy()
