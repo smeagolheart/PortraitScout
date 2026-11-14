@@ -786,6 +786,12 @@ def run_gui() -> None:
             else:
                 gcanvas.yview_moveto(1)
 
+    def gal_arrow(e: object, n: int) -> None:
+        if view_var.get() == "gallery" and e.widget.winfo_class() not in ("TEntry", "Entry"):   # type: ignore[attr-defined]
+            gcanvas.yview_scroll(n, "units")
+
+    root.bind("<Up>", lambda e: gal_arrow(e, -3))
+    root.bind("<Down>", lambda e: gal_arrow(e, 3))
     root.bind("<Prior>", lambda e: gal_key("page", -1))
     root.bind("<Next>", lambda e: gal_key("page", 1))
     root.bind("<Control-Home>", lambda e: gal_key("home"))
@@ -1056,7 +1062,7 @@ def run_gui() -> None:
         for c in range(per_row + 1):
             ginner.columnconfigure(c, weight=1 if c < per_row else 0, uniform="gal" if c < per_row else "")
         cards: List[Tuple[object, dict]] = []
-        PAGE = 400
+        PAGE = 100          # keeps the canvas well under the 32,767 px limit of Windows widgets
         npages = max(1, (len(rows) + PAGE - 1) // PAGE)
         page = min(int(state["page"]), npages - 1)                   # type: ignore[call-overload]
         state["page"] = page
