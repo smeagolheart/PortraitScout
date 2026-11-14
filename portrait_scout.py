@@ -743,10 +743,8 @@ def run_gui() -> None:
     clear_btn = ttk.Button(gbar, text="Clear all proposals")
     clear_btn.pack(side="left", padx=6)
     ttk.Label(gbar, textvariable=prop_label, foreground="#555").pack(side="left", padx=10)
-    pagebar = tk.Frame(gbar, bg=gbar.winfo_toplevel().cget("bg"))
+    pagebar = tk.Frame(gbar, bg=gbar.winfo_toplevel().cget("bg"), highlightthickness=0)
     pagebar.pack(side="left", padx=10)
-    ttk.Label(gbar, text="Use 'Propose portrait...' on a card to pick an image for that creature.",
-              foreground="#888").pack(side="right")
     gcanvas = tk.Canvas(tab_gal, highlightthickness=0, bg=PANEL)
     gv = ttk.Scrollbar(tab_gal, orient="vertical", command=gcanvas.yview)
     gcanvas.configure(yscrollcommand=gv.set)
@@ -1043,6 +1041,8 @@ def run_gui() -> None:
             else:
                 bar = tk.Frame(ginner, bg=PANEL)
                 bar.grid(row=grid_row, column=0, columnspan=per_row, pady=6)
+
+            bar.config(highlightthickness=2, highlightbackground="#8a8f98", highlightcolor="#8a8f98", padx=4, pady=2)
 
             def go(d: int) -> None:
                 state["page"] = page + d
