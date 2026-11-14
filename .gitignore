@@ -3,3 +3,4 @@ __pycache__/
 portrait_scout.settings.json
 *-creatures.txt
 *-portrait-todo.txt
+temp/
