@@ -743,6 +743,8 @@ def run_gui() -> None:
     clear_btn = ttk.Button(gbar, text="Clear all proposals")
     clear_btn.pack(side="left", padx=6)
     ttk.Label(gbar, textvariable=prop_label, foreground="#555").pack(side="left", padx=10)
+    pagebar = tk.Frame(gbar, bg=gbar.winfo_toplevel().cget("bg"))
+    pagebar.pack(side="left", padx=10)
     ttk.Label(gbar, text="Use 'Propose portrait...' on a card to pick an image for that creature.",
               foreground="#888").pack(side="right")
     gcanvas = tk.Canvas(tab_gal, highlightthickness=0, bg=PANEL)
@@ -1030,11 +1032,17 @@ def run_gui() -> None:
         state["page"] = page
         first = page * PAGE
 
-        def nav_bar(grid_row: int) -> None:
+        for w in pagebar.winfo_children():
+            w.destroy()
+
+        def nav_bar(grid_row: Optional[int]) -> None:
             if npages <= 1:
                 return
-            bar = tk.Frame(ginner, bg=PANEL)
-            bar.grid(row=grid_row, column=0, columnspan=per_row, pady=6)
+            if grid_row is None:
+                bar = pagebar
+            else:
+                bar = tk.Frame(ginner, bg=PANEL)
+                bar.grid(row=grid_row, column=0, columnspan=per_row, pady=6)
 
             def go(d: int) -> None:
                 state["page"] = page + d
@@ -1042,18 +1050,19 @@ def run_gui() -> None:
                 gcanvas.yview_moveto(0)
             tk.Button(bar, text=f"< Previous {PAGE}", command=lambda: go(-1),
                       state="normal" if page > 0 else "disabled").pack(side="left", padx=6)
-            tk.Label(bar, text=f"Creatures {first + 1}-{min(first + PAGE, len(rows))} of {len(rows)}", bg=PANEL,
+            tk.Label(bar, text=f"Creatures {first + 1}-{min(first + PAGE, len(rows))} of {len(rows)}",
+                     bg=bar.cget("bg"),
                      fg="#555").pack(side="left", padx=6)
             tk.Button(bar, text=f"Next {PAGE} >", command=lambda: go(1),
                       state="normal" if page < npages - 1 else "disabled").pack(side="left", padx=6)
 
-        nav_bar(0)
+        nav_bar(None)
         shown_rows = rows[first:first + PAGE]
         for i, r in enumerate(shown_rows):
             prop = props.get(rowkey(r))
             card = tk.Frame(ginner, bg=CARD, bd=1, relief="solid", padx=4, pady=4, highlightthickness=4,
                             highlightbackground="#2e9e4f" if prop else CARD, highlightcolor="#2e9e4f" if prop else CARD)
-            card.grid(row=i // per_row + 1, column=i % per_row, padx=4, pady=4, sticky="nsew")   # a row is as tall as its tallest card
+            card.grid(row=i // per_row, column=i % per_row, padx=4, pady=4, sticky="nsew")   # a row is as tall as its tallest card
             cards.append((card, r))
             img = load_thumb(prop) if prop else None
             shown_field = "prop" if img else ""
@@ -1127,7 +1136,7 @@ def run_gui() -> None:
 
         for card, row in cards:
             bind_all_children(card, row)
-        nav_bar((len(shown_rows) - 1) // per_row + 2)
+        nav_bar((len(shown_rows) - 1) // per_row + 1)
 
     def show_lines(r: dict) -> None:
         res = state["res"]
