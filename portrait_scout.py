@@ -1088,9 +1088,25 @@ def run_gui() -> None:
                 gcanvas.yview_moveto(0)
             tk.Button(bar, text=f"< Previous {PAGE}", command=lambda: go(-1),
                       state="normal" if page > 0 else "disabled").pack(side="left", padx=6)
-            tk.Label(bar, text=f"Creatures {first + 1}-{min(first + PAGE, len(rows))} of {len(rows)}",
-                     bg=bar.cget("bg"),
-                     fg="#555").pack(side="left", padx=6)
+            def jump(_e: object = None, v: Optional[tk.StringVar] = None) -> None:
+                try:
+                    n = int((v.get() if v else "").strip()) - 1          # type: ignore[union-attr]
+                except ValueError:
+                    return
+                n = max(0, min(npages - 1, n))
+                if n != page:
+                    state["page"] = n
+                    build_gallery(sorted_rows())
+                    gcanvas.yview_moveto(0)
+            bg = bar.cget("bg")
+            tk.Label(bar, text="Page", bg=bg, fg="#555").pack(side="left", padx=(6, 2))
+            pv = tk.StringVar(value=str(page + 1))
+            pe = tk.Entry(bar, textvariable=pv, width=4, justify="center")
+            pe.pack(side="left")
+            pe.bind("<Return>", lambda e, v=pv: jump(e, v))
+            pe.bind("<KP_Enter>", lambda e, v=pv: jump(e, v))
+            tk.Label(bar, text=f"of {npages}  ({first + 1}-{min(first + PAGE, len(rows))} of {len(rows)})",
+                     bg=bg, fg="#555").pack(side="left", padx=(2, 6))
             tk.Button(bar, text=f"Next {PAGE} >", command=lambda: go(1),
                       state="normal" if page < npages - 1 else "disabled").pack(side="left", padx=6)
 
