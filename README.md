@@ -7,6 +7,8 @@ Lists the speaking creatures of an **installed** Infinity Engine mod, or of a wh
 | Skie | 21 | SKIEL | Human | Female | Thief Female Human | SKIE |
 | Urnn Indigospit | 11 | L#SSMAG | Human | Male | Mage Male Human | L#SSMAG |
 
+![Portrait Scout gallery](screenshot.png)
+
 Use it to plan NPC portraits: who talks, how much, which portrait each uses (spot duplicates and gaps), and which creature file to open in NearInfinity. It only **reads** your game folder and never changes it.
 
 ## Requirements
