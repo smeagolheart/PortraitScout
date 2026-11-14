@@ -751,24 +751,31 @@ def run_gui() -> None:
     gcanvas = tk.Canvas(tab_gal, highlightthickness=0, bg=PANEL)
     gv = ttk.Scrollbar(tab_gal, orient="vertical", command=gcanvas.yview)
     gcanvas.configure(yscrollcommand=gv.set)
-    gcanvas.pack(side="left", fill="both", expand=True)
+    gh = ttk.Scrollbar(tab_gal, orient="horizontal", command=gcanvas.xview)
+    gcanvas.configure(xscrollcommand=gh.set)
+    gh.pack(side="bottom", fill="x")
     gv.pack(side="right", fill="y")
+    gcanvas.pack(side="left", fill="both", expand=True)
     ginner = tk.Frame(gcanvas, bg=PANEL)
     gwin = gcanvas.create_window((0, 0), window=ginner, anchor="nw")
     def fix_scrollregion(_e: object = None) -> None:
         # exact size of the cards, so you can't scroll into empty space below them
-        gcanvas.configure(scrollregion=(0, 0, max(1, ginner.winfo_reqwidth()), max(1, ginner.winfo_reqheight())))
+        cw = max(1, gcanvas.winfo_width())
+        width = max(cw, MIN_PER_ROW * CARD_W)                     # never narrower than 4 cards; scroll sideways instead
+        gcanvas.itemconfigure(gwin, width=width)
+        gcanvas.configure(scrollregion=(0, 0, width, max(1, ginner.winfo_reqheight())))
         gcanvas.yview_moveto(min(gcanvas.yview()[0], max(0.0, 1.0 - (gcanvas.winfo_height() / max(1, ginner.winfo_reqheight())))))
 
     ginner.bind("<Configure>", fix_scrollregion)
     CARD_W = 185                                   # width reserved for one gallery card; the row fills the window
+    MIN_PER_ROW = 4                                # fewer than this per row is not supported (layout breaks)
 
     def per_row_now() -> int:
         w = gcanvas.winfo_width()
-        return max(1, (w if w > 100 else 1000) // CARD_W)
+        return max(MIN_PER_ROW, (w if w > 100 else 1000) // CARD_W)
 
     def on_gal_resize(e: object) -> None:
-        gcanvas.itemconfigure(gwin, width=e.width)                       # type: ignore[attr-defined]
+        fix_scrollregion()
         if view_var.get() == "gallery" and state["res"] and per_row_now() != state.get("per_row"):
             if state.get("resize_job"):
                 root.after_cancel(state["resize_job"])                   # type: ignore[arg-type]
