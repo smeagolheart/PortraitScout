@@ -48,6 +48,8 @@ Nothing is converted, renamed or installed, and WeiDU doesn't do that either: th
 
 ## Columns
 
+![Portrait Scout table view](screenshot2.png)
+
 - **Lines**: NPC lines the creature speaks (player replies excluded).
 - **Portrait**: large portrait name, or `(none)`, `(file missing)`, `(creature not found)`.
 - **Race / Gender / Animation**: from the creature file and the game's `race.ids` / `animate.ids`.
