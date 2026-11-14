@@ -755,7 +755,12 @@ def run_gui() -> None:
     gv.pack(side="right", fill="y")
     ginner = tk.Frame(gcanvas, bg=PANEL)
     gwin = gcanvas.create_window((0, 0), window=ginner, anchor="nw")
-    ginner.bind("<Configure>", lambda e: gcanvas.configure(scrollregion=gcanvas.bbox("all")))
+    def fix_scrollregion(_e: object = None) -> None:
+        # exact size of the cards, so you can't scroll into empty space below them
+        gcanvas.configure(scrollregion=(0, 0, max(1, ginner.winfo_reqwidth()), max(1, ginner.winfo_reqheight())))
+        gcanvas.yview_moveto(min(gcanvas.yview()[0], max(0.0, 1.0 - (gcanvas.winfo_height() / max(1, ginner.winfo_reqheight())))))
+
+    ginner.bind("<Configure>", fix_scrollregion)
     CARD_W = 185                                   # width reserved for one gallery card; the row fills the window
 
     def per_row_now() -> int:
@@ -771,6 +776,20 @@ def run_gui() -> None:
 
     gcanvas.bind("<Configure>", on_gal_resize)
     root.bind("<MouseWheel>", lambda e: gcanvas.yview_scroll(int(-e.delta / 120), "units") if view_var.get() == "gallery" else None)
+
+    def gal_key(what: str, n: int = 1) -> None:
+        if view_var.get() == "gallery":
+            if what == "page":
+                gcanvas.yview_scroll(n, "pages")
+            elif what == "home":
+                gcanvas.yview_moveto(0)
+            else:
+                gcanvas.yview_moveto(1)
+
+    root.bind("<Prior>", lambda e: gal_key("page", -1))
+    root.bind("<Next>", lambda e: gal_key("page", 1))
+    root.bind("<Control-Home>", lambda e: gal_key("home"))
+    root.bind("<Control-End>", lambda e: gal_key("end"))
 
     def show_view() -> None:
         tab_table.pack_forget()
@@ -1020,6 +1039,8 @@ def run_gui() -> None:
             _build_gallery(rows)
         finally:
             loading_var.set("")
+            root.update_idletasks()
+            fix_scrollregion()
 
     def _build_gallery(rows: List[dict]) -> None:
         state["resize_job"] = None
