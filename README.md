@@ -21,6 +21,7 @@ Use it to plan NPC portraits: who talks, how much, which portrait each uses (spo
 2. Pick the **Mod folder**. Leave it empty, or pick the game folder, to list the whole install.
 3. Press **Analyze** (can take a minute or two on a large install).
 4. Switch **Table** / **Gallery** with the buttons beside it. Click table headers to sort. Clicking a CRE name copies it.
+   In the gallery, scroll with the mouse wheel, **Up/Down**, **Page Up/Down** or **Ctrl+Home/End**. It shows 200 creatures per page: use **Previous/Next** or type a page number and press **Enter**.
 5. **Double-click** a creature to see its portrait and lines (**Copy all lines** copies them) and, for speakers that needed explaining, "Where this comes from".
 6. A `<ModName>-creatures.txt` report is saved next to the script. **Save as text file...** and **Save as CSV...** save elsewhere.
 
@@ -70,5 +71,5 @@ It reads `chitin.key`, the archives, override and `dialog.tlk` directly. Every s
 - The mod must be installed in the chosen game folder, or the tool says so.
 - Matching is by text: accurate, not perfect. Unlinked speakers show as `Unknown (DIALOGNAME)`, and the lines window and CSV `notes` column explain what is known.
 - Only plain (uncompressed) archives are read, as in the Enhanced Editions.
-- The gallery shows 200 creatures per page (Previous/Next buttons and a page-number box at the top and bottom); the table and text file show all.
+- The gallery pages 200 creatures at a time and always shows at least 4 per row (a narrow window gets a sideways scrollbar). The table and text file show all creatures.
 - Folders and proposals are stored in `portrait_scout.settings.json` next to the script; delete it to reset.
