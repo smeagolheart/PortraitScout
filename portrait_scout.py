@@ -699,7 +699,7 @@ def run_gui() -> None:
                                                              mod_var.get() or game_var.get())).grid(row=1, column=2, pady=(6, 0))
     btns = ttk.Frame(top)
     btns.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-    go_btn = tk.Button(btns, text="Analyze mod", bg="#2e9e4f", fg="white", activebackground="#25803f",
+    go_btn = tk.Button(btns, text="Analyze", bg="#2e9e4f", fg="white", activebackground="#25803f",
                        activeforeground="white", font=("TkDefaultFont", 10, "bold"), padx=14, pady=3, relief="raised")
     go_btn.pack(side="left")
     save_btn = ttk.Button(btns, text="Save as text file...", state="disabled")

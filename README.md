@@ -19,7 +19,7 @@ Use it to plan NPC portraits: who talks, how much, which portrait each uses (spo
 
 1. Copy `portrait_scout.py` into the game folder, open a command prompt there, run `python portrait_scout.py`. The game folder is pre-filled; the last one used is remembered.
 2. Pick the **Mod folder**. Leave it empty, or pick the game folder, to list the whole install.
-3. Press **Analyze mod** (can take a minute or two on a large install).
+3. Press **Analyze** (can take a minute or two on a large install).
 4. Switch **Table** / **Gallery** with the buttons beside it. Click table headers to sort. Clicking a CRE name copies it.
 5. **Double-click** a creature to see its portrait and lines (**Copy all lines** copies them) and, for speakers that needed explaining, "Where this comes from".
 6. A `<ModName>-creatures.txt` report is saved next to the script. **Save as text file...** and **Save as CSV...** save elsewhere.
