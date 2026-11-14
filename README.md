@@ -15,6 +15,7 @@ Use it to plan NPC portraits: who talks, how much, which portrait each uses (spo
 
 - Python 3.8+ with tkinter (included in the normal Windows/macOS installers; Linux: `python3-tk`).
 - A game folder (contains `chitin.key`) with the mod installed via WeiDU, plus the mod's own folder (`.tp2`, `.tra`, `.d` files). Not IWD2 or Planescape: Torment.
+- Optional: [ffmpeg](https://ffmpeg.org) on PATH to play compressed sounds (WAVC/ACM and Ogg). Plain WAV sounds play without it. Playback uses `winsound` on Windows, `afplay` on macOS, `paplay`/`aplay` on Linux.
 - Optional: `pip install pillow` to preview JPG and other formats for proposed portraits (PNG, GIF and BMP work without it).
 
 ## Use
@@ -25,7 +26,7 @@ Use it to plan NPC portraits: who talks, how much, which portrait each uses (spo
 4. Switch **Table** / **Gallery** with the buttons beside it. Click table headers to sort. Clicking a CRE name copies it.
    **Search** (or **Ctrl+F**) filters both views as you type, by name, CRE file, portrait, race, gender, animation or proposed image. Several words must all match. **x** clears it. Saving and exporting always include every creature.
    In the gallery, scroll with the mouse wheel, **Up/Down**, **Page Up/Down** or **Ctrl+Home/End**. It shows 200 creatures per page: use **Previous/Next** or type a page number and press **Enter**.
-5. **Double-click** a creature to see its portrait and lines (**Copy all lines** copies them) and, for speakers that needed explaining, "Where this comes from".
+5. **Double-click** a creature to see its portrait and lines (**Copy all lines** copies them all, **Copy** on a line copies just that one) and, for speakers that needed explaining, "Where this comes from". Lines with a voiced sound show its name and a **▶ Play** button (press again to stop). The **Search** box there (or **Ctrl+F** in that window) filters the lines by strref, sound name or text. Long lists are shown 200 lines per page (**Previous/Next**, or type a page number and press **Enter**).
 6. A `<ModName>-creatures.txt` report is saved next to the script. **Save as text file...** and **Save as CSV...** save elsewhere.
 
 **Merge dialogs with the same creature name** combines separate dialogs of one NPC (e.g. a joined-party dialog). Leave it off if different creatures share a name, such as two zombies.

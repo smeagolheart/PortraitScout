@@ -23,16 +23,21 @@ import argparse
 import csv
 import json
 import os
+import io
 import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
+import wave
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-T_BMP, T_IDS, T_CRE, T_DLG = 0x0001, 0x03F0, 0x03F1, 0x03F3
-EXT = {T_BMP: ".bmp", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg"}
+T_BMP, T_WAV, T_IDS, T_CRE, T_DLG = 0x0001, 0x0004, 0x03F0, 0x03F1, 0x03F3
+EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg"}
 SOURCE_EXTS = {".tra", ".d", ".baf", ".tph", ".tpa", ".tpp", ".tp2", ".tp3", ".tpl"}
 NO_PORTRAIT = {"", "NONE", "NO_PORT", "NOPORT"}
 SEX_NAMES = {1: "Male", 2: "Female", 3: "Other", 4: "Neither"}
@@ -191,6 +196,12 @@ class Tlk:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
             return raw.decode("cp1252", "replace")
+
+    def sound(self, i: int) -> str:
+        """The sound resref of entry i ('' if none)."""
+        if i < 0 or i >= self.count:
+            return ""
+        return self.d[20 + 26 * i:28 + 26 * i].split(b"\0", 1)[0].decode("latin1").strip().upper()
 
 
 _WS = re.compile(r"\s+")
@@ -461,6 +472,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
         r["cre_known"] = known if len(known) < len(r["cre_list"]) else []      # bold only when it narrows things down
         r["cre"] = ", ".join(f"[{c}]" if c in r["cre_known"] else c for c in r["cre_list"])
         r["texts"] = [(sr, _COLOR.sub(r"\1", tlk.text(sr)).strip()) for sr in sorted(r["refs"])]
+        r["sounds"] = {sr: snd for sr in r["refs"] for snd in (tlk.sound(sr),) if snd and game.has(snd, T_WAV)}
         shown = r["large"] or r["small"]
         first = shown.split("/")[0] if shown else ""
         r["portrait"] = shown if shown else ("(none)" if r["found"] else "(creature not found)")
@@ -643,6 +655,99 @@ def check_image(path: str) -> List[str]:
 
 # --------------------------------------------------------------------------------------------- GUI
 SETTINGS = Path(__file__).with_suffix(".settings.json")
+
+
+# --------------------------------------------------------------------------------------------- sound
+_ACM_SIG = b"\x97\x28\x03\x01"
+
+
+def sound_to_wav(data: bytes) -> Tuple[Optional[bytes], str]:
+    """(RIFF WAV bytes, error). Plain WAV is used as is; WAVC/ACM and Ogg Vorbis are converted with ffmpeg."""
+    if data[:4] == b"RIFF":
+        return data, ""
+    if data[:4] == b"WAVC" and len(data) > 28:
+        hsz = struct.unpack_from("<I", data, 16)[0] or 28
+        ch = struct.unpack_from("<H", data, 20)[0]
+        acm = bytearray(data[hsz:])
+        if acm[:4] == _ACM_SIG and ch in (1, 2):
+            acm[8:10] = struct.pack("<H", ch)        # the WAVC header has the true channel count, the ACM one may not
+        src, fmt = bytes(acm), "acm"
+    elif data[:4] == _ACM_SIG:
+        src, fmt = data, "acm"
+    elif data[:4] == b"OggS":
+        src, fmt = data, "ogg"
+    else:
+        return None, "unknown sound format"
+    ff = shutil.which("ffmpeg")
+    if not ff:
+        return None, f"this sound is {fmt.upper()}; ffmpeg is needed to play it (install it and put it on PATH)"
+    try:
+        p = subprocess.run([ff, "-v", "error", "-f", fmt, "-i", "pipe:0", "-f", "wav", "-acodec", "pcm_s16le", "pipe:1"],
+                           input=src, capture_output=True, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"ffmpeg failed: {e}"
+    if p.returncode or p.stdout[:4] != b"RIFF":
+        return None, "ffmpeg could not convert it: " + p.stderr.decode("utf-8", "replace").strip()[:200]
+    return fix_wav_sizes(p.stdout), ""
+
+
+def fix_wav_sizes(data: bytes) -> bytes:
+    """WAV piped out of ffmpeg has placeholder sizes; write the real ones so players and wave read it right."""
+    out = bytearray(data)
+    struct.pack_into("<I", out, 4, len(out) - 8)
+    pos = 12
+    while pos + 8 <= len(out):
+        cid, size = out[pos:pos + 4], struct.unpack_from("<I", out, pos + 4)[0]
+        if cid == b"data":
+            struct.pack_into("<I", out, pos + 4, len(out) - pos - 8)
+            break
+        pos += 8 + size + (size & 1)
+    return bytes(out)
+
+
+def wav_seconds(data: bytes) -> float:
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except (wave.Error, EOFError, ValueError):
+        return 0.0
+
+
+_player: Dict[str, object] = {}
+
+
+def play_file(path: str) -> bool:
+    """Start playing a WAV file without waiting (stops whatever was playing)."""
+    stop_sound()
+    try:
+        import winsound
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        return True
+    except ImportError:
+        pass
+    except RuntimeError:
+        return False
+    for cmd in ("afplay", "paplay", "aplay"):
+        exe = shutil.which(cmd)
+        if exe:
+            _player["proc"] = subprocess.Popen([exe, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+    return False
+
+
+def stop_sound() -> None:
+    try:
+        import winsound
+        winsound.PlaySound(None, 0)
+    except (ImportError, RuntimeError):
+        pass
+    proc = _player.pop("proc", None)
+    if proc is not None:
+        try:
+            proc.terminate()                                          # type: ignore[attr-defined]
+        except OSError:
+            pass
 
 
 def load_settings() -> dict:
@@ -1329,11 +1434,160 @@ def run_gui() -> None:
         inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
         cv.bind("<Configure>", lambda e: cv.itemconfigure(wid, width=e.width))
         win.bind("<MouseWheel>", lambda e: cv.yview_scroll(int(-e.delta / 120), "units"))
-        for sr, t in r["texts"]:
+        sounds: Dict[int, str] = r.get("sounds", {})
+        play: Dict[str, object] = {}                                 # what this window is playing: sr, button, timer
+
+        def reset_play() -> None:
+            job = play.pop("job", None)
+            if job:
+                try:
+                    win.after_cancel(job)                            # type: ignore[arg-type]
+                except tk.TclError:
+                    pass
+            btn = play.pop("btn", None)
+            play.pop("sr", None)
+            try:
+                if btn is not None:
+                    btn.config(text="\u25b6 Play")                  # type: ignore[attr-defined]
+            except tk.TclError:
+                pass
+
+        def toggle_sound(sr: int, btn: object) -> None:
+            if play.get("sr") == sr:                                 # same line again = stop
+                stop_sound()
+                reset_play()
+                return
+            stop_sound()
+            reset_play()
+            snd = sounds[sr]
+            game: Game = res["game"]                                 # type: ignore[index]
+            data = game.get(snd, T_WAV)
+            if not data:
+                status.set(f"Sound {snd} could not be read")
+                return
+            wav, err = sound_to_wav(data)
+            if not wav:
+                status.set(f"Sound {snd}: {err}")
+                return
+            d = Path(tempfile.gettempdir()) / "portrait_scout_sounds"
+            try:
+                d.mkdir(exist_ok=True)
+                f = d / f"{snd}.wav"
+                f.write_bytes(wav)
+            except OSError as e:
+                status.set(f"Sound {snd}: could not write a temp file ({e})")
+                return
+            if not play_file(str(f)):
+                status.set(f"Sound {snd}: no way to play sounds on this system")
+                return
+            secs = wav_seconds(wav)
+            play.update(sr=sr, btn=btn)
+            btn.config(text="\u25a0 Stop")                          # type: ignore[attr-defined]
+            if secs:
+                play["job"] = win.after(int(secs * 1000) + 300, reset_play)
+            status.set(f"Playing {snd} ({secs:.1f} s)" if secs else f"Playing {snd}")
+
+        def on_close(e: object) -> None:
+            if getattr(e, "widget", None) is win and play.get("sr") is not None:
+                stop_sound()
+        win.bind("<Destroy>", on_close)
+
+        bar = ttk.Frame(win, padding=(8, 2))
+        bar.pack(fill="x", before=body)
+        ttk.Label(bar, text="Search:").pack(side="left")
+        line_q = tk.StringVar(value="")
+        qe = ttk.Entry(bar, textvariable=line_q, width=28)
+        qe.pack(side="left", padx=(4, 0))
+        ttk.Button(bar, text="x", width=2, command=lambda: line_q.set("")).pack(side="left", padx=(2, 0))
+        line_count = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=line_count, foreground="#1a5fb4").pack(side="left", padx=(6, 0))
+        if sounds:
+            ttk.Label(bar, text=f"{len(sounds)} of {len(r['texts'])} line(s) have a sound - press \u25b6 to hear it.",
+                      foreground="#666").pack(side="left", padx=(12, 0))
+        win.bind("<Control-f>", lambda e: (qe.focus_set(), qe.select_range(0, "end")))
+        PAGE = 200                                                   # thousands of cards make Tk hang, so page them
+        nav = ttk.Frame(win, padding=(8, 0))
+        prev_b = ttk.Button(nav, text="< Previous", command=lambda: turn(-1))
+        prev_b.pack(side="left")
+        ttk.Label(nav, text="Page").pack(side="left", padx=(6, 2))
+        page_var = tk.StringVar(value="1")
+        page_ent = ttk.Entry(nav, textvariable=page_var, width=5, justify="center")
+        page_ent.pack(side="left")
+        page_lbl = ttk.Label(nav, text="")
+        page_lbl.pack(side="left", padx=(2, 6))
+        next_b = ttk.Button(nav, text="Next >", command=lambda: turn(1))
+        next_b.pack(side="left")
+        view: Dict[str, object] = {"match": list(r["texts"]), "page": 0, "cards": [], "job": None}
+
+        def make_card(sr: int, t: str) -> object:
             card = ttk.Frame(inner, padding=6, relief="groove")
             card.pack(fill="x", padx=8, pady=3)
-            ttk.Label(card, text=f"#{sr}", foreground="#888").pack(anchor="w")
+            top = ttk.Frame(card)
+            top.pack(fill="x")
+            ttk.Label(top, text=f"#{sr}" + (f"   {sounds[sr]}" if sr in sounds else ""), foreground="#888").pack(side="left")
+            ttk.Button(top, text="Copy", width=6,
+                       command=lambda tt=t, s=sr: (win.clipboard_clear(), win.clipboard_append(tt),
+                                                   status.set(f"Copied line #{s}"))).pack(side="right")
+            if sr in sounds:
+                b = ttk.Button(top, text="\u25b6 Play", width=8)
+                b.config(command=lambda s=sr, bb=b: toggle_sound(s, bb))
+                b.pack(side="right", padx=(0, 4))
             ttk.Label(card, text=t or "(empty)", wraplength=680, justify="left").pack(anchor="w")
+            return card
+
+        def render() -> None:
+            if play.get("sr") is not None:                           # its button is about to go away
+                stop_sound()
+                reset_play()
+            for c in view["cards"]:                                  # type: ignore[union-attr]
+                c.destroy()                                          # type: ignore[attr-defined]
+            match: List[Tuple[int, str]] = view["match"]             # type: ignore[assignment]
+            pages = max(1, (len(match) + PAGE - 1) // PAGE)
+            pg = min(max(0, int(view["page"])), pages - 1)           # type: ignore[call-overload]
+            view["page"] = pg
+            view["cards"] = [make_card(sr, t) for sr, t in match[pg * PAGE:(pg + 1) * PAGE]]
+            if not match:
+                view["cards"] = [ttk.Label(inner, text="No line matches.", foreground="#888", padding=8)]
+                view["cards"][0].pack(anchor="w")                    # type: ignore[index]
+            page_var.set(str(pg + 1))
+            page_lbl.config(text=f"of {pages}  (lines {pg * PAGE + 1 if match else 0}-{min(len(match), (pg + 1) * PAGE)})")
+            for w, ok in ((prev_b, pg > 0), (next_b, pg < pages - 1)):
+                w.config(state="normal" if ok else "disabled")
+            if pages > 1:
+                nav.pack(anchor="e", before=body)
+            else:
+                nav.pack_forget()
+            cv.yview_moveto(0)
+
+        def jump_page(_e: object = None) -> None:
+            try:
+                view["page"] = int(page_var.get().strip()) - 1
+            except ValueError:
+                pass
+            render()
+        page_ent.bind("<Return>", jump_page)
+
+        def turn(d: int) -> None:
+            view["page"] = int(view["page"]) + d                     # type: ignore[call-overload]
+            render()
+
+        def filter_lines() -> None:
+            view["job"] = None
+            if not win.winfo_exists():
+                return
+            terms = line_q.get().lower().split()
+            view["match"] = [(sr_, t_) for sr_, t_ in r["texts"]
+                             if all(w.lstrip("#") in f"{sr_} {sounds.get(sr_, '')} {t_}".lower() for w in terms)]
+            view["page"] = 0
+            line_count.set(f"{len(view['match'])} of {len(r['texts'])}" if terms else "")   # type: ignore[arg-type]
+            render()
+
+        def on_line_q(*_a: object) -> None:
+            if view["job"]:
+                win.after_cancel(view["job"])                        # type: ignore[arg-type]
+            view["job"] = win.after(250, filter_lines)
+        line_q.trace_add("write", on_line_q)
+        render()
 
     def finish(res: Optional[dict], err: Optional[str]) -> None:
         go_btn.config(state="normal")
