@@ -1062,7 +1062,7 @@ def run_gui() -> None:
         for c in range(per_row + 1):
             ginner.columnconfigure(c, weight=1 if c < per_row else 0, uniform="gal" if c < per_row else "")
         cards: List[Tuple[object, dict]] = []
-        PAGE = 100          # keeps the canvas well under the 32,767 px limit of Windows widgets
+        PAGE = 200          # keeps the canvas well under the 32,767 px limit of Windows widgets
         npages = max(1, (len(rows) + PAGE - 1) // PAGE)
         page = min(int(state["page"]), npages - 1)                   # type: ignore[call-overload]
         state["page"] = page
