@@ -70,5 +70,5 @@ It reads `chitin.key`, the archives, override and `dialog.tlk` directly. Every s
 - The mod must be installed in the chosen game folder, or the tool says so.
 - Matching is by text: accurate, not perfect. Unlinked speakers show as `Unknown (DIALOGNAME)`, and the lines window and CSV `notes` column explain what is known.
 - Only plain (uncompressed) archives are read, as in the Enhanced Editions.
-- The gallery shows up to 400 creatures; the table and text file show all.
+- The gallery shows 400 creatures per page (Previous/Next buttons at the top and bottom); the table and text file show all.
 - Folders and proposals are stored in `portrait_scout.settings.json` next to the script; delete it to reset.

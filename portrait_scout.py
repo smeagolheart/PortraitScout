@@ -679,7 +679,7 @@ def run_gui() -> None:
     merge_var = tk.BooleanVar(value=False)
     status = tk.StringVar(value="Pick the game folder and the mod folder, then press Analyze. "
                           "(Leave the mod folder empty, or pick the game folder itself, to list every creature in the install.)")
-    state: Dict[str, object] = {"res": None, "sort": ("lines", True), "imgs": {}}
+    state: Dict[str, object] = {"res": None, "sort": ("lines", True), "imgs": {}, "page": 0}
 
     top = ttk.Frame(root, padding=8)
     top.pack(fill="x")
@@ -1024,11 +1024,36 @@ def run_gui() -> None:
         for c in range(per_row + 1):
             ginner.columnconfigure(c, weight=1 if c < per_row else 0, uniform="gal" if c < per_row else "")
         cards: List[Tuple[object, dict]] = []
-        for i, r in enumerate(rows[:400]):
+        PAGE = 400
+        npages = max(1, (len(rows) + PAGE - 1) // PAGE)
+        page = min(int(state["page"]), npages - 1)                   # type: ignore[call-overload]
+        state["page"] = page
+        first = page * PAGE
+
+        def nav_bar(grid_row: int) -> None:
+            if npages <= 1:
+                return
+            bar = tk.Frame(ginner, bg=PANEL)
+            bar.grid(row=grid_row, column=0, columnspan=per_row, pady=6)
+
+            def go(d: int) -> None:
+                state["page"] = page + d
+                build_gallery(sorted_rows())
+                gcanvas.yview_moveto(0)
+            tk.Button(bar, text=f"< Previous {PAGE}", command=lambda: go(-1),
+                      state="normal" if page > 0 else "disabled").pack(side="left", padx=6)
+            tk.Label(bar, text=f"Creatures {first + 1}-{min(first + PAGE, len(rows))} of {len(rows)}", bg=PANEL,
+                     fg="#555").pack(side="left", padx=6)
+            tk.Button(bar, text=f"Next {PAGE} >", command=lambda: go(1),
+                      state="normal" if page < npages - 1 else "disabled").pack(side="left", padx=6)
+
+        nav_bar(0)
+        shown_rows = rows[first:first + PAGE]
+        for i, r in enumerate(shown_rows):
             prop = props.get(rowkey(r))
             card = tk.Frame(ginner, bg=CARD, bd=1, relief="solid", padx=4, pady=4, highlightthickness=4,
                             highlightbackground="#2e9e4f" if prop else CARD, highlightcolor="#2e9e4f" if prop else CARD)
-            card.grid(row=i // per_row, column=i % per_row, padx=4, pady=4, sticky="nsew")   # a row is as tall as its tallest card
+            card.grid(row=i // per_row + 1, column=i % per_row, padx=4, pady=4, sticky="nsew")   # a row is as tall as its tallest card
             cards.append((card, r))
             img = load_thumb(prop) if prop else None
             shown_field = "prop" if img else ""
@@ -1102,9 +1127,7 @@ def run_gui() -> None:
 
         for card, row in cards:
             bind_all_children(card, row)
-        if len(rows) > 400:
-            tk.Label(ginner, text=f"... and {len(rows) - 400} more - see the Table", bg=PANEL, fg="#555").grid(
-                row=(400 // per_row) + 1, column=0, columnspan=per_row, pady=8)
+        nav_bar((len(shown_rows) - 1) // per_row + 2)
 
     def show_lines(r: dict) -> None:
         res = state["res"]
@@ -1217,6 +1240,7 @@ def run_gui() -> None:
             messagebox.showerror("Portrait Scout", err)
             return
         state["res"] = res
+        state["page"] = 0
         props.clear()
         props.update({k: v for k, v in (st.get("proposals", {}).get(res["mod"], {}) or {}).items()          # type: ignore[index]
                       if isinstance(v, str)})
