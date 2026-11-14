@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+portrait_scout.settings.json
+*-creatures.txt
+*-portrait-todo.txt
