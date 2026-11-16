@@ -4,3 +4,8 @@ portrait_scout.settings.json
 *-creatures.txt
 *-portrait-todo.txt
 temp/
+engine/
+generated/
+generator/settings.json
+generator/engine.log
+mod/

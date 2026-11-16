@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+"""
+portrait_generator.py - turns what Portrait Scout knows about a creature into a prompt and asks an image
+generator for candidate portraits.
+
+It is separate from Portrait Scout on purpose. Portrait Scout only calls:
+
+    describe(row, settings)                  -> (subject, character)   text worked out from the game data
+    build_prompt(settings, subject, character, extra) -> (prompt, negative prompt)
+    Engine(settings).generate(prompt, negative, count, on_image)       -> PNG images
+
+Everything about the LOOK (prompt template, negative prompt, model, LoRA, sampler, size) is in settings.json next
+to this file - edit that, not the code. The engine is anything that speaks the Automatic1111 / Forge web API
+(POST /sdapi/v1/txt2img). By default that is Portrait Scout's own copy of Forge in ../engine, started in the
+background by start_engine.bat; point "url" at another server to use your own instead.
+
+Only the Python standard library is used.
+"""
+from __future__ import annotations
+
+import atexit
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
+
+HERE = Path(__file__).resolve().parent
+SETTINGS_FILE = HERE / "settings.json"
+
+DEFAULTS: dict = {
+    "_about": "Portrait generator settings. No image generator and no models come with Portrait Scout: this file says "
+              "which one to talk to (engine) and what to ask it for (styles, payload). {subject} = short description "
+              "(e.g. 'female elf'); {character} = the full description plus your extra details. Change the look here; "
+              "the code never needs editing.",
+    "prompt": "(massive head framing:1.6), (head fills 70 percent of frame:1.7), macro face framing, (tight zoom:1.5), "
+              "(textured single color warm solid backdrop:1.2), weathered appearance, matte finish, cool directional "
+              "lighting, head and shoulders, digital painting, D&D character portrait, front view portrait, centered "
+              "framing, head and shoulders, fantasy digital illustration, stylized digital painting, semi-realistic "
+              "character art, smooth shading, vibrant colors, detailed eyes, dramatic cinematic rim lighting, shallow "
+              "depth of field, crisp focus, artstation trending, {subject}, <lora:Baldurs_Gate_Portrait_Flux:.55>, "
+              "A detailed digital fantasy character portrait, dappled sunlight, rich vibrant colors, detailed skin "
+              "texture and pores, set against {background}. Clean digital painting "
+              "style, crisp facial details, dramatic rim lighting, {character}",
+    "negative_prompt": "(monochrome skin:1.4), (sepia skin:1.4), (brown skin tint:1.3), (black background:1.4), "
+                       "(dark black backdrop:1.4), (glossy:1.5), (digital art:1.4), (smooth skin:1.4), (3d render:1.5), "
+                       "(photograph:1.5), (picture frame:1.6), (border:1.6), (framed picture:1.6), (torso:1.6), "
+                       "(abs:1.5), (belt:1.5), (chest armor:1.6), (waist up:1.5), (medium shot:1.5), (bust shot:1.4), "
+                       "bare chest, bare shoulders, nude, wide shot, zoomed out, distant shot, far away, anime, "
+                       "modern clothes, shiny, eyeglasses, signature",
+    "background": "a softly blurred, out-of-focus painterly wash of muted violet, slate gray and warm golden bokeh "
+                  "highlights",
+    "_background": "What is behind the head. The prompts below put it in at {background}, so it can be changed in one "
+                   "place; a style can also carry a 'background' of its own.",
+    "style": "BG2 framing, light LoRA",
+    "styles": {
+        "_about": "Named looks to choose from in the Generate window. Each has its own 'prompt' (and optionally "
+                  "'negative_prompt'); 'Current look' is the prompt above. Add your own here.",
+        "BG2 framing": {
+            "_about": "Needs the larger 292 MB LoRA (Baldur's Gate 1-2 Portrait Style), which is an extra download. "
+                      "Head filling the frame, the way Baldur's Gate portraits (and the HPS portrait project) are "
+                      "framed, so the picture needs little "
+                      "or no cropping afterwards (zoom 1). If faces still come out small, raise the LoRA weight "
+                      "(:.65 -> :1) or crop with Head zoom. Its trigger word 'b2g8' is left out on purpose: it pulls hard "
+                      "towards the faces it was trained on and drops things like a tiefling's horns.",
+            "zoom": 1.0,
+            "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
+                      "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
+                      "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
+                      "Nothing below the collarbone, no chest, no armor plates, no hands, no weapons. Head upright, "
+                      "eyes on the viewer. Painted as a classic Baldur's Gate character portrait: a realistic oil "
+                      "painting with visible brushstrokes and canvas texture, realistic facial proportions, natural "
+                      "skin tones, detailed weathered skin, expressive lifelike eyes, deep rich colors, warm light "
+                      "from one side with soft shadows. <lora:Baldurs_Gate_Portrait_Flux:.65> Behind the head, "
+                      "{background}."
+        },
+        "BG2 framing, light LoRA": {
+            "_about": "The same framing on the small BG2 LoRA (BG_Portrait, 38 MB) that the setup notes point to. "
+                      "It nudges the style instead of taking it over, so the description is followed more closely.",
+            "zoom": 1.0,
+            "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
+                      "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
+                      "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
+                      "Nothing below the collarbone, no chest, no armor plates, no hands, no weapons. Head upright, "
+                      "eyes on the viewer. Painted as a classic Baldur's Gate character portrait: a realistic oil "
+                      "painting with visible brushstrokes and canvas texture, realistic facial proportions, natural "
+                      "skin tones, detailed weathered skin, expressive lifelike eyes, deep rich colors, warm light "
+                      "from one side with soft shadows. <lora:BG_Portrait:.8> Behind the head, {background}."
+        },
+        "Painterly": {
+            "_about": "Closer than the HPS portraits: crop it with Head zoom 1.25 or so.",
+            "zoom": 1.25,
+            "prompt": "Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
+                      "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
+                      "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
+                      "and rich canvas texture, realistic facial proportions, natural skin tones, detailed weathered "
+                      "skin, expressive lifelike eyes, deep rich colors, warm light from one side with soft shadows. "
+                      "<lora:Baldurs_Gate_Portrait_Flux:.55> Set against {background}."
+        },
+        "Painterly, lighter LoRA": {
+            "zoom": 1.25,
+            "prompt": "Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
+                      "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
+                      "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
+                      "and rich canvas texture, realistic facial proportions, natural skin tones, detailed weathered "
+                      "skin, expressive lifelike eyes, deep rich colors, warm light from one side with soft shadows. "
+                      "<lora:Baldurs_Gate_Portrait_Flux:.3> Set against {background}."
+        },
+    },
+    "candidates": 2,
+    "payload": {
+        "_about": "Sent to the engine as is (Forge / Automatic1111 txt2img fields).",
+        "steps": 25, "sampler_name": "DPM++ 2M", "scheduler": "SGM Uniform", "cfg_scale": 1, "distilled_cfg_scale": 2,
+        "width": 652, "height": 1024, "seed": -1, "batch_size": 1,
+        "override_settings": {"sd_model_checkpoint": "flux1-dev-bnb-nf4-v2.safetensors"},
+    },
+    "engine": {
+        "_about": "No generator and no models come with Portrait Scout. url = where the generator's API is "
+                  "(anything that speaks the Automatic1111 / Forge API). If nothing answers there and autostart is "
+                  "true, 'start' is run (from the Portrait Scout folder; {port} is taken from url) and stopped again "
+                  "when Portrait Scout closes. To use a generator you already run, set autostart to false and put its "
+                  "address in url; 'start' is then never used.",
+        "url": "http://127.0.0.1:7861",
+        "autostart": True,
+        "start": "generator\\start_engine.bat {port}",
+        "start_timeout_seconds": 600,
+        "image_timeout_seconds": 900,
+    },
+    "output_folder": "generated",
+    "portrait_bmp": {
+        "_about": "Size of the .bmp made when you press 'Use this' (the picture is cropped to this shape from the "
+                  "middle, then shrunk). 169x266 is the size the HPS portrait project uses for speakers.",
+        "width": 169, "height": 266,
+        "zoom": 1.25, "top": 0.0,
+        "_zoom": "zoom = how much closer the .bmp is than the generated picture (1 = whole picture, 1.25 = a quarter closer, "
+                 "which matches the framing of the HPS portraits). top = where the crop starts, as a fraction of the picture's height "
+                 "(0 = very top). The crop is centered left to right.",
+    },
+    "race_terms": {
+        "_about": "How a race from the game is worded in the prompt. Races not listed are used as they are.",
+        "human": "human", "elf": "elf with subtly pointed ears", "half elf": "half-elf with slightly pointed ears",
+        "dwarf": "dwarf, stocky", "halfling": "halfling", "gnome": "gnome",
+        "half orc": "half-orc, pale green skin, muscular", "tiefling": "tiefling, small horns",
+        "drow": "drow elf, dark grey skin, white hair, pointed ears",
+    },
+    "animation_terms": {
+        "_about": "Words in the creature's animation name -> what the speaker wears / looks like. Portraits are head "
+                  "and shoulders, so this is clothing, not held equipment.",
+        "fighter": "fighter, worn armor at the shoulders", "paladin": "paladin, polished plate armor at the shoulders",
+        "ranger": "ranger, leather and green cloak", "cleric": "cleric, priestly vestments",
+        "druid": "druid, rough natural robes", "mage": "mage, robes with a high collar",
+        "sorcerer": "sorcerer, ornate robes", "thief": "rogue, dark leather, hooded cloak", "bard": "bard, colorful clothes",
+        "monk": "monk, simple robes", "barbarian": "barbarian, furs", "shaman": "shaman, feathers and bone charms",
+        "peasant": "commoner, simple worn clothes", "noble": "noble, fine rich clothes", "beggar": "beggar, ragged clothes",
+        "slave": "ragged clothes", "fat": "heavyset, round face", "guard": "town guard, helmet and mail",
+        "merchant": "merchant, good practical clothes", "boy": "boy, simple clothes", "girl": "girl, simple clothes",
+    },
+}
+
+
+class GeneratorError(Exception):
+    """Something the user can fix (engine missing, not answering...). The message is shown as it is."""
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return out
+
+
+def load_settings() -> dict:
+    """settings.json merged over the defaults; the file is written on first use so there is something to edit."""
+    if not SETTINGS_FILE.exists():
+        try:
+            SETTINGS_FILE.write_text(json.dumps(DEFAULTS, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+        return json.loads(json.dumps(DEFAULTS))
+    try:
+        return _merge(DEFAULTS, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        raise GeneratorError(f"generator/settings.json could not be read: {e}") from e
+
+
+# ------------------------------------------------------------------------------------------- description
+_HUMANOID = {"human", "elf", "half elf", "dwarf", "halfling", "gnome", "half orc", "tiefling", "drow", "aasimar",
+             "duergar", "genasi", "orc", "goblin", "kobold", "ogre", "gnoll", "hobgoblin"}
+
+
+def describe(row: dict, settings: dict) -> Tuple[str, str]:
+    """(subject, character) from a Portrait Scout row: gender, race and the animation name (which says what the
+    speaker wears: 'Cleric Female Elf', 'Peasant Woman', 'Fat Man'). Nothing here is certain - it is a starting
+    point the user can edit before generating."""
+    race = str(row.get("race") or "").strip()
+    anim = str(row.get("anim") or "").strip()
+    sex = str(row.get("sex") or "").strip().lower()
+    aw = set(re.findall(r"[a-z]+", anim.lower()))
+    gender = "female" if sex == "female" or aw & {"female", "woman", "girl"} else \
+             "male" if sex == "male" or aw & {"male", "man", "boy"} else ""
+    races = {k: v for k, v in settings.get("race_terms", {}).items() if not k.startswith("_")}
+    rkey = race.lower().replace("-", " ").replace("_", " ")
+    if not rkey or rkey.startswith("race "):                         # no usable race: look in the animation name
+        rkey = next((k for k in ("half elf", "half orc", "elf", "dwarf", "halfling", "gnome", "human")
+                     if set(k.split()) <= aw), "")
+    race_txt = races.get(rkey, rkey)
+    if rkey and rkey not in _HUMANOID and rkey not in races and not gender:
+        subject = anim.lower() or rkey                               # a wolf, a golem...: say what it is
+        return subject, subject
+    age = "young" if aw & {"boy", "girl", "child"} else "adult"
+    subject = " ".join(x for x in (gender, race_txt.split(",")[0]) if x) or "person"
+    parts = [" ".join(x for x in (age, gender, race_txt) if x)]
+    for word, phrase in settings.get("animation_terms", {}).items():
+        if not word.startswith("_") and word in aw and phrase not in parts:
+            parts.append(phrase)
+    return subject, ", ".join(p for p in parts if p)
+
+
+CURRENT_LOOK = "Current look"
+
+
+def style_names(settings: dict) -> List[str]:
+    """The looks the user can choose from. The top-level 'prompt' is only a fallback now, so it is not offered."""
+    return [k for k, v in (settings.get("styles") or {}).items() if not k.startswith("_") and isinstance(v, dict)]
+
+
+def style_text(settings: dict, style: str = "") -> Tuple[str, str]:
+    """The prompt template and negative prompt of a style, as they are now - what the user edits."""
+    look = (settings.get("styles") or {}).get(style or str(settings.get("style", "")))
+    if isinstance(look, dict) and look.get("prompt"):
+        return str(look["prompt"]), str(look.get("negative_prompt", settings.get("negative_prompt", "")))
+    return str(settings.get("prompt", "")), str(settings.get("negative_prompt", ""))
+
+
+def style_zoom(settings: dict, style: str = "") -> Optional[float]:
+    """How much the .bmp should be cropped in for this look, when the look says so."""
+    look = (settings.get("styles") or {}).get(style or str(settings.get("style", "")))
+    try:
+        return max(1.0, min(2.5, float(look["zoom"]))) if isinstance(look, dict) and look.get("zoom") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def baseline_background() -> str:
+    return str(DEFAULTS["background"])
+
+
+def baseline_text(style: str = "") -> Optional[Tuple[str, str]]:
+    """What this style said before anyone edited it, or None for a style of the user's own making."""
+    look = (DEFAULTS["styles"] or {}).get(style)
+    if isinstance(look, dict):
+        return str(look["prompt"]), str(look.get("negative_prompt", DEFAULTS["negative_prompt"]))
+    if style in ("", CURRENT_LOOK, str(DEFAULTS["style"])):
+        return str(DEFAULTS["prompt"]), str(DEFAULTS["negative_prompt"])
+    return None
+
+
+def save_style(settings: dict, style: str, prompt: str, negative: str, zoom: float = 0, background: str = "") -> None:
+    """Keep an edited prompt in settings.json (and in the settings already loaded)."""
+    try:
+        raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8")) if SETTINGS_FILE.exists() else {}
+    except (OSError, ValueError) as e:
+        raise GeneratorError(f"generator/settings.json could not be read: {e}") from e
+    if not isinstance(raw, dict):
+        raw = {}
+    if background and background != str(settings.get("background", "")):
+        raw["background"] = settings["background"] = background      # shared by every look
+    if style in ("", CURRENT_LOOK):
+        raw["prompt"], raw["negative_prompt"] = prompt, negative
+        settings["prompt"], settings["negative_prompt"] = prompt, negative
+    else:
+        for d in (raw.setdefault("styles", {}), settings.setdefault("styles", {})):
+            look = d.get(style)
+            new = {**(look if isinstance(look, dict) else {}), "prompt": prompt, "negative_prompt": negative}
+            if zoom:
+                new["zoom"] = round(float(zoom), 2)
+            if negative == str(settings.get("negative_prompt", "")):  # the shared one: let the style keep following it
+                new.pop("negative_prompt", None)
+            d[style] = new
+    try:
+        SETTINGS_FILE.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    except OSError as e:
+        raise GeneratorError(f"generator/settings.json could not be written: {e}") from e
+
+
+def save_patch(settings: dict, patch: dict) -> None:
+    """Change a few settings (engine address, picture size, steps...) in settings.json and in the loaded settings."""
+    try:
+        raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8")) if SETTINGS_FILE.exists() else {}
+    except (OSError, ValueError) as e:
+        raise GeneratorError(f"generator/settings.json could not be read: {e}") from e
+    if not isinstance(raw, dict):
+        raw = {}
+    try:
+        SETTINGS_FILE.write_text(json.dumps(_merge(raw, patch), indent=2), encoding="utf-8")
+    except OSError as e:
+        raise GeneratorError(f"generator/settings.json could not be written: {e}") from e
+    settings.update(_merge(settings, patch))
+
+
+def fill_prompt(template: str, subject: str, character: str, extra: str = "", background: str = "") -> str:
+    """A prompt template with the creature's description (and the background) put in. An empty background takes the
+    whole sentence about it out, rather than leaving 'Behind the head, .' in the prompt."""
+    character = ", ".join(x.strip().strip(",") for x in (character, extra) if x and x.strip())
+    if not background.strip():
+        parts = re.split(r"(?<=[.!?])\s+", template)
+        template = " ".join(p for p in parts if "{background}" not in p)
+    return (template.replace("{subject}", subject.strip()).replace("{character}", character)
+            .replace("{background}", background.strip()).strip())
+
+
+def style_background(settings: dict, style: str = "") -> str:
+    """What goes behind the head for this look: the style's own, or the one shared by all of them."""
+    look = (settings.get("styles") or {}).get(style or str(settings.get("style", "")))
+    if isinstance(look, dict) and look.get("background"):
+        return str(look["background"])
+    return str(settings.get("background", ""))
+
+
+def build_prompt(settings: dict, subject: str, character: str, extra: str = "", style: str = "") -> Tuple[str, str]:
+    tmpl, negative = style_text(settings, style)
+    return fill_prompt(tmpl, subject, character, extra, style_background(settings, style)), negative
+
+
+# ------------------------------------------------------------------------------------------- engine
+class Engine:
+    """An image generator behind the Automatic1111 / Forge web API. Started on demand, stopped at exit."""
+
+    def __init__(self, settings: dict, log: Callable[[str], None] = lambda s: None) -> None:
+        self.s = settings
+        self.e = settings.get("engine", {})
+        self.url = str(self.e.get("url", "http://127.0.0.1:7861")).rstrip("/")
+        self.log = log
+        # progress(fraction or None, text): fraction 0..1 of the whole job, None while it cannot be measured
+        self.progress: Callable[[Optional[float], str], None] = lambda frac, text: None
+        self.proc: Optional[subprocess.Popen] = None
+        self.keep = False                                            # True: leave the engine running when the program exits
+        atexit.register(lambda: None if self.keep else self.stop())
+
+    def _call(self, path: str, payload: Optional[dict] = None, timeout: float = 10) -> dict:
+        req = urllib.request.Request(self.url + path, data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+        return json.loads(body) if body else {}
+
+    def alive(self) -> bool:
+        try:
+            self._call("/sdapi/v1/samplers", timeout=4)
+            return True
+        except (urllib.error.URLError, OSError, ValueError):
+            return False
+
+    def start(self) -> None:
+        """Make sure the engine answers; start our own copy if allowed."""
+        if self.alive():
+            return
+        cmd = str(self.e.get("start") or "").strip()
+        if not self.e.get("autostart", True) or not cmd:
+            raise GeneratorError(f"Nothing is answering at {self.url}. No image generator comes with Portrait Scout: "
+                                 "start your own with its API on, or put its address in engine.url in "
+                                 "generator/settings.json (engine.autostart and engine.start can start it for you).")
+        root = HERE.parent
+        port = self.url.rsplit(":", 1)[-1].split("/")[0]
+        cmd = cmd.replace("{port}", port)
+        first = cmd.split()[0]
+        if not (root / first).exists() and not Path(first).exists():
+            raise GeneratorError(f"The engine start command was not found: {first}")
+        if "start_engine.bat" in cmd and not (root / "engine" / "webui").is_dir():
+            raise GeneratorError("No image engine is installed. Portrait Scout does not come with one, nor with any "
+                                 "models: they are many gigabytes and separately licensed. Put a copy of Forge in the "
+                                 "'engine' folder (generator/README.md says how, and which two model files to add), or "
+                                 "point engine.url in generator/settings.json at a generator you already run.")
+        self.log("Starting the image engine (the first start loads the model and can take several minutes)...")
+        flags = 0
+        if os.name == "nt":
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        logf = open(root / "generator" / "engine.log", "w", encoding="utf-8", errors="replace")
+        try:
+            self.proc = subprocess.Popen(cmd, cwd=str(root), shell=True, stdout=logf, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, creationflags=flags,
+                                         start_new_session=(os.name != "nt"))
+        except OSError as e:
+            raise GeneratorError(f"The engine could not be started: {e}") from e
+        began = time.time()
+        deadline = began + float(self.e.get("start_timeout_seconds", 600))
+        while time.time() < deadline:
+            if self.alive():
+                self.log("Image engine is ready.")
+                return
+            if self.proc.poll() is not None:
+                raise GeneratorError("The image engine stopped while starting. See generator/engine.log for why.")
+            last = ""
+            try:                                                     # what the engine is printing right now
+                tail = (root / "generator" / "engine.log").read_text(encoding="utf-8", errors="replace")[-600:]
+                last = next((x.strip() for x in reversed(tail.splitlines()) if x.strip()), "")[:90]
+            except OSError:
+                pass
+            self.progress(None, f"Starting the image engine... {int(time.time() - began)} s" + (f"   [{last}]" if last else ""))
+            time.sleep(2)
+        raise GeneratorError("The image engine did not answer in time. See generator/engine.log.")
+
+    def stop(self, force: bool = False) -> None:
+        """Stop the engine if this program started it. force: also one left running by an earlier session
+        (asks it to quit over its API; works for engines started with --api-server-stop, as start_engine.bat does)."""
+        p, self.proc = self.proc, None
+        if p is None or p.poll() is not None:
+            if force and self.alive():
+                try:
+                    self._call("/sdapi/v1/server-kill", {}, timeout=5)
+                except urllib.error.HTTPError as e:
+                    raise GeneratorError("This engine was not started by Portrait Scout's start_engine.bat (or by an older "
+                                         "version of it), so it cannot be stopped from here. Close it yourself this once: "
+                                         "end the python.exe that is using the graphics card in Task Manager.") from e
+                except (urllib.error.URLError, OSError, ValueError):
+                    pass                                             # it quits without answering
+                for _ in range(10):
+                    if not self.alive():
+                        break
+                    time.sleep(1)
+            return
+        try:
+            if os.name == "nt":                                      # the .bat starts python: end the whole tree
+                subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            else:
+                import signal
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        except OSError:
+            pass
+
+    def generate(self, prompt: str, negative: str, count: int,
+                 on_image: Callable[[int, bytes], None] = lambda i, b: None) -> List[bytes]:
+        """`count` candidate images (PNG bytes), one request each so they can be shown as they arrive."""
+        self.start()
+        payload = {k: v for k, v in self.s.get("payload", {}).items() if not k.startswith("_")}
+        payload.update(prompt=prompt, negative_prompt=negative, n_iter=1)
+        out: List[bytes] = []
+        count = max(1, int(count))
+        for i in range(count):
+            self.log(f"Generating candidate {i + 1} of {count}...")
+            self.progress(i / count, f"Candidate {i + 1} of {count}: starting...")
+            stop = threading.Event()
+
+            def watch(i: int = i, stop: threading.Event = stop) -> None:
+                began = time.time()
+                while not stop.wait(1.0):                            # ask the engine how far it is, once a second
+                    try:
+                        pr = self._call("/sdapi/v1/progress?skip_current_image=true", timeout=4)
+                    except (urllib.error.URLError, OSError, ValueError):
+                        continue
+                    stt = pr.get("state") or {}
+                    step, steps = int(stt.get("sampling_step") or 0), int(stt.get("sampling_steps") or 0)
+                    frac = min(1.0, max(0.0, float(pr.get("progress") or 0)))
+                    if stop.is_set():
+                        break
+                    if step or frac:
+                        self.progress((i + frac) / count, f"Candidate {i + 1} of {count}: step {step} of {steps}" if steps
+                                      else f"Candidate {i + 1} of {count}: {int(frac * 100)}%")
+                    else:
+                        self.progress(i / count, f"Candidate {i + 1} of {count}: loading the model... {int(time.time() - began)} s")
+            threading.Thread(target=watch, daemon=True).start()
+            try:
+                res = self._call("/sdapi/v1/txt2img", payload, timeout=float(self.e.get("image_timeout_seconds", 900)))
+            except urllib.error.HTTPError as e:
+                stop.set()
+                detail = e.read().decode("utf-8", "replace")[:400]
+                raise GeneratorError(f"The engine refused the request ({e.code}): {detail}") from e
+            except (urllib.error.URLError, OSError) as e:
+                stop.set()
+                raise GeneratorError(f"The engine stopped answering: {e}") from e
+            stop.set()
+            imgs = res.get("images") or []
+            if not imgs:
+                raise GeneratorError("The engine returned no image.")
+            data = base64.b64decode(imgs[0].split(",", 1)[-1])
+            out.append(data)
+            on_image(i, data)
+            self.progress((i + 1) / count, f"Candidate {i + 1} of {count} done")
+        return out
+
+
+def save_candidates(images: List[bytes], folder: Path, stem: str) -> List[str]:
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    safe = re.sub(r"[^A-Za-z0-9_.#!-]+", "_", stem).strip("_") or "portrait"
+    paths = []
+    for i, data in enumerate(images, 1):
+        p = folder / f"{safe}_{stamp}_{i}.png"
+        p.write_bytes(data)
+        paths.append(str(p))
+    return paths
+
+
+# ------------------------------------------------------------------------------------------- PNG -> game BMP
+def _png_rgb(data: bytes) -> Tuple[int, int, bytearray]:
+    """(width, height, RGB bytes) of an 8-bit RGB / RGBA / grey PNG that is not interlaced. No Pillow needed."""
+    import struct
+    import zlib
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG file")
+    pos, idat, w = 8, [], 0
+    h = depth = ctype = inter = 0
+    while pos + 8 <= len(data):
+        n, typ = struct.unpack_from(">I4s", data, pos)
+        body = data[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if typ == b"IHDR":
+            w, h, depth, ctype, _c, _f, inter = struct.unpack(">IIBBBBB", body)
+        elif typ == b"IDAT":
+            idat.append(body)
+        elif typ == b"IEND":
+            break
+    ch = {0: 1, 2: 3, 4: 2, 6: 4}.get(ctype, 0)
+    if depth != 8 or not ch or inter:
+        raise ValueError("this kind of PNG is not supported without Pillow (pip install pillow)")
+    raw = zlib.decompress(b"".join(idat))
+    stride = w * ch
+    out = bytearray(w * h * 3)
+    prev = bytearray(stride)
+    for y in range(h):
+        o = y * (stride + 1)
+        f = raw[o]
+        line = bytearray(raw[o + 1:o + 1 + stride])
+        if f == 1:
+            for i in range(ch, stride):
+                line[i] = (line[i] + line[i - ch]) & 255
+        elif f == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif f == 3:
+            for i in range(stride):
+                line[i] = (line[i] + (((line[i - ch] if i >= ch else 0) + prev[i]) >> 1)) & 255
+        elif f == 4:
+            for i in range(stride):
+                a = line[i - ch] if i >= ch else 0
+                b = prev[i]
+                c = prev[i - ch] if i >= ch else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        prev = line
+        row = y * w * 3
+        if ch == 3:
+            out[row:row + w * 3] = line
+        elif ch == 4:
+            out[row:row + w * 3:3], out[row + 1:row + w * 3:3], out[row + 2:row + w * 3:3] = line[0::4], line[1::4], line[2::4]
+        else:                                                        # grey (+ alpha)
+            g = line[0::ch]
+            out[row:row + w * 3:3], out[row + 1:row + w * 3:3], out[row + 2:row + w * 3:3] = g, g, g
+    return w, h, out
+
+
+def _crop_box(sw: int, sh: int, width: int, height: int, zoom: float, top: float) -> Tuple[int, int, int, int]:
+    """(left, top, crop width, crop height): the portrait's shape, `zoom` times closer, centered left to right.
+    With zoom 1 the crop is taken from the middle; closer crops start `top` of the way down (heads sit high)."""
+    zoom = max(1.0, float(zoom or 1))
+    cw = min(sw, round(sh * width / height))
+    ch = min(sh, round(cw * height / width))
+    if zoom <= 1.0:
+        return (sw - cw) // 2, (sh - ch) // 2, cw, ch
+    cw, ch = max(width, round(cw / zoom)), max(height, round(ch / zoom))
+    cw, ch = min(cw, sw), min(ch, sh)
+    y = min(sh - ch, max(0, round(sh * max(0.0, float(top or 0)))))
+    return (sw - cw) // 2, y, cw, ch
+
+
+crop_box = _crop_box                                                 # public name for the same thing
+
+
+def png_to_portrait_bmp(png_path: str, bmp_path: str, width: int, height: int, zoom: float = 1.0, top: float = 0.0) -> str:
+    """Crop the picture to the portrait's shape (see _crop_box), shrink it to width x height and save it as a
+    24-bit .bmp, the format the game uses. Uses Pillow when it is installed (sharper), plain Python otherwise."""
+    import struct
+    width, height = int(width), int(height)
+    try:
+        from PIL import Image
+        im = Image.open(png_path).convert("RGB")
+        sw, sh = im.size
+        left, top_, cw, chh = _crop_box(sw, sh, width, height, zoom, top)
+        im.crop((left, top_, left + cw, top_ + chh)).resize((width, height), Image.LANCZOS).save(bmp_path, "BMP")
+        return bmp_path
+    except ImportError:
+        pass
+    sw, sh, px = _png_rgb(Path(png_path).read_bytes())
+    left, top_, cw, chh = _crop_box(sw, sh, width, height, zoom, top)
+    xs = [left + cw * i // width for i in range(width + 1)]
+    ys = [top_ + chh * j // height for j in range(height + 1)]
+    pad = (4 - width * 3 % 4) % 4
+    rows = []
+    for j in range(height - 1, -1, -1):                              # BMP rows go bottom-up, pixels B G R
+        y0, y1 = ys[j], max(ys[j] + 1, ys[j + 1])
+        line = bytearray()
+        for i in range(width):
+            x0, x1 = xs[i], max(xs[i] + 1, xs[i + 1])
+            r = g = b = 0
+            for yy in range(y0, y1):
+                seg = px[(yy * sw + x0) * 3:(yy * sw + x1) * 3]
+                r += sum(seg[0::3])
+                g += sum(seg[1::3])
+                b += sum(seg[2::3])
+            cnt = (y1 - y0) * (x1 - x0)
+            line += bytes((b // cnt, g // cnt, r // cnt))
+        rows.append(bytes(line) + b"\0" * pad)
+    body = b"".join(rows)
+    head = b"BM" + struct.pack("<IHHI", 54 + len(body), 0, 0, 54) + struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0,
+                                                                             len(body), 2835, 2835, 0, 0)
+    Path(bmp_path).write_bytes(head + body)
+    return bmp_path
+
+
+if __name__ == "__main__":                                           # quick try-out:  python portrait_generator.py "female elf" "adult female elf, cleric"
+    s = load_settings()
+    subj = sys.argv[1] if len(sys.argv) > 1 else "female elf"
+    char = sys.argv[2] if len(sys.argv) > 2 else "adult female elf, pointed ears, cleric, priestly vestments"
+    pr, ng = build_prompt(s, subj, char)
+    print(pr, "\n\nNEGATIVE:", ng, "\n")
+    try:
+        got = Engine(s, print).generate(pr, ng, int(s.get("candidates", 2)))
+        for q in save_candidates(got, HERE.parent / str(s.get("output_folder", "generated")) / "tryout", subj):
+            print("saved", q)
+    except GeneratorError as err:
+        print("ERROR:", err)
