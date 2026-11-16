@@ -70,7 +70,7 @@ DEFAULTS: dict = {
                       "or no cropping afterwards (zoom 1). If faces still come out small, raise the LoRA weight "
                       "(:.65 -> :1) or crop with Head zoom. Its trigger word 'b2g8' is left out on purpose: it pulls hard "
                       "towards the faces it was trained on and drops things like a tiefling's horns.",
-            "zoom": 1.0,
+            "zoom": 1.25,
             "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
                       "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
                       "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
@@ -84,7 +84,7 @@ DEFAULTS: dict = {
         "BG2 framing, light LoRA": {
             "_about": "The same framing on the small BG2 LoRA (BG_Portrait, 38 MB) that the setup notes point to. "
                       "It nudges the style instead of taking it over, so the description is followed more closely.",
-            "zoom": 1.0,
+            "zoom": 1.25,
             "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
                       "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
                       "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
@@ -143,6 +143,25 @@ DEFAULTS: dict = {
                  "which matches the framing of the HPS portraits). top = where the crop starts, as a fraction of the picture's height "
                  "(0 = very top). The crop is centered left to right.",
     },
+    "age_terms": {
+        "_about": "Offered as 'Age' in the Generate window; the text goes into the description.",
+        "Young": "young", "Adult": "adult", "Middle-aged": "middle-aged",
+        "Old": "old, lined face, grey hair", "Ancient": "very old, deeply wrinkled, thin white hair",
+    },
+    "look_terms": {
+        "_about": "Offered as 'Look' in the Generate window; the text is added to the end of the description. "
+                  "Flux paints clean skin unless it is told otherwise, so these are worth using.",
+        "Ordinary": "",
+        "Weathered": "weathered sun-worn skin with deep lines, stubble, visible pores",
+        "Scarred": "an old scar across the face, rough skin",
+        "Stern": "a stern, hard expression",
+        "Friendly": "a warm, friendly expression, smiling eyes",
+        "Sad": "a tired, downcast expression",
+        "Fierce": "a fierce, angry expression, bared teeth",
+        "Angry": "an angry, scowling expression, furrowed brow",
+        "Sickly": "pale, gaunt and unwell, dark rings under the eyes",
+        "Noble": "clean, well-kept, proud bearing",
+    },
     "race_terms": {
         "_about": "How a race from the game is worded in the prompt. Races not listed are used as they are.",
         "human": "human", "elf": "elf with subtly pointed ears", "half elf": "half-elf with slightly pointed ears",
@@ -195,7 +214,12 @@ _HUMANOID = {"human", "elf", "half elf", "dwarf", "halfling", "gnome", "half orc
              "duergar", "genasi", "orc", "goblin", "kobold", "ogre", "gnoll", "hobgoblin"}
 
 
-def describe(row: dict, settings: dict) -> Tuple[str, str]:
+def term_names(settings: dict, which: str) -> List[str]:
+    """The choices offered for 'age_terms' or 'look_terms', in the order they are written in settings.json."""
+    return [k for k in (settings.get(which) or {}) if not k.startswith("_")]
+
+
+def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[str, str]:
     """(subject, character) from a Portrait Scout row: gender, race and the animation name (which says what the
     speaker wears: 'Cleric Female Elf', 'Peasant Woman', 'Fat Man'). Nothing here is certain - it is a starting
     point the user can edit before generating."""
@@ -214,12 +238,19 @@ def describe(row: dict, settings: dict) -> Tuple[str, str]:
     if rkey and rkey not in _HUMANOID and rkey not in races and not gender:
         subject = anim.lower() or rkey                               # a wolf, a golem...: say what it is
         return subject, subject
-    age = "young" if aw & {"boy", "girl", "child"} else "adult"
+    age_txt = (settings.get("age_terms") or {}).get(age, age.lower()) if age else \
+        ("young" if aw & {"boy", "girl", "child"} else "adult")
     subject = " ".join(x for x in (gender, race_txt.split(",")[0]) if x) or "person"
-    parts = [" ".join(x for x in (age, gender, race_txt) if x)]
+    lead, _, extra = age_txt.partition(",")                          # "old, lined face" -> "old male human, lined face"
+    parts = [" ".join(x for x in (lead.strip(), gender, race_txt) if x)]
+    if extra.strip():
+        parts.append(extra.strip())
     for word, phrase in settings.get("animation_terms", {}).items():
         if not word.startswith("_") and word in aw and phrase not in parts:
             parts.append(phrase)
+    look_txt = (settings.get("look_terms") or {}).get(look, "") if look else ""
+    if look_txt:
+        parts.append(look_txt)
     return subject, ", ".join(p for p in parts if p)
 
 

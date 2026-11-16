@@ -31,7 +31,9 @@ It only **reads** your game folder. Nothing there is installed, changed or delet
 | **Generate** | Make a portrait for the selected creature, or any portrait at all. |
 | **Proposals** | Everything you have chosen a picture for, and the exports. |
 
-**Search** (or **Ctrl+F**) filters Table and Gallery as you type; every word must match. Click a creature or CRE name to copy it for NearInfinity, and right-click a portrait to save it. **Double-click** a creature for its lines: **Copy** one or all, **▶ Play** the voiced ones, search them, and read "Where this comes from" for speakers that needed working out.
+**Search** (or **Ctrl+F**) filters Table and Gallery as you type; every word must match. The gallery's **Sort** box orders by lines or by name, either way round (clicking a table heading does the same). **Party NPCs**, unticked, hides the joinable ones - the game's and the mods' alike. Both are remembered.
+
+Creatures put in one row only because they share a name and look alike - a mod's 27 "Kobold Commoner" creatures, say - can be **listed one by one**, so each takes a portrait of its own: the button is in the creature's lines window, and in the right-click menu of its portrait. It is remembered per creature, and creatures that share a creature file or a portrait are never split. Needs the installed-game reading. Click a creature or CRE name to copy it for NearInfinity, and right-click a portrait to save it. **Double-click** a creature for its lines: **Copy** one or all, **▶ Play** the voiced ones, search them, and read "Where this comes from" for speakers that needed working out.
 
 A `<ModName>-creatures.txt` report is saved next to the script; **Save as text file...** and **Save as CSV...** save elsewhere.
 
@@ -61,9 +63,9 @@ The **Generate** tab works on the selected creature, or on nobody in particular 
 
 ## Proposing portraits
 
-**Propose portrait...** on a gallery card or in a lines window picks an image for a creature; it shows with a green border. Proposals are kept for each thing you analyze and come back when you analyze it again - the **Proposals** tab lists them, with **Saved sets...** for the ones kept from before.
+**Propose portrait...** on a gallery card or in a lines window picks an image for a creature; it shows with a green border. A creature's lines window names the others using its portrait, and **Use for others...** hands the proposed picture to any of them - a quick way to give one new portrait to a whole decloned bunch. Proposals are kept for each thing you analyze and come back when you analyze it again - the **Proposals** tab lists them, with **Saved sets...** for the ones kept from before.
 
-The picked image is checked, with warnings you can ignore, for: a name over 8 characters or with characters a resref cannot hold; not a BMP; an unusual shape (210x330, 169x266 and 54x84 are the standard sizes).
+Any picture will do - **Create mod...** cuts it to the portrait's shape, shrinks it to the chosen size and saves it as a 24-bit BMP named after the creature file. BMP and PNG are handled on their own; `pip install pillow` adds JPG and the rest, and sharper shrinking.
 
 **Export proposed changes...** writes a to-do list, one line per creature file:
 
@@ -86,7 +88,7 @@ mod/
     portraits/blackhearts/      b!aster.bmp ...  portraits.txt
 ```
 
-- As in the HPS portraits mod, each picture is named after its creature file and written into both portrait slots. Proposals must be `.bmp` (generated ones are; a `.png` is converted if the generator folder is present).
+- As in the HPS portraits mod, each picture is named after its creature file and written into both portrait slots. Whatever you proposed is converted on the way in, so a square photo or a PNG comes out as a correctly shaped game portrait.
 - Each set - one per analyzed mod - is its own choice in the installer, offered twice: give the portraits to every creature listed, or only to those with none. Creature files not in the game are skipped.
 - Edit `portraits/<set>/portraits.txt` and create the mod again to change what is installed, or edit the `.tp2` by hand.
 - Creating it again with the same name updates that mod; another name starts a new one.

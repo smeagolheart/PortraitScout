@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import os
 import io
@@ -305,6 +306,20 @@ def _r8(b: bytes, off: int) -> str:
     return b[off:off + 8].split(b"\0", 1)[0].decode("latin1").strip()
 
 
+def _snapshot(r: dict) -> dict:
+    """A copy of a row as it is now, with its own lists, so later merging does not change it."""
+    out = dict(r)
+    for k, v in r.items():
+        if isinstance(v, list):
+            out[k] = list(v)
+        elif isinstance(v, set):
+            out[k] = set(v)
+        elif isinstance(v, dict) and k != "parts":
+            out[k] = dict(v)
+    out.pop("parts", None)
+    return out
+
+
 def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Progress = lambda s: None) -> dict:
     progress("Opening the game folder...")
     game = Game(game_dir)
@@ -471,7 +486,10 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
         for g in merged[r["name"].casefold()]:
             gports = {x.upper() for f in ("large", "small") for x in g[f].split("/") if x}
             glook = (g["race"], g["sex"], g["anim"])
-            if set(r["cres"]) & set(g["cres"]) or ports & gports or not any(look) or not any(glook) or look == glook:
+            same_npc = bool(set(r["cres"]) & set(g["cres"]) or ports & gports)
+            if same_npc or not any(look) or not any(glook) or look == glook:
+                if not same_npc:                                     # merged on the name alone: they may be clones
+                    g.setdefault("parts", [_snapshot(g)]).append(_snapshot(r))
                 g["lines"] += r["lines"]
                 g["refs"] |= r["refs"]
                 g["dialogs"] += r["dialogs"]
@@ -498,7 +516,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
             return f"{abs(w)}x{abs(h)}"
         return ""
 
-    for r in out:
+    for r in [x for r_ in out for x in ([r_] + (r_.get("parts") or []))]:
         r["large_name"] = r["large"].split("/")[0] if r["large"] else ""
         r["small_name"] = r["small"].split("/")[0] if r["small"] else ""
         r["large_size"] = bmp_dims(r["large_name"])
@@ -548,7 +566,10 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
             notes.append("Found because this text of the mod is a line spoken in that dialog"
                          + (f" (strref {refs[0][0]}: \"{refs[0][1][:80]}\")." if refs else "."))
         r["origin"] = notes
-    add_areas(out, game, tlk.text, progress)
+    parts = [x for r_ in out for x in (r_.get("parts") or [])]       # the rows a name-only merge swallowed
+    for r in parts:
+        r.setdefault("origin", [])
+    add_areas(out + parts, game, tlk.text, progress)
     progress(f"Done: {len(out)} creature(s), {sum(r['lines'] for r in out):,} line(s).")
     return {"game": game, "rows": out, "whole": whole, "strings": len(texts),
             "mod": "whole-install" if whole else (os.path.basename(mod_dir.rstrip("/\\")) or "mod")}
@@ -1766,7 +1787,12 @@ def _write_notes(root: Path, sets: List[Tuple[int, str, str, List[List[str]]]]) 
            "How to install", "--------------",
            f"1. Copy the folder '{root.name}' and 'setup-{root.name}.exe' into your game folder",
            "   (the one with chitin.key).",
-           f"2. Run setup-{root.name}.exe and choose the components you want.", "",
+           f"2. Run setup-{root.name}.exe and choose the components you want.", ""]
+    if root.name != root.name.lower():
+        txt += [f"On Linux or macOS, rename the folder and the .tp2 inside it to lower case first",
+                f"('{root.name.lower()}' and 'setup-{root.name.lower()}.tp2'). WeiDU looks for lower-case",
+                "names there and does nothing at all when they do not match. Windows does not mind.", ""]
+    txt += [
            "Each set below is offered twice: give the portraits to every creature listed, or",
            "only to creatures that have no portrait yet. Install one of the two, not both.", "",
            "What is in it", "-------------"]
@@ -1814,7 +1840,7 @@ def _read_set(listp: Path) -> Tuple[str, int, List[List[str]]]:
     return title, comp, rows
 
 
-def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optional[Callable[[str, str], None]] = None,
+def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optional[Callable] = None,
                game_dir: str = "") -> dict:
     """Write the proposed portraits as a ready-to-install WeiDU mod: the pictures, the installer, a readme and the
     list. Exporting another set into the same folder adds it as another choice in the installer.
@@ -1847,10 +1873,11 @@ def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optiona
             continue
         dst = sdir / (bmp.lower() + ".bmp")
         try:
-            if open(src, "rb").read(2) == b"BM":
+            if convert:
+                box_ = e.get("box")
+                convert(src, str(dst), box_) if box_ else convert(src, str(dst))   # a framing chosen by hand, or the middle
+            elif open(src, "rb").read(2) == b"BM":
                 shutil.copyfile(src, dst)
-            elif convert:
-                convert(src, str(dst))
             else:
                 raise ValueError("not a .bmp picture")
         except Exception as ex:  # noqa: BLE001
@@ -1954,17 +1981,91 @@ def image_info(path: str) -> Optional[dict]:
     return None
 
 
-_RESREF_OK = re.compile(r"^[A-Za-z0-9_!#$%@&\-]+$")
+
+
+def _write_bmp24(path: str, w: int, h: int, rgb: bytes) -> None:
+    """A plain 24-bit BMP, the format the game reads."""
+    pad = (4 - w * 3 % 4) % 4
+    rows = bytearray()
+    for y in range(h - 1, -1, -1):                                   # BMP rows run bottom-up, pixels B G R
+        line = rgb[y * w * 3:(y + 1) * w * 3]
+        rows += bytes(b for i in range(0, len(line), 3) for b in (line[i + 2], line[i + 1], line[i])) + b"\0" * pad
+    head = b"BM" + struct.pack("<IHHI", 54 + len(rows), 0, 0, 54) + \
+        struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(rows), 2835, 2835, 0, 0)
+    with open(path, "wb") as f:
+        f.write(head + bytes(rows))
+
+
+def _resample(src: bytes, sw: int, sh: int, box: Tuple[int, int, int, int], w: int, h: int) -> bytes:
+    """Cut `box` out of an RGB buffer and shrink it to w x h, averaging the pixels that fall in each one."""
+    left, top, cw, ch = box
+    xs = [left + cw * i // w for i in range(w + 1)]
+    ys = [top + ch * j // h for j in range(h + 1)]
+    out = bytearray()
+    for j in range(h):
+        y0, y1 = ys[j], max(ys[j] + 1, ys[j + 1])
+        for i in range(w):
+            x0, x1 = xs[i], max(xs[i] + 1, xs[i + 1])
+            r = g = b = n = 0
+            for y in range(y0, min(y1, sh)):
+                base = (y * sw + x0) * 3
+                for x in range(x0, min(x1, sw)):
+                    r += src[base]
+                    g += src[base + 1]
+                    b += src[base + 2]
+                    base += 3
+                    n += 1
+            out += bytes((r // n, g // n, b // n)) if n else b"\0\0\0"
+    return bytes(out)
+
+
+def to_portrait_bmp(src: str, dst: str, width: int, height: int, crop: Optional[Callable] = None,
+                    box_px: Optional[Tuple[int, int, int, int]] = None) -> str:
+    """Any picture -> a game portrait: cut to the portrait's shape from the middle, shrunk, saved as a 24-bit BMP.
+    Uses Pillow when it is installed (sharper, and reads every format); otherwise BMP and PNG are handled here."""
+    def box(sw: int, sh: int) -> Tuple[int, int, int, int]:
+        if box_px:                                                   # framed by hand
+            lf, tp, cw, ch = box_px
+            return max(0, min(lf, sw - 1)), max(0, min(tp, sh - 1)), max(1, min(cw, sw - lf)), max(1, min(ch, sh - tp))
+        if crop:
+            return crop(sw, sh, width, height, 1.0, 0.0)             # the generator's own crop, if it is there
+        cw = min(sw, round(sh * width / height))
+        ch = min(sh, round(cw * height / width))
+        return (sw - cw) // 2, (sh - ch) // 2, cw, ch
+    try:
+        from PIL import Image
+        im = Image.open(src).convert("RGB")
+        left, top, cw, ch = box(im.width, im.height)
+        im.crop((left, top, left + cw, top + ch)).resize((width, height), Image.LANCZOS).save(dst, "BMP")
+        return dst
+    except ImportError:
+        pass
+    raw = Path(src).read_bytes()
+    if raw[:2] == b"BM":
+        ppm = bmp_to_ppm(raw, 1)
+        if not ppm:
+            raise ValueError("this BMP is compressed or in a format Portrait Scout cannot read")
+        parts = ppm.split(b"\n", 1)[0].split()
+        sw, sh = int(parts[1]), int(parts[2])
+        pix = ppm[len(ppm.split(b"\n", 1)[0]) + 1:]
+    elif raw[:8] == b"\x89PNG\r\n\x1a\n":
+        from importlib import import_module
+        gen = Path(__file__).resolve().parent / "generator"
+        sys.path.insert(0, str(gen))
+        try:
+            sw, sh, pix = import_module("portrait_generator")._png_rgb(raw)
+        finally:
+            sys.path.remove(str(gen))
+    else:
+        raise ValueError("only BMP and PNG can be converted without Pillow (pip install pillow for the rest)")
+    _write_bmp24(dst, width, height, _resample(pix, sw, sh, box(sw, sh), width, height))
+    return dst
 
 
 def check_image(path: str) -> List[str]:
-    """Things that may stop a proposed portrait from working in the game (empty list = looks fine)."""
+    """Things that may stop a proposed portrait from working in the game (empty list = looks fine).
+    The file's own name is not one of them: 'Create mod...' names every picture after its creature file."""
     issues: List[str] = []
-    stem = os.path.splitext(os.path.basename(path))[0]
-    if len(stem) > 8:
-        issues.append(f"the name '{stem}' is {len(stem)} characters; a resref can be at most 8")
-    if not _RESREF_OK.match(stem):
-        issues.append("the name has spaces or characters a resref can't contain")
     info = image_info(path)
     if info is None:
         issues.append("could not read the image size (unknown format)")
@@ -2301,6 +2402,10 @@ def run_gui() -> None:
     tree.heading("proposed", text="Proposed portrait")
     tree.column("proposed", width=widths["proposed"], anchor="w")
 
+    SORTS = [("Lines, most first", ("lines", True)), ("Lines, fewest first", ("lines", False)),
+             ("Name, A to Z", ("name", False)), ("Name, Z to A", ("name", True)),
+             ("Portrait", ("portrait", False)), ("Area", ("area", False))]
+
     props: Dict[str, str] = {}                      # proposed portrait image per creature (key = its dialogs)
     prop_label = tk.StringVar(value="Proposed portraits: 0")
     prop_where = tk.StringVar(value="")
@@ -2309,6 +2414,18 @@ def run_gui() -> None:
     ttk.Label(gbar, textvariable=prop_label, foreground="#555").pack(side="left", padx=(0, 10))
     pagebar = tk.Frame(gbar, bg=gbar.winfo_toplevel().cget("bg"), highlightthickness=0)
     pagebar.pack(side="left", padx=10)
+    ttk.Label(gbar, text="Sort:").pack(side="left", padx=(10, 4))
+    sort_var = tk.StringVar(value=SORTS[0][0])
+    sort_box = ttk.Combobox(gbar, textvariable=sort_var, values=[lbl for lbl, _k in SORTS], state="readonly", width=18)
+    sort_box.pack(side="left")
+    party_var = tk.BooleanVar(value=bool(st.get("party_npcs", True)))
+    party_cb = ttk.Checkbutton(gbar, text="Party NPCs", variable=party_var)
+    party_cb.pack(side="left", padx=(12, 0))
+    tooltip(party_cb, "NPCs who can join the party: the game's own and any a mod adds, found in the party dialog "
+                      "tables (pdialog.2da, interdia.2da).\n\nOn: they are listed like everybody else.\nOff: they are "
+                      "left out of the table, the gallery, the reports and the exports - they nearly always have a "
+                      "portrait already.\n\nA creature that shares a script name or dialog with one of them can be "
+                      "caught by this too.")
 
     ebar = ttk.Frame(tab_exp, padding=(0, 0, 0, 6))                  # the Proposals tab: what you have chosen so far
     ebar.pack(side="top", fill="x")
@@ -2353,6 +2470,7 @@ def run_gui() -> None:
 
     ginner.bind("<Configure>", fix_scrollregion)
     CARD_W = 185                                   # width reserved for one gallery card; the row fills the window
+    THUMB_W, THUMB_H = 155, 244                    # a proposal is shown at the size a 169x266 portrait gets here
     MIN_PER_ROW = 4                                # fewer than this per row is not supported (layout breaks)
 
     def per_row_now() -> int:
@@ -2667,7 +2785,9 @@ def run_gui() -> None:
         if not res:
             return []
         key, desc = state["sort"]                                    # type: ignore[misc]
-        rows = list(res["rows"])                                     # type: ignore[index]
+        rows = all_rows()
+        if not party_var.get():                                  # joinable NPCs: the game's own and the mods' own
+            rows = [r for r in rows if not r.get("party")]
         terms = search_var.get().lower().split() if filtered else []
         if terms:
             rows = [r for r in rows if all(t in row_text(r) for t in terms)]
@@ -2683,13 +2803,15 @@ def run_gui() -> None:
         key, desc = state["sort"]                                    # type: ignore[misc]
         for k, h in COLUMNS:
             tree.heading(k, text=h + ((" ▼" if desc else " ▲") if k == key else ""))
-        total = len(state["res"]["rows"]) if state["res"] else 0          # type: ignore[index]
+        total = len(all_rows())
         count_var.set(f"{len(rows)} of {total}" if search_var.get().strip() and total else "")
         res_ = state["res"]
         if res_:
             unk = res_.get("stats", {}).get("dialogs not linked", 0) if res_.get("source") else 0       # type: ignore[union-attr]
             total_var.set(f"{res_['mod']}: "                                                         # type: ignore[index]
                           + (f"{len(rows)} of " if len(rows) != total else "") + f"{total} creature(s), "
+                          + ("party NPCs hidden, " if not party_var.get() else "")
+
                           + f"{sum(r['lines'] for r in res_['rows']):,} line(s)"                     # type: ignore[index]
                           + ((" - from the mod's files" + (", EET" if res_.get("eet") else "")          # type: ignore[union-attr]
                               + (f", {unk} dialog(s) without a speaker" if unk else "")) if res_.get("source") else ""))   # type: ignore[union-attr]
@@ -2712,7 +2834,88 @@ def run_gui() -> None:
     def sort_by(col: str) -> None:
         key, desc = state["sort"]                                    # type: ignore[misc]
         state["sort"] = (col, (not desc) if col == key else (col == "lines"))
+        sort_var.set(next((lbl for lbl, kd in SORTS if kd == state["sort"]), ""))
         refresh()
+
+    def sort_picked(*_a: object) -> None:
+        for lbl, kd in SORTS:
+            if lbl == sort_var.get():
+                state["sort"], state["page"] = kd, 0
+                refresh()
+                return
+    sort_box.bind("<<ComboboxSelected>>", sort_picked)
+
+    def party_changed(*_a: object) -> None:
+        st["party_npcs"] = bool(party_var.get())
+        save_settings(st)
+        state["page"] = 0
+        refresh()
+    party_cb.config(command=party_changed)
+
+    def all_rows() -> List[dict]:
+        """Every creature as it is listed now: one row per NPC, or one per creature when decloned."""
+        res = state["res"]
+        if not res:
+            return []
+        split = set((st.get("declone") or {}).get(str(res["mod"]), []))   # type: ignore[index]
+        rows: List[dict] = []
+        for r in res["rows"]:                                        # type: ignore[union-attr]
+            rows += r["parts"] if (r.get("parts") and rowkey(r) in split) else [r]
+        return rows
+
+    def clones_of(r: dict) -> Tuple[Optional[dict], int]:
+        """The row a creature was merged into, and how many creatures that row stands for."""
+        par = r.get("_parent") or (r if r.get("parts") else None)
+        return par, len(par["parts"]) if par else 0
+
+    def declone_label(r: dict) -> Tuple[str, str]:
+        """(button, what it does) for taking a name-only merge apart, or putting it back."""
+        par, n = clones_of(r)
+        if not par:
+            return "", ""
+        res = state["res"]
+        split = set((st.get("declone") or {}).get(str(res["mod"]), [])) if res else set()
+        if rowkey(par) in split:
+            return f"Merge {n} creatures", f"Put the {n} \"{par['name']}\" creatures back in one row."
+        return f"Declone {n} creatures", (f"List the {n} \"{par['name']}\" creatures one by one, so each can have a "
+                                          "portrait of its own.")
+
+    def toggle_declone(r: dict) -> None:
+        par, n = clones_of(r)
+        res = state["res"]
+        if not par or not res:
+            return
+        d = st.setdefault("declone", {})
+        lst = [k for k in (d.get(str(res["mod"])) or []) if k]       # type: ignore[index]
+        k = rowkey(par)
+        if k in lst:
+            lst.remove(k)
+            status.set(f"{par['name']}: back in one row.")
+        else:
+            lst.append(k)
+            status.set(f"{par['name']}: listed as {n} separate creatures.")
+        d[str(res["mod"])] = lst                                     # type: ignore[index]
+        save_settings(st)
+        state["page"] = 0
+        refresh()
+
+    def mark_party(res: dict) -> None:
+        """Flag the creatures the game (or a mod) treats as joinable NPCs: they are in the party dialog tables."""
+        names: Set[str] = set()
+        try:
+            game = res["game"]
+            for t in ("PDIALOG", "INTERDIA", "BDIALOG"):
+                txt = (game.get(t, T_2DA) or b"").decode("latin-1", "replace")
+                for ln in txt.splitlines()[3:]:                      # 2DA: signature, default, column names, then rows
+                    f = ln.split()
+                    if f:
+                        names.add(f[0].upper())
+                        names |= {x.upper() for x in f[1:] if x not in ("***", "*")}
+        except (OSError, AttributeError, ValueError):
+            names = set()
+        for r in [x for r_ in res["rows"] for x in ([r_] + (r_.get("parts") or []))]:
+            r["party"] = bool(names and ({d.upper() for d in r["dialogs"]} & names
+                                         or {c.upper() for c in (r.get("cre_list") or [])} & names))
 
     def rowkey(r: dict) -> str:
         return ",".join(sorted(set(r["dialogs"])))
@@ -2772,6 +2975,10 @@ def run_gui() -> None:
                 n += 1
         if not n:
             menu.add_command(label="No image to save", state="disabled")
+        lbl, why = declone_label(r)
+        if lbl:
+            menu.add_separator()
+            menu.add_command(label=f"{lbl}  -  {why}", command=lambda: toggle_declone(r))
         try:
             menu.tk_popup(event.x_root, event.y_root)                # type: ignore[attr-defined]
         finally:
@@ -2791,6 +2998,22 @@ def run_gui() -> None:
             save_settings(st)
         update_prop_label()
 
+    def thumb_from_bytes(data: bytes) -> object:
+        """A gallery-sized picture from the bytes of a .bmp, the same box a proposed picture gets."""
+        try:
+            from PIL import Image, ImageTk
+            im = Image.open(io.BytesIO(data)).convert("RGB")
+            im.thumbnail((THUMB_W, THUMB_H))
+            return ImageTk.PhotoImage(im)
+        except Exception:  # noqa: BLE001
+            try:
+                w = abs(struct.unpack_from("<i", data, 18)[0])
+                h = abs(struct.unpack_from("<i", data, 22)[0])
+                ppm = bmp_to_ppm(data, max(1, -(-w // THUMB_W), -(-h // THUMB_H)))
+                return tk.PhotoImage(data=ppm) if ppm else None
+            except (struct.error, IndexError, tk.TclError):
+                return None
+
     def load_thumb(path: str) -> object:
         cache: Dict[str, object] = state.setdefault("thumbs", {})             # type: ignore[assignment]
         if path in cache:
@@ -2799,18 +3022,18 @@ def run_gui() -> None:
         try:
             from PIL import Image, ImageTk                                      # optional: any image format
             im = Image.open(path)
-            im.thumbnail((110, 170))
+            im.thumbnail((THUMB_W, THUMB_H))
             img = ImageTk.PhotoImage(im)
         except Exception:  # noqa: BLE001
             try:
                 if path.lower().endswith(".bmp"):
                     data = open(path, "rb").read()
                     w = abs(struct.unpack_from("<i", data, 18)[0])
-                    ppm = bmp_to_ppm(data, max(1, -(-w // 110)))
+                    ppm = bmp_to_ppm(data, max(1, -(-w // THUMB_W)))
                     img = tk.PhotoImage(data=ppm) if ppm else None
                 else:
                     pi = tk.PhotoImage(file=path)                               # png / gif
-                    k = max(1, -(-pi.width() // 110), -(-pi.height() // 170))
+                    k = max(1, -(-pi.width() // THUMB_W), -(-pi.height() // THUMB_H))
                     img = pi.subsample(k, k) if k > 1 else pi
             except Exception:  # noqa: BLE001
                 img = None
@@ -2835,8 +3058,16 @@ def run_gui() -> None:
                     + "\n\nUse it as the proposal anyway?", parent=par):
                 par.lift()
                 return
+            crop_store().pop(rowkey(r), None)                        # a new picture, so any old framing is gone
             props[rowkey(r)] = os.path.normpath(p)
             persist_props()
+            inf = image_info(p)
+            size_ = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) else [169, 266]
+            if inf and inf["h"] and abs(inf["w"] / inf["h"] - int(size_[0]) / int(size_[1])) > 0.03 \
+                    and messagebox.askyesno("Portrait Scout", f"{Path(p).name} is {inf['w']}x{inf['h']}, not the shape "
+                                            f"of a {size_[0]}x{size_[1]} portrait.\n\nFrame it now? (otherwise the "
+                                            "middle is used)", parent=par):
+                frame_dialog(r, par, after)
             if view_var.get() == "gallery":
                 rebuild_keep_scroll()
             refresh_table_only()
@@ -2933,6 +3164,8 @@ def run_gui() -> None:
         dbtn.grid(row=1, column=2)
         reset_btn = ttk.Button(dbtn, text="Reset", width=6,
                                command=(lambda: pick_reset()) if generic else (lambda: desc_var.set(character)))
+        tooltip(reset_btn, "Put the description back to what the game data says." if not generic else
+                "Back to Human, Male, Fighter, Adult.")
 
         def big_edit(var: tk.StringVar, title: str) -> None:
             """A roomy box for text too long to read in one line."""
@@ -2953,38 +3186,52 @@ def run_gui() -> None:
             ttk.Button(row_, text="Cancel", command=w.destroy).pack(side="right", padx=6)
         ttk.Button(dbtn, text="\u2922", width=3, command=lambda: big_edit(desc_var, "Description")).pack(side="left")
         reset_btn.pack(side="left", padx=(3, 0))
-        if generic:                                                  # no creature: build the description from these
-            prow0 = ttk.Frame(frm)
-            prow0.grid(row=1, column=3, sticky="w", padx=(8, 0))
-            RACES = ["Human", "Elf", "Half-Elf", "Dwarf", "Halfling", "Gnome", "Half-Orc"]
-            CLASSES = ["Fighter", "Paladin", "Ranger", "Barbarian", "Monk", "Cleric", "Druid", "Shaman",
-                       "Mage", "Sorcerer", "Thief", "Bard"]
-            last = st.get("generic_pick") if isinstance(st.get("generic_pick"), list) else []
-            last = (list(last) + ["Human", "Male", "Fighter"])[:3]
-            race_v = tk.StringVar(value=str(saved.get("race") or last[0]))
-            sex_v = tk.StringVar(value=str(saved.get("sex") or last[1]))
-            class_v = tk.StringVar(value=str(saved.get("class") or last[2]))
+        prow0 = ttk.Frame(frm)                                       # what the description is built from
+        prow0.grid(row=1, column=3, sticky="w", padx=(8, 0))
+        RACES = ["Human", "Elf", "Half-Elf", "Dwarf", "Halfling", "Gnome", "Half-Orc"]
+        CLASSES = ["Fighter", "Paladin", "Ranger", "Barbarian", "Monk", "Cleric", "Druid", "Shaman",
+                   "Mage", "Sorcerer", "Thief", "Bard"]
+        last = st.get("generic_pick") if isinstance(st.get("generic_pick"), list) else []
+        last = (list(last) + ["Human", "Male", "Fighter"])[:3]
+        race_v = tk.StringVar(value=str(saved.get("race") or last[0]))
+        sex_v = tk.StringVar(value=str(saved.get("sex") or last[1]))
+        class_v = tk.StringVar(value=str(saved.get("class") or last[2]))
+        ages = pg.term_names(gs, "age_terms") or ["Adult"]           # type: ignore[attr-defined]
+        looks = pg.term_names(gs, "look_terms") or ["Ordinary"]      # type: ignore[attr-defined]
+        age_v = tk.StringVar(value=str(saved.get("age") or st.get("last_age") or ("Adult" if "Adult" in ages else ages[0])))
+        look_v = tk.StringVar(value=str(saved.get("look") or st.get("last_look") or looks[0]))
 
-            def pick_changed(*_a: object) -> None:
+        def pick_changed(*_a: object) -> None:
+            if generic:
                 race, sex, cls = race_v.get() or "Human", sex_v.get() or "Male", class_v.get() or "Fighter"
                 row_ = {"race": race, "sex": sex, "anim": f"{cls} {sex} {race}"}
-                desc_var.set(pg.describe(row_, gs)[1])                # type: ignore[attr-defined]
                 st["generic_pick"] = [race, sex, cls]                 # remembered until Reset
-                save_settings(st)
+            else:
+                row_ = r
+            st["last_age"], st["last_look"] = age_v.get(), look_v.get()
+            save_settings(st)
+            desc_var.set(pg.describe(row_, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
 
-            def pick_reset() -> None:
-                st.pop("generic_pick", None)
-                save_settings(st)
-                race_v.set("Human")
-                sex_v.set("Male")
-                class_v.set("Fighter")
-                pick_changed()
-            for var_, vals_, w_ in ((race_v, RACES, 10), (sex_v, ["Male", "Female"], 8), (class_v, CLASSES, 10)):
-                cb_ = ttk.Combobox(prow0, textvariable=var_, values=vals_, state="readonly", width=w_)
-                cb_.pack(side="left", padx=(0, 4))
-                cb_.bind("<<ComboboxSelected>>", pick_changed)
-            if not desc_var.get().strip():
-                pick_changed()
+        def pick_reset() -> None:
+            st.pop("generic_pick", None)
+            race_v.set("Human")
+            sex_v.set("Male")
+            class_v.set("Fighter")
+            age_v.set("Adult" if "Adult" in ages else ages[0])
+            look_v.set(looks[0])
+            pick_changed()
+        picks = ([(race_v, RACES, 10), (sex_v, ["Male", "Female"], 8), (class_v, CLASSES, 10)] if generic else []) \
+            + [(age_v, ages, 11), (look_v, looks, 11)]
+        for var_, vals_, w_ in picks:
+            cb_ = ttk.Combobox(prow0, textvariable=var_, values=vals_, state="readonly", width=w_)
+            cb_.pack(side="left", padx=(0, 4))
+            cb_.bind("<<ComboboxSelected>>", pick_changed)
+        tooltip(prow0, ("Race, gender and class, then how old the character looks and anything about the face - "
+                        if generic else "How old the character looks, and anything about the face - ")
+                       + "they are written into the description. Flux paints clean, young skin unless it is told "
+                         "otherwise, so \"Old\" and \"Weathered\" are worth a try.")
+        if generic and not desc_var.get().strip():
+            pick_changed()
         bg_lab = ttk.Label(frm, text="Background:")
         bg_lab.grid(row=2, column=0, sticky="w", pady=(6, 0))
         bg_var = tk.StringVar()
@@ -3101,6 +3348,34 @@ def run_gui() -> None:
         z_box.pack(side="left", padx=(4, 8))
         tooltip(z_box, "How much closer the .bmp is than the picture (1 = the whole picture, which is already the "
                        "shape of a portrait).")
+        nudge = {"dx": float(st.get("crop_dx") or 0), "dy": float(st.get("crop_dy") or 0)}
+
+        def box_for(sw: int, sh: int) -> Tuple[int, int, int, int]:
+            """What the game portrait keeps from a picture this size: the head zoom, moved where you put it."""
+            try:
+                zm_ = max(1.0, min(2.5, float(zoom_var.get())))
+                bw_, bh_ = max(16, int(w_var.get())), max(16, int(h_var.get()))
+            except (tk.TclError, ValueError):
+                zm_, bw_, bh_ = 1.25, 169, 266
+            top_ = float((gs.get("portrait_bmp") or {}).get("top", 0) or 0)
+            lf, tp, cw, ch = pg.crop_box(sw, sh, bw_, bh_, zm_, top_)   # type: ignore[attr-defined]
+            lf = int(max(0, min(sw - cw, lf + nudge["dx"] * sw)))
+            tp = int(max(0, min(sh - ch, tp + nudge["dy"] * sh)))
+            return lf, tp, cw, ch
+
+        def shift(dx: float, dy: float) -> None:
+            nudge["dx"] = 0.0 if dx == 0 and dy == 0 else max(-0.5, min(0.5, nudge["dx"] + dx))
+            nudge["dy"] = 0.0 if dx == 0 and dy == 0 else max(-0.5, min(0.5, nudge["dy"] + dy))
+            st["crop_dx"], st["crop_dy"] = nudge["dx"], nudge["dy"]
+            save_settings(st)
+            crop_preview()
+        ttk.Label(crow, text="Move:").pack(side="left", padx=(8, 2))
+        for txt, dx, dy in (("\u25c0", -0.02, 0), ("\u25b6", 0.02, 0), ("\u25b2", 0, -0.02), ("\u25bc", 0, 0.02)):
+            ttk.Button(crow, text=txt, width=2, command=lambda a=dx, b=dy: shift(a, b)).pack(side="left", padx=1)
+        mid_btn = ttk.Button(crow, text="Middle", width=7, command=lambda: shift(0, 0))
+        mid_btn.pack(side="left", padx=(4, 8))
+        tooltip(mid_btn, "Put the box back in the middle. The arrows move it on every candidate at once; the picture "
+                         "that \"Use this\" makes is exactly what the box shows.")
         cropnote = tk.StringVar(value="")
         ttk.Label(crow, textvariable=cropnote, foreground="#888").pack(side="left")
         cbody = ttk.Frame(cwrap)                                     # the candidates scroll: there can be many
@@ -3164,8 +3439,12 @@ def run_gui() -> None:
                     zm = 1.25
                 st["portrait_head_zoom"] = zm
                 save_settings(st)
-                bmp = os.path.splitext(path)[0] + f"_{bw}x{bh}_z{int(round(zm * 10))}.bmp"
-                pg.png_to_portrait_bmp(path, bmp, bw, bh, zm, float(size.get("top", 0) or 0))   # type: ignore[attr-defined]
+                inf_ = image_info(path)
+                mark = f"_z{int(round(zm * 10))}" + (f"_m{int(nudge['dx'] * 100)}_{int(nudge['dy'] * 100)}"
+                                                     if nudge["dx"] or nudge["dy"] else "")
+                bmp = os.path.splitext(path)[0] + f"_{bw}x{bh}{mark}.bmp"
+                to_portrait_bmp(path, bmp, bw, bh, getattr(pg, "crop_box", None),   # exactly what the yellow box shows
+                                box_for(inf_["w"], inf_["h"]) if inf_ else None)
                 path = bmp
             except Exception as e:  # noqa: BLE001
                 messagebox.showwarning("Portrait Scout", f"Could not make the {bw}x{bh} .bmp ({e}).\n"
@@ -3182,6 +3461,8 @@ def run_gui() -> None:
                 return
             props[key] = os.path.normpath(path)
             persist_props()
+            if not share_btn.winfo_ismapped():
+                share_btn.pack(side="left", padx=(8, 0))
             if view_var.get() == "gallery":
                 rebuild_keep_scroll()
             refresh_table_only()
@@ -3198,6 +3479,8 @@ def run_gui() -> None:
                 return
             props[key] = os.path.normpath(path)
             persist_props()
+            if not share_btn.winfo_ismapped():
+                share_btn.pack(side="left", padx=(8, 0))
             if view_var.get() == "gallery":
                 rebuild_keep_scroll()
             refresh_table_only()
@@ -3263,15 +3546,14 @@ def run_gui() -> None:
                 bw, bh = max(16, int(w_var.get())), max(16, int(h_var.get()))
             except (tk.TclError, ValueError):
                 return
-            top = float((gs.get("portrait_bmp") or {}).get("top", 0) or 0)
-            show_ = zm > 1.005                                        # at zoom 1 the box is the whole picture: no point
+            show_ = zm > 1.005 or nudge["dx"] or nudge["dy"]       # at zoom 1, centred, the box is the whole picture
             cropnote.set("the yellow box is what the game portrait keeps" if show_ else "")
             for c in cells:
                 cvs = c.get("canvas")
                 if not cvs or "rect" not in c:                        # a cropped portrait: nothing to outline
                     continue
                 try:
-                    lf, tp, cw, ch = pg.crop_box(c["sw"], c["sh"], bw, bh, zm, top)   # type: ignore[attr-defined]
+                    lf, tp, cw, ch = box_for(c["sw"], c["sh"])
                     sx, sy = c["tw"] / c["sw"], c["th"] / c["sh"]
                     box = (lf * sx, tp * sy, (lf + cw) * sx, (tp + ch) * sy)
                     for item, grow in ((c["rect"], 0), (c["shade"], 1)):
@@ -3412,7 +3694,7 @@ def run_gui() -> None:
                 n = max(1, min(8, int(count_var.get())))
             except (tk.TclError, ValueError):
                 n = 2
-            notes[key] = {"desc": desc_var.get().strip(), "count": n}
+            notes[key] = {"desc": desc_var.get().strip(), "count": n, "age": age_v.get(), "look": look_v.get()}
             if generic:
                 notes[key].update(race=race_v.get(), sex=sex_v.get(), **{"class": class_v.get()})
             st["portrait_style"] = style_var.get()
@@ -3432,6 +3714,10 @@ def run_gui() -> None:
                     root.after(0, done, str(e) or e.__class__.__name__)
             threading.Thread(target=work, daemon=True).start()
         gen_btn.config(command=run)
+        share_btn = ttk.Button(bar, text="Use for others...",
+                               command=lambda: share_portrait(r, dlg, after if callable(after) else None))
+        if not generic and key in props:
+            share_btn.pack(side="left", padx=(8, 0))
 
         # the image engine: start / stop by hand, and whether it outlives Portrait Scout
         erow = ttk.Frame(frm)
@@ -3732,6 +4018,203 @@ def run_gui() -> None:
         for q in old:
             add_candidate(str(q))
 
+    def share_portrait(r: dict, parent: object = None, after: object = None) -> None:
+        """Give the picture proposed for this creature to other creatures as well - the rest of a decloned bunch,
+        or everyone who shares its portrait now."""
+        par = parent or root
+        path = props.get(rowkey(r))
+        if not path:
+            messagebox.showinfo("Portrait Scout", "Propose a portrait for this creature first.", parent=par)
+            return
+        mine = {x.upper() for f in ("large", "small") for x in str(r.get(f) or "").split("/") if x}
+
+        def ports(o: dict) -> Set[str]:
+            return {x.upper() for f in ("large", "small") for x in str(o.get(f) or "").split("/") if x}
+        here = rowkey(r)
+        cands = [o for o in all_rows() if rowkey(o) != here
+                 and (o["name"] == r["name"] or (mine and mine & ports(o)))]
+        cands.sort(key=lambda o: (o["name"].lower(), (o.get("cre_list") or [""])[0]))
+        if not cands:
+            messagebox.showinfo("Portrait Scout", "No other creature shares this one's name or portrait.\n\n"
+                                "(With Declone off, the creatures of one name are already a single row.)", parent=par)
+            return
+        w = tk.Toplevel(par)                                         # type: ignore[arg-type]
+        w.title(f"Use {Path(path).name} for others")
+        f = ttk.Frame(w, padding=12)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, justify="left", wraplength=620,
+                  text=f"Creatures that share {r['name']}'s name or portrait. Click the ones that should get "
+                       f"{Path(path).name} as well - click again to drop one.").pack(anchor="w", pady=(0, 6))
+        box = ttk.Frame(f)
+        box.pack(fill="both", expand=True)
+        lb = tk.Listbox(box, selectmode="multiple", width=86, height=min(18, max(4, len(cands))),
+                        activestyle="none", exportselection=False)
+        sb = ttk.Scrollbar(box, orient="vertical", command=lb.yview)
+        lb.config(yscrollcommand=sb.set)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        for o in cands:
+            cre = ", ".join(o.get("cre_list") or [])[:28]
+            now = Path(props[rowkey(o)]).name if rowkey(o) in props else (o["large"] or o["small"] or "no portrait")
+            lb.insert("end", f"{o['name'][:26]:28} {cre:30} {str(o.get('area') or '')[:22]:24} now: {now}")
+        row = ttk.Frame(f)
+        row.pack(fill="x", pady=(8, 0))
+
+        def use_them() -> None:
+            picked = [cands[i] for i in lb.curselection()]
+            for o in picked:
+                props[rowkey(o)] = path
+            if picked:
+                persist_props()
+                if view_var.get() == "gallery":
+                    rebuild_keep_scroll()
+                refresh_table_only()
+                if callable(after):
+                    after()                                          # type: ignore[operator]
+                status.set(f"{Path(path).name} is now proposed for {len(picked) + 1} creature(s).")
+            w.destroy()
+        ttk.Button(row, text="Use it for the picked ones", command=use_them).pack(side="left")
+        ttk.Button(row, text="Pick all", command=lambda: lb.select_set(0, "end")).pack(side="left", padx=6)
+        ttk.Button(row, text="Pick none", command=lambda: lb.select_clear(0, "end")).pack(side="left")
+        ttk.Button(row, text="Cancel", command=w.destroy).pack(side="right")
+
+    def crop_store() -> dict:
+        res = state["res"]
+        return st.setdefault("crops", {}).setdefault(str(res["mod"]), {}) if res else {}   # type: ignore[index]
+
+    def crop_for(r: dict) -> Optional[dict]:
+        """The frame someone set by hand for this creature's picture, if it is still the same picture."""
+        c = crop_store().get(rowkey(r))
+        pp = props.get(rowkey(r))
+        if isinstance(c, dict) and pp and os.path.normcase(c.get("src", "")) == os.path.normcase(pp):
+            return c
+        return None
+
+    def full_image(path: str, fit: int = 520) -> Tuple[object, int, int, float]:
+        """The picture as big as `fit` allows: (PhotoImage, its width, its height, shown size / real size)."""
+        try:
+            from PIL import Image, ImageTk
+            im = Image.open(path).convert("RGB")
+            k = min(1.0, fit / max(1, im.height), (fit * 4 // 3) / max(1, im.width))
+            sm = im.resize((max(1, int(im.width * k)), max(1, int(im.height * k))))
+            return ImageTk.PhotoImage(sm), im.width, im.height, k
+        except Exception:  # noqa: BLE001
+            pass
+        if path.lower().endswith(".bmp"):
+            data = open(path, "rb").read()
+            w, h = abs(struct.unpack_from("<i", data, 18)[0]), abs(struct.unpack_from("<i", data, 22)[0])
+            k = max(1, -(-h // fit))
+            ppm = bmp_to_ppm(data, k)
+            return (tk.PhotoImage(data=ppm) if ppm else None), w, h, 1.0 / k
+        pi = tk.PhotoImage(file=path)                                # png / gif
+        k = max(1, -(-pi.height() // fit))
+        return (pi.subsample(k, k) if k > 1 else pi), pi.width(), pi.height(), 1.0 / k
+
+    def frame_dialog(r: dict, parent: object = None, after: object = None) -> None:
+        """Choose which part of the proposed picture becomes the portrait. Drag the box, or resize it."""
+        par = parent or root
+        path = props.get(rowkey(r))
+        if not path or not os.path.isfile(path):
+            messagebox.showinfo("Portrait Scout", "Propose a picture for this creature first.", parent=par)
+            return
+        sz = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) and len(st.get("portrait_size")) == 2 \
+            else [169, 266]
+        pw, ph = int(sz[0]), int(sz[1])
+        try:
+            img, sw, sh, k = full_image(path)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showwarning("Portrait Scout", f"That picture cannot be shown here ({e}).", parent=par)
+            return
+        if img is None:
+            messagebox.showwarning("Portrait Scout", "That picture cannot be shown here (install Pillow for more "
+                                                     "formats).", parent=par)
+            return
+        w = tk.Toplevel(par)                                         # type: ignore[arg-type]
+        w.title(f"Frame the portrait - {r['name']}")
+        top_ = ttk.Frame(w, padding=10)
+        top_.pack(fill="x")
+        ttk.Label(top_, justify="left", wraplength=640,
+                  text=f"{Path(path).name}  -  {sw} x {sh}.  Drag the box where you want it; the part inside becomes "
+                       f"the {pw} x {ph} portrait. The wheel, or the slider, makes it bigger or smaller.").pack(anchor="w")
+        cv = tk.Canvas(w, width=img.width(), height=img.height(), highlightthickness=0)   # type: ignore[attr-defined]
+        cv.pack(padx=10)
+        cv.create_image(0, 0, image=img, anchor="nw")
+        cv.image = img                                               # type: ignore[attr-defined]
+        shown_w, shown_h = img.width(), img.height()                 # type: ignore[attr-defined]
+        start = crop_for(r)
+        if start:
+            box = [start["box"][0] * k, start["box"][1] * k, start["box"][2] * k, start["box"][3] * k]
+        else:
+            ch_ = min(shown_h, shown_w * ph / pw)
+            cw_ = ch_ * pw / ph
+            box = [(shown_w - cw_) / 2, (shown_h - ch_) / 2, cw_, ch_]
+        rect = cv.create_rectangle(0, 0, 0, 0, outline="#ffd000", width=2)
+        dark = cv.create_rectangle(0, 0, 0, 0, outline="#303030", width=1)
+
+        def draw() -> None:
+            box[2] = max(24.0, min(box[2], shown_w))
+            box[3] = box[2] * ph / pw
+            if box[3] > shown_h:
+                box[3] = float(shown_h)
+                box[2] = box[3] * pw / ph
+            box[0] = max(0.0, min(box[0], shown_w - box[2]))
+            box[1] = max(0.0, min(box[1], shown_h - box[3]))
+            cv.coords(rect, box[0], box[1], box[0] + box[2], box[1] + box[3])
+            cv.coords(dark, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1)
+        drag = {"x": 0.0, "y": 0.0}
+
+        def grab(e: object) -> None:
+            drag["x"], drag["y"] = float(e.x), float(e.y)            # type: ignore[attr-defined]
+
+        def move(e: object) -> None:
+            box[0] += float(e.x) - drag["x"]                         # type: ignore[attr-defined]
+            box[1] += float(e.y) - drag["y"]                         # type: ignore[attr-defined]
+            grab(e)
+            draw()
+
+        def wheel(e: object) -> str:
+            step = 1.1 if getattr(e, "delta", 0) > 0 or getattr(e, "num", 0) == 4 else 1 / 1.1
+            cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
+            box[2] *= step
+            box[3] = box[2] * ph / pw
+            box[0], box[1] = cx - box[2] / 2, cy - box[3] / 2
+            draw()
+            return "break"
+        cv.bind("<Button-1>", grab)
+        cv.bind("<B1-Motion>", move)
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            cv.bind(ev, wheel)
+        row = ttk.Frame(w, padding=10)
+        row.pack(fill="x")
+
+        def centre() -> None:
+            ch2 = min(shown_h, shown_w * ph / pw)
+            box[0], box[1], box[2], box[3] = (shown_w - ch2 * pw / ph) / 2, (shown_h - ch2) / 2, ch2 * pw / ph, ch2
+            draw()
+
+        def keep() -> None:
+            crop_store()[rowkey(r)] = {"src": path, "box": [int(box[0] / k), int(box[1] / k),
+                                                            int(box[2] / k), int(box[3] / k)], "size": [pw, ph]}
+            save_settings(st)
+            status.set(f"Framed the portrait for {r['name']}.")
+            if callable(after):
+                after()                                              # type: ignore[operator]
+            w.destroy()
+
+        def forget() -> None:
+            crop_store().pop(rowkey(r), None)
+            save_settings(st)
+            status.set(f"{r['name']}: back to the middle of the picture.")
+            if callable(after):
+                after()                                              # type: ignore[operator]
+            w.destroy()
+        ttk.Button(row, text="Use this framing", command=keep).pack(side="left")
+        ttk.Button(row, text="Whole picture", command=lambda: (box.__setitem__(2, float(shown_w)), draw())).pack(side="left", padx=6)
+        ttk.Button(row, text="Middle", command=centre).pack(side="left")
+        ttk.Button(row, text="Forget my framing", command=forget).pack(side="left", padx=6)
+        ttk.Button(row, text="Cancel", command=w.destroy).pack(side="right")
+        draw()
+
     def clear_prop(r: dict) -> None:
         if props.pop(rowkey(r), None) is not None:
             persist_props()
@@ -3764,16 +4247,29 @@ def run_gui() -> None:
                                          filetypes=[("Text", "*.txt")])
         if not p:
             return
-        lines = [f"# Portrait changes for {res['mod']}  ({len(rows)} creature(s))",                                  # type: ignore[index]
-                 "# creature file  name -> proposed portrait file   [portrait it has now]   (!! = problems found with the image)"]
+        sz_ = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) and len(st.get("portrait_size")) == 2 \
+            else [169, 266]
+        lines = [f"# Portrait changes for {res['mod']}  ({len(rows)} creature(s))", "#",                             # type: ignore[index]
+                 "# Doing it by hand, for each line below:",
+                 f"#   1. make a {int(sz_[0])}x{int(sz_[1])} 24-bit .bmp of the picture,",
+                 "#      named as the second column says (a resref is at most 8 characters),",
+                 "#   2. put it in the game's override folder,",
+                 "#   3. open the creature in NearInfinity and write that name into both portrait",
+                 "#      fields - Portrait (small) at 0x34 and Portrait (large) at 0x3c.",
+                 "# 'Create mod...' in Portrait Scout does all of that for you, as an installable WeiDU mod.",
+                 "#",
+                 "# creature file | name to give the picture | creature | picture proposed | portrait it has now"]
         for r in rows:
-            fname = Path(props[rowkey(r)]).name
+            src_ = props[rowkey(r)]
             now = r["large"] or r["small"] or "none"
-            warn = check_image(props[rowkey(r)])
+            warn = check_image(src_)
+            framed = " (framed by hand)" if crop_for(r) else ""
             for cre in (r["cre_list"] or [""]):
-                lines.append(f"{cre + '.CRE' if cre else '(no creature file)'}  {r['name']} -> {fname}   [now: {now}]"
+                lines.append(f"{(cre + '.CRE') if cre else '(no creature file)'} | "
+                             f"{(cre + '.bmp') if cre else '(name it yourself)'} | {r['name']} | "
+                             f"{Path(src_).name}{framed} | {now}"
                              + (f"   [areas: {areas_text(r, 8)}]" if r.get("areas") else "")
-                             + (f"   !! check: {'; '.join(warn)}" if warn else ""))
+                             + (f"   !! {'; '.join(warn)}" if warn else ""))
         Path(p).write_text("\n".join(lines) + "\n", encoding="utf-8")
         status.set(f"Exported {len(rows)} proposed change(s) to {p}")
 
@@ -3799,8 +4295,11 @@ def run_gui() -> None:
                                                                                                   columnspan=3,
                                                                                                   sticky="w", pady=(6, 0))
 
+        def tidy(nm: str) -> str:
+            return re.sub(r"[^A-Za-z0-9_#!-]+", "-", nm).strip("-")  # the name is kept as typed, capitals and all
+
         def shown(*_a: object) -> None:
-            where_v.set("Goes in:  " + os.path.join(folder["dir"], re.sub(r"[^A-Za-z0-9_#!-]+", "-", name_v.get()).strip("-")))
+            where_v.set("Goes in:  " + os.path.join(folder["dir"], tidy(name_v.get())))
         name_v.trace_add("write", shown)
         shown()
 
@@ -3813,7 +4312,7 @@ def run_gui() -> None:
         row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
         def ok() -> None:
-            nm = re.sub(r"[^A-Za-z0-9_#!-]+", "-", name_v.get()).strip("-")
+            nm = tidy(name_v.get())
             if not nm:
                 messagebox.showwarning("Portrait Scout", "The mod needs a name.", parent=w)
                 return
@@ -3843,14 +4342,20 @@ def run_gui() -> None:
         pg = generator_module()
         sz = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) and len(st.get("portrait_size")) == 2 else [169, 266]
 
-        def convert(src: str, dst: str) -> None:
-            if pg is None or not src.lower().endswith(".png"):
-                raise ValueError("only .bmp pictures, and .png with the generator folder present, can be exported")
-            pg.png_to_portrait_bmp(src, dst, int(sz[0]), int(sz[1]), 1.0, 0.0)   # type: ignore[attr-defined]
+        def convert(src: str, dst: str, box: Optional[List[int]] = None) -> None:
+            inf = image_info(src)
+            if not box and inf and inf["fmt"] == "BMP" and inf["bpp"] in (8, 24) \
+                    and (inf["w"], inf["h"]) == (int(sz[0]), int(sz[1])):
+                shutil.copyfile(src, dst)                            # already a game portrait of the right size
+                return
+            to_portrait_bmp(src, dst, int(sz[0]), int(sz[1]), getattr(pg, "crop_box", None),
+                            tuple(box) if box else None)             # type: ignore[arg-type]
         try:
             os.makedirs(d, exist_ok=True)
-            info = export_mod(d, str(res["mod"]), [{"name": r["name"], "cres": r["cre_list"], "image": props[rowkey(r)],
-                                                    "areas": areas_text(r)} for r in rows], convert, game_var.get())
+            info = export_mod(d, str(res["mod"]),
+                               [{"name": r["name"], "cres": r["cre_list"], "image": props[rowkey(r)],
+                                 "areas": areas_text(r), "box": (crop_for(r) or {}).get("box")} for r in rows],
+                               convert, game_var.get())
         except (OSError, ValueError) as e:
             messagebox.showwarning("Portrait Scout", f"Could not export the mod:\n\n{e}")
             return
@@ -3959,7 +4464,7 @@ def run_gui() -> None:
             mod_idx = mod_bmp_index() if modpic_var.get() and not src_mode else {}
             mod_only = bool(modpic_var.get()) and (src_mode or bool(mod_idx))
             mod_file = ""
-            for field, shrink in (("small", 1), ("large", 2)):
+            for field in ("small", "large"):
                 if img:
                     break
                 if mod_only and src_mode:
@@ -3982,8 +4487,7 @@ def run_gui() -> None:
                             data = None
                     else:
                         data = game.get_mod(nm, T_BMP) if mod_only else game.get(nm, T_BMP)   # type: ignore[attr-defined]
-                    ppm = bmp_to_ppm(data, shrink) if data else None
-                    imgs[ikey] = tk.PhotoImage(data=ppm) if ppm else None
+                    imgs[ikey] = thumb_from_bytes(data) if data else None
                 img = imgs[ikey]
                 if img:
                     shown_field = field
@@ -4009,16 +4513,9 @@ def run_gui() -> None:
             nl.pack()
             nl.bind("<Button-1>", lambda e, n=r["name"]: copy_text(n))                    # click the name: copy it
             tk.Label(card, text=f"{r['lines']} lines", bg=CARD, fg="#666").pack()
-            if prop:
-                tk.Label(card, text=f"Proposed: {Path(prop).name}" + (f" ({prop_dims(prop)})" if prop_dims(prop) else ""),
-                         bg=CARD, fg="#1f7a3a", wraplength=CARD_W - 30,
-                         font=("TkDefaultFont", 9, "bold")).pack()
-                pi = check_image(prop)
-                if pi:
-                    wl = tk.Label(card, text="! check image (hover)", bg=CARD, fg="#b45309", cursor="question_arrow")
-                    wl.pack()
-                    wl.bind("<Button-1>", lambda e, m="\n- ".join(pi): messagebox.showwarning("Check this image", "- " + m))
-                    wl._copy_label = True                                                  # type: ignore[attr-defined]
+            if prop:                                                 # the green border says it is a proposal already
+                tooltip(card, f"Proposed: {Path(prop).name}" + (f"  ({prop_dims(prop)})" if prop_dims(prop) else "")
+                        + "\n\nDouble-click the card to see it, frame it, or clear it.")
             sub = " ".join(x for x in (r["race"], r["sex"]) if x)
             if sub:
                 tk.Label(card, text=sub, bg=CARD, fg="#666", wraplength=CARD_W - 30, justify="center").pack()
@@ -4066,12 +4563,11 @@ def run_gui() -> None:
         img = None
         if res:
             game: Game = res["game"]                                 # type: ignore[index]
-            for field, shrink in (("small", 1), ("large", 2)):
+            for field in ("small", "large"):
                 nm = r[field].split("/")[0] if r[field] else ""
                 data = game.get(nm, T_BMP) if nm else None
-                ppm = bmp_to_ppm(data, shrink) if data else None
-                if ppm:
-                    img = tk.PhotoImage(data=ppm)
+                img = thumb_from_bytes(data) if data else None       # the same box as a proposed picture
+                if img:
                     break
         lb = tk.Label(head, bd=0, highlightthickness=4)              # shows the proposal (green border) or the current portrait
         lb.pack(side="left", padx=(0, 10))
@@ -4100,6 +4596,13 @@ def run_gui() -> None:
                                       (f"medium {r['small_size']}" if r.get("small_size") else "")) if x)
         ttk.Label(info, text=f"Portrait: {r['portrait']}" + (f"  ({sizes})" if sizes else "")
                   + "     (right-click the picture to save it)", foreground="#666").pack(anchor="w")
+        mine = {x.upper() for f in ("large", "small") for x in str(r.get(f) or "").split("/") if x}
+        others = sorted({o["name"] for o in all_rows() if o is not r and o["name"] != r["name"]
+                         and mine & {x.upper() for f in ("large", "small") for x in str(o.get(f) or "").split("/") if x}})
+        if others:
+            ttk.Label(info, foreground="#8a6d0b", wraplength=640, justify="left",
+                      text="Same portrait as: " + ", ".join(others[:12])
+                           + (f" and {len(others) - 12} more" if len(others) > 12 else "")).pack(anchor="w")
         pf = ttk.Frame(info)
         pf.pack(anchor="w", pady=(4, 0))
         pl = tk.StringVar()
@@ -4121,6 +4624,20 @@ def run_gui() -> None:
                        command=lambda: (generate_dialog(r, upd_prop, win), win.lower())).pack(side="left", padx=(4, 0))
         clr = ttk.Button(pf, text="Clear proposal", command=clear_here)
         clr.pack(side="left", padx=4)
+        frame_btn = ttk.Button(pf, text="Frame...", command=lambda: frame_dialog(r, win, upd_prop))
+        frame_btn.pack(side="left", padx=(0, 4))
+        tooltip(frame_btn, "Choose which part of the proposed picture becomes the portrait. Without it the middle is "
+                           "used, cut to the portrait's shape.")
+        same_btn = ttk.Button(pf, text="Use for others...", command=lambda: share_portrait(r, win, upd_prop))
+        same_btn.pack(side="left")
+        dl_lbl, dl_why = declone_label(r)
+        if dl_lbl:
+            dl_btn = ttk.Button(pf, text=dl_lbl, command=lambda: (toggle_declone(r), win.destroy()))
+            dl_btn.pack(side="left", padx=(8, 0))
+            tooltip(dl_btn, dl_why + "\n\nThey were put in one row only because they share a name and look the same. "
+                            "Creatures that share a creature file or a portrait are never split.")
+        tooltip(same_btn, "Give the proposed picture to other creatures of the same name, or to the ones that share "
+                          "this creature's portrait now. Useful after decloning.")
         ttk.Label(pf, textvariable=pl, foreground="#1f7a3a").pack(side="left", padx=8)
         upd_prop()
         ttk.Label(info, text="(Clear or export proposals from the Gallery tab.)", foreground="#888").pack(anchor="w")
@@ -4345,6 +4862,10 @@ def run_gui() -> None:
             return
         state["res"] = res
         state["page"] = 0
+        mark_party(res)
+        for r_ in res["rows"]:                                       # a split creature knows the row it came from
+            for p_ in r_.get("parts") or []:
+                p_["_parent"] = r_
         state["gen_row"] = None                                      # the Generate tab belonged to the last analysis
         gen_hint()
         props.clear()
