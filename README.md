@@ -55,11 +55,14 @@ The **Generate** tab works on the selected creature, or on nobody in particular 
 
 > **No image generator and no models come with Portrait Scout.** They are many gigabytes and separately licensed. You supply one: a copy of [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) in an `engine` folder, or any generator with an Automatic1111 / Forge API, including one you already run. **The Generate tab shows the steps with the download links as buttons**, and [generator/README.md](generator/README.md) has the long version. About 16 GB of disk and an 8 GB graphics card are comfortable; 6 GB works, slower.
 
-- **Description** comes from the creature's gender, race and animation; edit it freely. **Background** is used by every style, so one change covers them all.
-- **Style** picks a look; **LoRA** turns the `<lora:...>` part off, which matters for creatures with features of their own - horns, green skin - that a LoRA tends to paint away.
-- **Prompt** and **Generator settings** open the words sent to the generator and the engine's address, start command, model, picture size, steps and sampler. **Save** keeps them, **Revert to baseline** puts a built-in style back.
-- **Start**, **Stop** and **Keep open** control the generator; without **Keep open** it closes with Portrait Scout.
-- Click a candidate for full size, right-click to save a copy, **Discard** to delete it. **Use this** crops it to a game portrait (**169x266** for a speaker, **210x330** for the large one) and proposes it; **Head zoom** sets how close the crop is, with a yellow box showing what will be kept.
+- **Description** comes from the creature's gender, race and animation, plus a face drawn from the creature's own file - shape, nose, hair and sometimes a scar or a missing tooth. The same creature always gets the same face, and creatures sharing a portrait share it, so a decloned crowd comes out as a crowd of different people. Edit the text freely; what you type wins.
+- **Age** and **Look** shade that face - *Old*, *Weathered*, *Blotchy and freckled* and so on. Flux paints clean young skin unless told otherwise, so they earn their place.
+- **Background** is used by every style. `{random}` in it picks one of the muted earth schemes in `background_palettes` per picture, so a few thousand portraits do not all sit against the same wash.
+- **Candidates**, **Style** and **LoRA** sit on the same row. LoRA off takes the `<lora:...>` part out, which matters for creatures with features of their own - horns, green skin - that a LoRA tends to paint away.
+- **Start** and **Stop** run the generator. **Engine** holds the rest: keep it open after Portrait Scout closes, give it a window of its own, show its log, open its own page, edit `settings.json`.
+- **Prompt** and **Generator settings** open the words sent to the generator and the model, picture size, steps, sampler and CFG. **Copy prompt** puts both prompts on the clipboard. **Save** keeps changes, **Revert to baseline** puts a built-in style back.
+- Click a candidate for full size, right-click to save a copy, **Discard** to delete it. **Full size** off shows every candidate the same size for comparing; on shows each at its own.
+- **Use this** crops a candidate to a game portrait - **speaker 169x266** or **large 210x330** from the size box - and proposes it. **Head zoom** above 1 crops closer, with a yellow box showing what is kept, and the arrows move that box on every candidate at once. Making a new game portrait replaces the one before it.
 
 ## Proposing portraits
 

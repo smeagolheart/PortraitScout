@@ -26,9 +26,10 @@ import csv
 import io
 import json
 import os
-import io
 import re
 import shutil
+from fractions import Fraction
+
 import struct
 import subprocess
 import sys
@@ -2470,6 +2471,7 @@ def run_gui() -> None:
 
     ginner.bind("<Configure>", fix_scrollregion)
     CARD_W = 185                                   # width reserved for one gallery card; the row fills the window
+    CAND_W, CAND_H = 210, 330                      # every candidate is shown in this box unless "Full size" is on
     THUMB_W, THUMB_H = 155, 244                    # a proposal is shown at the size a 169x266 portrait gets here
     MIN_PER_ROW = 4                                # fewer than this per row is not supported (layout breaks)
 
@@ -3052,22 +3054,19 @@ def run_gui() -> None:
             parent=par, title=f"Proposed portrait for {r['name']}", initialdir=os.path.dirname(props.get(rowkey(r), "")) or None,
             filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tga *.tif *.tiff"), ("All files", "*.*")])
         if p:
-            issues = check_image(p)
-            if issues and not messagebox.askyesno(
-                    "Check this image", "This image may not work as a portrait:\n\n- " + "\n- ".join(issues)
-                    + "\n\nUse it as the proposal anyway?", parent=par):
-                par.lift()
-                return
             crop_store().pop(rowkey(r), None)                        # a new picture, so any old framing is gone
             props[rowkey(r)] = os.path.normpath(p)
             persist_props()
             inf = image_info(p)
             size_ = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) else [169, 266]
-            if inf and inf["h"] and abs(inf["w"] / inf["h"] - int(size_[0]) / int(size_[1])) > 0.03 \
-                    and messagebox.askyesno("Portrait Scout", f"{Path(p).name} is {inf['w']}x{inf['h']}, not the shape "
-                                            f"of a {size_[0]}x{size_[1]} portrait.\n\nFrame it now? (otherwise the "
-                                            "middle is used)", parent=par):
+            pw_, ph_ = int(size_[0]), int(size_[1])
+            ready = bool(inf) and inf["fmt"] == "BMP" and inf["bpp"] in (8, 24) and (inf["w"], inf["h"]) == (pw_, ph_)
+            if inf and not ready:                                    # any picture will do: frame it and cut it out
                 frame_dialog(r, par, after)
+                return
+            if not inf:
+                messagebox.showwarning("Portrait Scout", f"{Path(p).name} could not be read as an image. It is "
+                                       "proposed anyway, but it may not work as a portrait.", parent=par)
             if view_var.get() == "gallery":
                 rebuild_keep_scroll()
             refresh_table_only()
@@ -3232,40 +3231,43 @@ def run_gui() -> None:
                          "otherwise, so \"Old\" and \"Weathered\" are worth a try.")
         if generic and not desc_var.get().strip():
             pick_changed()
-        bg_lab = ttk.Label(frm, text="Background:")
-        bg_lab.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        brow = ttk.Frame(frm)                                        # background, and what to make from it
+        brow.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        bg_lab = ttk.Label(brow, text="Background:")
+        bg_lab.pack(side="left")
         bg_var = tk.StringVar()
-        ttk.Entry(frm, textvariable=bg_var).grid(row=2, column=1, sticky="ew", padx=6, pady=(6, 0))
-        ttk.Button(frm, text="\u2922", width=3,
-                   command=lambda: big_edit(bg_var, "Background")).grid(row=2, column=2, sticky="w", pady=(6, 0))
-        ttk.Label(frm, text="what is behind the head - anything else about the character goes in the description above",
-                  foreground="#888").grid(row=3, column=1, sticky="w", padx=6)
         tooltip(bg_lab, "The prompts put this in where they say {background}, so one change covers every look that "
                         "uses it. Empty it and the sentence about the background drops out of the prompt.")
-        bar = ttk.Frame(frm)
-        bar.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Label(bar, text="Candidates:").pack(side="left")
-        count_var = tk.IntVar(value=int(saved.get("count") or gs.get("candidates", 2) or 2))
-        ttk.Spinbox(bar, from_=1, to=8, width=3, textvariable=count_var).pack(side="left", padx=(4, 12))
-        ttk.Label(bar, text="Style:").pack(side="left")
-        styles = pg.style_names(gs) if hasattr(pg, "style_names") else []   # type: ignore[attr-defined]
-        style_var = tk.StringVar(value=st.get("portrait_style") if st.get("portrait_style") in styles
-                                 else (gs.get("style") if gs.get("style") in styles else (styles[0] if styles else "")))
-        style_box = ttk.Combobox(bar, textvariable=style_var, values=styles, state="readonly", width=24)
-        style_box.pack(side="left", padx=(4, 6))
         have_lora = bool(lora_files()) or not engine_ready()       # an engine of your own: no way to tell, so show it
         lora_var = tk.BooleanVar(value=bool(st.get("use_lora", True)) and have_lora)
 
         def lora_changed() -> None:
             st["use_lora"] = bool(lora_var.get())
             save_settings(st)
-        if have_lora:
-            lora_cb = ttk.Checkbutton(bar, text="LoRA", variable=lora_var, command=lora_changed)
-            lora_cb.pack(side="left", padx=(0, 12))
+        if have_lora:                                                # packed right to left: LoRA ends up last
+            lora_cb = ttk.Checkbutton(brow, text="LoRA", variable=lora_var, command=lora_changed)
+            lora_cb.pack(side="right", padx=(6, 0))
             tooltip(lora_cb, "Off: the <lora:...> part is taken out of the prompt, so only the model itself paints "
                              "the picture. A LoRA pushes hard towards what it was trained on, which can cost a "
                              "creature its own features (horns, green skin).")
-        zoom_var = tk.DoubleVar(value=float(st.get("portrait_head_zoom") or (gs.get("portrait_bmp") or {}).get("zoom") or 1.25))
+        styles = pg.style_names(gs) if hasattr(pg, "style_names") else []   # type: ignore[attr-defined]
+        style_var = tk.StringVar(value=st.get("portrait_style") if st.get("portrait_style") in styles
+                                 else (gs.get("style") if gs.get("style") in styles else (styles[0] if styles else "")))
+        style_box = ttk.Combobox(brow, textvariable=style_var, values=styles, state="readonly", width=22)
+        style_box.pack(side="right", padx=(4, 0))
+        ttk.Label(brow, text="Style:").pack(side="right", padx=(12, 0))
+        count_var = tk.IntVar(value=int(saved.get("count") or gs.get("candidates", 2) or 2))
+        ttk.Spinbox(brow, from_=1, to=8, width=3, textvariable=count_var).pack(side="right", padx=(4, 0))
+        ttk.Label(brow, text="Candidates:").pack(side="right", padx=(14, 0))
+        ttk.Button(brow, text="\u2922", width=3,
+                   command=lambda: big_edit(bg_var, "Background")).pack(side="right", padx=(4, 0))
+        ttk.Entry(brow, textvariable=bg_var).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        erow = ttk.Frame(frm)                                        # Generate, then the engine it talks to
+        erow.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        erow2 = ttk.Frame(frm)                                       # the engine, and the prompt it is sent
+        erow2.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        bar = erow                                                   # the same row: Generate is packed first
+        zoom_var = tk.DoubleVar(value=float(st.get("portrait_head_zoom") or (gs.get("portrait_bmp") or {}).get("zoom") or 1.0))
         size0 = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) and len(st.get("portrait_size")) == 2 \
             else [(gs.get("portrait_bmp") or {}).get("width", 169), (gs.get("portrait_bmp") or {}).get("height", 266)]
         w_var = tk.IntVar(value=int(size0[0] or 169))
@@ -3291,9 +3293,11 @@ def run_gui() -> None:
             dlg.clipboard_clear()
             dlg.clipboard_append(pr + "\nNegative prompt: " + ng)
             gstat.set("Prompt copied - paste it into your image generator.")
-        ttk.Button(bar, text="Copy prompt", command=copy_prompt).pack(side="left", padx=6)
 
-        gbar_ = ttk.Progressbar(dlg, maximum=1000)                   # shown while generating
+
+        prow = ttk.Frame(frm)                                        # the status line, and the progress beside it
+        prow.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        gbar_ = ttk.Progressbar(prow, maximum=1000)                  # shown while generating, beside the status
         busy = {"spin": False}
 
         def show_progress(frac: object, text: str) -> None:
@@ -3303,7 +3307,7 @@ def run_gui() -> None:
                 return
             gstat.set(text)
             if not gbar_.winfo_ismapped():
-                gbar_.pack(fill="x", padx=10, pady=(2, 0), before=body_)
+                gbar_.pack(side="right", fill="x", expand=True, padx=(14, 0))
             if frac is None:
                 if not busy["spin"]:
                     gbar_.config(mode="indeterminate")
@@ -3320,15 +3324,15 @@ def run_gui() -> None:
         result_box.pack(side="right", anchor="n")
         cwrap = ttk.Frame(body_)
         cwrap.pack(side="left", fill="both", expand=True)
-        crow = ttk.Frame(cwrap, padding=(10, 4, 0, 0))
-        crow.pack(anchor="w", fill="x")
-        ttk.Label(crow, text="Game portrait:").pack(side="left")
+        crow = ttk.Frame(erow)                                       # the crop controls join the row above
+        crow.pack(side="left", padx=(16, 0))
+        ttk.Label(crow, text="Portrait:").pack(side="left")
         w_box = ttk.Spinbox(crow, from_=16, to=1024, width=5, textvariable=w_var)
         w_box.pack(side="left", padx=(4, 2))
         ttk.Label(crow, text="x").pack(side="left")
         h_box = ttk.Spinbox(crow, from_=16, to=1536, width=5, textvariable=h_var)
         h_box.pack(side="left", padx=(2, 8))
-        ttk.Label(crow, text="quick sizes:", foreground="#666").pack(side="left", padx=(0, 4))
+
         tooltip(w_box, "The size of the .bmp made from a candidate. The pictures themselves are generated at the size "
                        "set under Generator settings.")
 
@@ -3337,17 +3341,34 @@ def run_gui() -> None:
             h_var.set(h_)
             st["portrait_size"] = [w_, h_]
             save_settings(st)
-        s_btn = ttk.Button(crow, text="169x266", width=8, command=lambda: set_size(169, 266))
-        s_btn.pack(side="left")
-        tooltip(s_btn, "A speaker portrait, the size the HPS portraits use.")
-        l_btn = ttk.Button(crow, text="210x330", width=8, command=lambda: set_size(210, 330))
-        l_btn.pack(side="left", padx=(2, 12))
-        tooltip(l_btn, "The game's standard large portrait size.")
+        SIZES = {"speaker 169x266": (169, 266), "large 210x330": (210, 330)}
+        size_var = tk.StringVar(value="")
+
+        def size_picked(*_a: object) -> None:
+            wh = SIZES.get(size_var.get())
+            if wh:
+                set_size(*wh)
+        size_box = ttk.Combobox(crow, textvariable=size_var, values=list(SIZES), state="readonly", width=15)
+        size_box.pack(side="left", padx=(0, 12))
+        size_box.bind("<<ComboboxSelected>>", size_picked)
+
+        def size_shown(*_a: object) -> None:                         # keep the box in step with the two numbers
+            try:
+                now = (int(w_var.get()), int(h_var.get()))
+            except (tk.TclError, ValueError):
+                return
+            size_var.set(next((k for k, v in SIZES.items() if v == now), ""))
+        for _v in (w_var, h_var):
+            _v.trace_add("write", size_shown)
+        size_shown()
+        tooltip(size_box, "The two sizes the game uses: 169x266 for the small portrait a speaker shows, 210x330 for "
+                          "the large one. Type your own in the boxes to the left for anything else.")
         ttk.Label(crow, text="Head zoom:").pack(side="left")
         z_box = ttk.Spinbox(crow, from_=1.0, to=2.5, increment=0.1, width=4, format="%.1f", textvariable=zoom_var)
         z_box.pack(side="left", padx=(4, 8))
         tooltip(z_box, "How much closer the .bmp is than the picture (1 = the whole picture, which is already the "
-                       "shape of a portrait).")
+                       "shape of a portrait).\n\nAbove 1 a yellow box is drawn on each candidate: that box is "
+                       "exactly what the game portrait keeps.")
         nudge = {"dx": float(st.get("crop_dx") or 0), "dy": float(st.get("crop_dy") or 0)}
 
         def box_for(sw: int, sh: int) -> Tuple[int, int, int, int]:
@@ -3369,15 +3390,27 @@ def run_gui() -> None:
             st["crop_dx"], st["crop_dy"] = nudge["dx"], nudge["dy"]
             save_settings(st)
             crop_preview()
-        ttk.Label(crow, text="Move:").pack(side="left", padx=(8, 2))
+
         for txt, dx, dy in (("\u25c0", -0.02, 0), ("\u25b6", 0.02, 0), ("\u25b2", 0, -0.02), ("\u25bc", 0, 0.02)):
-            ttk.Button(crow, text=txt, width=2, command=lambda a=dx, b=dy: shift(a, b)).pack(side="left", padx=1)
+            mv_ = ttk.Button(crow, text=txt, width=2, command=lambda a=dx, b=dy: shift(a, b))
+            mv_.pack(side="left", padx=1)
+            tooltip(mv_, "Move the crop box on every candidate at once. \"Middle\" puts it back.")
         mid_btn = ttk.Button(crow, text="Middle", width=7, command=lambda: shift(0, 0))
         mid_btn.pack(side="left", padx=(4, 8))
         tooltip(mid_btn, "Put the box back in the middle. The arrows move it on every candidate at once; the picture "
                          "that \"Use this\" makes is exactly what the box shows.")
-        cropnote = tk.StringVar(value="")
-        ttk.Label(crow, textvariable=cropnote, foreground="#888").pack(side="left")
+        full_var = tk.BooleanVar(value=bool(st.get("cand_full_size", False)))
+
+        def full_toggled() -> None:
+            st["cand_full_size"] = bool(full_var.get())
+            save_settings(st)
+            relist()
+        full_cb = ttk.Checkbutton(crow, text="Full size", variable=full_var, command=full_toggled)
+        full_cb.pack(side="left", padx=(0, 8))
+        tooltip(full_cb, f"Off: every candidate is shown the same size ({CAND_W}x{CAND_H}), so they can be compared "
+                         "side by side. On: each is shown at its own size, so a finished game portrait looks small "
+                         "next to the pictures it was cut from.")
+        cropnote = tk.StringVar(value="")                            # kept: the note itself is now the z_box tooltip
         cbody = ttk.Frame(cwrap)                                     # the candidates scroll: there can be many
         cbody.pack(fill="both", expand=True)
         ccv = tk.Canvas(cbody, highlightthickness=0)
@@ -3452,6 +3485,16 @@ def run_gui() -> None:
             finally:
                 dlg.config(cursor="")
             same_ = lambda q: os.path.normcase(os.path.normpath(q))  # noqa: E731
+            if path.lower().endswith(".bmp"):                        # only one game portrait at a time: the old one goes
+                for c in [c for c in cells if str(c["path"]).lower().endswith(".bmp")
+                          and same_(c["path"]) != same_(path)]:
+                    try:
+                        os.remove(c["path"])
+                    except OSError:
+                        pass
+                    c["cell"].destroy()
+                    cells.remove(c)
+                relayout()
             if path.lower().endswith(".bmp") and not any(same_(c["path"]) == same_(path) for c in cells):
                 add_candidate(path)                                  # the cropped portrait joins the candidates
             if generic:                                              # no creature to propose it for
@@ -3462,7 +3505,7 @@ def run_gui() -> None:
             props[key] = os.path.normpath(path)
             persist_props()
             if not share_btn.winfo_ismapped():
-                share_btn.pack(side="left", padx=(8, 0))
+                share_btn.pack(side="left", padx=(8, 0), before=crow)
             if view_var.get() == "gallery":
                 rebuild_keep_scroll()
             refresh_table_only()
@@ -3480,7 +3523,7 @@ def run_gui() -> None:
             props[key] = os.path.normpath(path)
             persist_props()
             if not share_btn.winfo_ismapped():
-                share_btn.pack(side="left", padx=(8, 0))
+                share_btn.pack(side="left", padx=(8, 0), before=crow)
             if view_var.get() == "gallery":
                 rebuild_keep_scroll()
             refresh_table_only()
@@ -3511,18 +3554,17 @@ def run_gui() -> None:
             v = tk.Toplevel(dlg)
             v.title(Path(path).name)
             try:
-                full = tk.PhotoImage(file=path)
-                k = max(1, -(-full.height() // max(300, v.winfo_screenheight() - 140)),
-                        -(-full.width() // max(300, v.winfo_screenwidth() - 80)))
-                shown = full.subsample(k, k) if k > 1 else full
+                shown, fw, fh, k = full_image(path, max(300, v.winfo_screenheight() - 140))
+                if shown is None:                                    # a .bmp Tk cannot read and Pillow is not here
+                    raise tk.TclError("could not read the picture")
                 lab = tk.Label(v, image=shown, cursor="hand2")
                 lab.image = shown                                    # type: ignore[attr-defined]
                 lab.pack()
                 lab.bind("<Button-1>", lambda e: v.destroy())
                 lab.bind("<Button-3>", lambda e: save_image(v, Path(path).name, None, path))
-                ttk.Label(v, text=f"{full.width()}x{full.height()}" + (f", shown at 1/{k}" if k > 1 else "")
+                ttk.Label(v, text=f"{fw}x{fh}" + (f", shown at {int(round(k * 100))}%" if k < 0.999 else "")
                           + "   -   click to close, right-click to save a copy", foreground="#666").pack(pady=2)
-            except tk.TclError as e:
+            except (tk.TclError, OSError, ValueError, struct.error) as e:
                 ttk.Label(v, text=f"Could not show {path}: {e}", padding=20).pack()
 
         def cand_cols() -> int:
@@ -3573,6 +3615,39 @@ def run_gui() -> None:
             finally:
                 menu.grab_release()
 
+        def fit_card(pi: object, path: str) -> Tuple[object, float]:
+            """One candidate shrunk (or grown) to the card box. Returns the picture and real size / shown size,
+            which is what the yellow-box maths uses to get back to the full-size picture."""
+            try:
+                from PIL import Image, ImageTk                        # exact scaling when Pillow is here
+                im = Image.open(path).convert("RGB")
+                sc = min(CAND_W / max(1, im.width), CAND_H / max(1, im.height))
+                sm = im.resize((max(1, round(im.width * sc)), max(1, round(im.height * sc))))
+                return ImageTk.PhotoImage(sm), (1.0 / sc if sc else 1.0)
+            except Exception:  # noqa: BLE001 - no Pillow, or a format it will not open
+                pass
+            w0, h0 = pi.width(), pi.height()                          # type: ignore[attr-defined]
+            want = min(CAND_W / max(1, w0), CAND_H / max(1, h0))
+            fr = Fraction(want).limit_denominator(8)                  # tkinter can only zoom/shrink by whole numbers
+            num, den = max(1, fr.numerator), max(1, fr.denominator)
+            out = pi
+            if num > 1:
+                out = out.zoom(num, num)                              # type: ignore[attr-defined]
+            if den > 1:
+                out = out.subsample(den, den)                         # type: ignore[attr-defined]
+            shown = max(1, out.height())                              # type: ignore[attr-defined]
+            return out, h0 / shown
+
+        def relist() -> None:
+            """Draw the candidate strip again, at whatever size the Full size box now says."""
+            paths = [str(c["path"]) for c in cells]
+            for c in list(cells):
+                c["cell"].destroy()
+            cells.clear()
+            state["cand_cols"] = None
+            for q in paths:
+                add_candidate(q)
+
         def add_candidate(path: str) -> None:
             if not dlg.winfo_exists():
                 return
@@ -3589,8 +3664,11 @@ def run_gui() -> None:
                     pi = tk.PhotoImage(data=ppm)
                 else:
                     pi = tk.PhotoImage(file=path)
-                k = max(1, -(-pi.height() // 300))
-                pi = pi.subsample(k, k) if k > 1 else pi
+                if full_var.get():                               # each at its own size
+                    k = max(1, -(-pi.height() // 300))
+                    pi = pi.subsample(k, k) if k > 1 else pi
+                else:                                                # all the same, so they compare side by side
+                    pi, k = fit_card(pi, path)
                 cvs = tk.Canvas(cell, width=pi.width(), height=pi.height(), highlightthickness=0, cursor="hand2")
                 cvs.create_image(0, 0, image=pi, anchor="nw")
                 if not done_bmp:                                     # what "Use this" would keep at the settings above
@@ -3599,11 +3677,11 @@ def run_gui() -> None:
                 cvs.pack()
                 cvs.bind("<Button-1>", lambda e: view_full(path))     # click: full size
                 cvs.bind("<Button-3>", lambda e: cand_menu(e, path))  # right click: save a copy
-                ttk.Label(cell, text=(f"game portrait {pi.width() * k}x{pi.height() * k}" if done_bmp
-                                      else f"{pi.width() * k}x{pi.height() * k}"),
+                rw, rh = int(round(pi.width() * k)), int(round(pi.height() * k))
+                ttk.Label(cell, text=(f"game portrait {rw}x{rh}" if done_bmp else f"{rw}x{rh}"),
                           foreground="#1a7f37" if done_bmp else "#888",
                           font=("TkDefaultFont", 9, "bold") if done_bmp else "TkDefaultFont").pack()
-                info.update(image=pi, canvas=cvs, sw=pi.width() * k, sh=pi.height() * k,
+                info.update(image=pi, canvas=cvs, sw=rw, sh=rh,
                             tw=pi.width(), th=pi.height())
             except tk.TclError:
                 ttk.Label(cell, text=Path(path).name, wraplength=160).pack()
@@ -3675,7 +3753,7 @@ def run_gui() -> None:
                 gstat.set("Nothing to discard.")
                 return
             discard(every, f"Delete all {len(every)} generated picture(s) for {r['name']}? This cannot be undone.")
-        ttk.Button(bar, text="Discard all", command=discard_all).pack(side="left")
+        ttk.Button(crow, text="Discard all", command=discard_all).pack(side="left", padx=(10, 0))
 
         def done(err: str) -> None:
             status.set(f"Portrait for {r['name']}: " + (err if err else "candidates ready"))
@@ -3708,7 +3786,8 @@ def run_gui() -> None:
                     def on_image(i: int, data: bytes) -> None:
                         pth = pg.save_candidates([data], folder, f"{stem}_c{i + 1}")[0]   # type: ignore[attr-defined]
                         root.after(0, add_candidate, pth)
-                    eng.generate(pr, ng, n, on_image)                 # type: ignore[attr-defined]
+                    sd = None if generic else pg.creature_seed(pg.face_key(r))   # type: ignore[attr-defined]
+                    eng.generate(pr, ng, n, on_image, sd)             # type: ignore[attr-defined]
                     root.after(0, done, "")
                 except Exception as e:  # noqa: BLE001 - GeneratorError texts are meant for the user
                     root.after(0, done, str(e) or e.__class__.__name__)
@@ -3720,19 +3799,17 @@ def run_gui() -> None:
             share_btn.pack(side="left", padx=(8, 0))
 
         # the image engine: start / stop by hand, and whether it outlives Portrait Scout
-        erow = ttk.Frame(frm)
-        erow.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
         eurl = str((gs.get("engine") or {}).get("url", ""))
-        elab = ttk.Label(erow, text="Image engine:")
+        elab = ttk.Label(erow2, text="Image engine:")
         elab.pack(side="left")
         tooltip(elab, f"Portrait Scout talks to a generator at {eurl} (Automatic1111 / Forge API). Nothing is bundled: "
                       "it starts your own copy in the 'engine' folder, or you can point generator/settings.json at a "
                       "generator you already run.")
         eng_var = tk.StringVar(value="checking...")
-        ttk.Label(erow, textvariable=eng_var, width=12, foreground="#666").pack(side="left", padx=(4, 6))
-        start_btn = ttk.Button(erow, text="Start")
+        ttk.Label(erow2, textvariable=eng_var, width=12, foreground="#666").pack(side="left", padx=(4, 6))
+        start_btn = ttk.Button(erow2, text="Start")
         start_btn.pack(side="left")
-        stop_btn = ttk.Button(erow, text="Stop")
+        stop_btn = ttk.Button(erow2, text="Stop")
         stop_btn.pack(side="left", padx=6)
         keep_var = tk.BooleanVar(value=bool(st.get("engine_keep")))
 
@@ -3752,18 +3829,38 @@ def run_gui() -> None:
             st["engine_keep"] = bool(keep_var.get())
             save_settings(st)
             get_engine()
-        keep_cb = ttk.Checkbutton(erow, text="Keep open", variable=keep_var, command=keep_changed)
-        keep_cb.pack(side="left", padx=(6, 0))
-        web_btn = ttk.Button(erow, text="Forge...", width=9, command=lambda: webbrowser.open(eurl))
-        web_btn.pack(side="left", padx=(10, 0))
-        tooltip(web_btn, "Open the generator's own page in a browser, to try things there directly. It has to be "
-                         "running (press Start first).")
-        ttk.Button(erow, text="Settings...", width=10,
-                   command=lambda: open_path(str(Path(__file__).resolve().parent / "generator" / "settings.json"))
-                   ).pack(side="left", padx=(10, 0))
-        tooltip(keep_cb, "Keep the image generator running after Portrait Scout closes, so the next session does not "
-                         "wait for the model to load again.\n\nIt holds graphics memory until you press Stop (here or "
-                         "next time you open Portrait Scout).")
+        here_ = Path(__file__).resolve().parent
+        show_var = tk.BooleanVar(value=bool((gs.get("engine") or {}).get("show_window")))
+
+        def show_changed() -> None:
+            try:
+                pg.save_patch(gs, {"engine": {"show_window": bool(show_var.get())}})   # type: ignore[attr-defined]
+            except Exception as e:  # noqa: BLE001
+                messagebox.showwarning("Portrait Scout", str(e), parent=dlg)
+                return
+            gstat.set("The generator gets its own window the next time it starts." if show_var.get() else
+                      "The generator runs out of sight; what it prints goes to generator/engine.log.")
+        def open_log() -> None:
+            f = here_ / "generator" / "engine.log"
+            if f.is_file():
+                open_path(str(f))
+            else:
+                messagebox.showinfo("Portrait Scout", "There is no engine.log yet. It is written while the generator "
+                                    "runs without a window of its own.", parent=dlg)
+        emenu = tk.Menu(erow2, tearoff=0)                             # the settings that are set once and left alone
+        emenu.add_checkbutton(label="Keep open after Portrait Scout closes", variable=keep_var, command=keep_changed)
+        emenu.add_checkbutton(label="Give the generator its own window", variable=show_var, command=show_changed)
+        emenu.add_separator()
+        emenu.add_command(label="Show the log...", command=open_log)
+        emenu.add_command(label="Open the generator's own page...", command=lambda: webbrowser.open(eurl))
+        emenu.add_command(label="Edit settings.json...",
+                          command=lambda: open_path(str(here_ / "generator" / "settings.json")))
+        ebtn = ttk.Menubutton(erow2, text="Engine \u25be", menu=emenu, width=9)
+        ebtn.pack(side="left", padx=(6, 0))
+        tooltip(ebtn, "Keep open: leave the generator running when Portrait Scout closes, so the next session does "
+                      "not wait for the model to load again - it holds graphics memory until you press Stop.\n\n"
+                      "Own window: watch what the generator is doing; takes effect the next time it starts. With it "
+                      "off the same text goes to generator/engine.log, which 'Show the log' opens.")
 
         def engine_state() -> None:
             eng = get_engine()
@@ -3800,8 +3897,6 @@ def run_gui() -> None:
                     root.after(0, fin, str(e) or e.__class__.__name__)
             threading.Thread(target=work, daemon=True).start()
         # the prompt itself: edit it, keep it, or put the style back the way it came
-        prow = ttk.Frame(frm)
-        prow.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         pbody = ttk.Frame(frm)
         pbody.grid(row=7, column=0, columnspan=3, sticky="ew")
         frm.rowconfigure(7, weight=1)
@@ -3905,11 +4000,15 @@ def run_gui() -> None:
                 pbody.grid()
             else:
                 pbody.grid_remove()
-        pbtn_ = ttk.Button(prow, textvariable=pshow, command=toggle_prompt)
-        pbtn_.pack(side="left")
+        pbtn_ = ttk.Button(erow2, textvariable=pshow, command=toggle_prompt, width=9)
+        pbtn_.pack(side="left", padx=(16, 0))
         tooltip(pbtn_, "The words sent to the generator, for the style chosen above.")
+        cp_btn = ttk.Button(erow2, text="Copy prompt", command=copy_prompt)
+        cp_btn.pack(side="left", padx=(4, 0))
+        tooltip(cp_btn, "Put the prompt and the negative prompt on the clipboard, to paste into a generator's own "
+                        "page and try things there.")
         ttk.Label(prow, textvariable=gstat, foreground="#1a5fb4", wraplength=640, justify="left"
-                  ).pack(side="left", padx=(14, 0))
+                  ).pack(side="left")
         style_box.bind("<<ComboboxSelected>>", load_prompt)
         load_prompt()
         show_prompt()
@@ -3949,11 +4048,37 @@ def run_gui() -> None:
               "your generator lists it.")
         srow2 = ttk.Frame(sbody)
         srow2.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        def quick_steps(n: int) -> None:
+            """A step count that takes effect at once, without pressing Save."""
+            sv["steps"].set(str(n))
+            try:
+                pg.save_patch(gs, {"payload": {"steps": n}})          # type: ignore[attr-defined]
+            except Exception as e:  # noqa: BLE001
+                messagebox.showwarning("Portrait Scout", str(e), parent=dlg)
+                return
+            gstat.set(f"{n} steps from now on. More steps means more detail and a slower picture.")
         for lbl, fkey, w in (("Picture size:", "width", 6), ("x", "height", 6), ("   Steps:", "steps", 4),
                              ("   Sampler:", "sampler", 14), ("   Scheduler:", "scheduler", 14),
                              ("   CFG:", "cfg", 4), ("   Distilled CFG:", "dcfg", 4)):
             ttk.Label(srow2, text=lbl).pack(side="left")
             ttk.Entry(srow2, textvariable=sv[fkey], width=w).pack(side="left", padx=(4, 0))
+            if fkey == "steps":                                      # the two worth switching between
+                STEPS = {"25 (quicker)": 25, "35 (more detail)": 35}
+                step_var = tk.StringVar(value=next((k for k, v in STEPS.items()
+                                                    if str(v) == str(sv["steps"].get())), ""))
+
+                def step_picked(*_a: object) -> None:
+                    n_ = STEPS.get(step_var.get())
+                    if n_:
+                        quick_steps(n_)
+                step_box = ttk.Combobox(srow2, textvariable=step_var, values=list(STEPS),
+                                        state="readonly", width=16)
+                step_box.pack(side="left", padx=(4, 0))
+                step_box.bind("<<ComboboxSelected>>", step_picked)
+                sv["steps"].trace_add("write", lambda *_a: step_var.set(
+                    next((k for k, v in STEPS.items() if str(v) == str(sv["steps"].get())), "")))
+                tooltip(step_box, "25 is the usual setting and quicker. 35 puts more detail into skin and hair and "
+                                  "takes about half again as long. Type any other number in the box to the left.")
         sbtn = ttk.Frame(sbody)
         sbtn.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
@@ -4001,8 +4126,8 @@ def run_gui() -> None:
                 sbody.grid()
             else:
                 sbody.grid_remove()
-        sbtn_ = ttk.Button(prow, textvariable=sshow, command=toggle_settings)
-        sbtn_.pack(side="left", padx=(6, 0))
+        sbtn_ = ttk.Button(erow2, textvariable=sshow, command=toggle_settings, width=21)
+        sbtn_.pack(side="left", padx=(4, 0))
         tooltip(sbtn_, "Where the generator is, how to start it, which model, and the size the pictures are generated "
                        "at. Nothing here comes with Portrait Scout.")
         show_settings()
@@ -4083,10 +4208,12 @@ def run_gui() -> None:
         return st.setdefault("crops", {}).setdefault(str(res["mod"]), {}) if res else {}   # type: ignore[index]
 
     def crop_for(r: dict) -> Optional[dict]:
-        """The frame someone set by hand for this creature's picture, if it is still the same picture."""
+        """The frame someone set by hand, if it still belongs to the picture proposed now. 'src' is the picture it
+        was cut from (a photo, a .jpg...), 'out' the game portrait that was cut out of it."""
         c = crop_store().get(rowkey(r))
         pp = props.get(rowkey(r))
-        if isinstance(c, dict) and pp and os.path.normcase(c.get("src", "")) == os.path.normcase(pp):
+        if isinstance(c, dict) and pp and os.path.normcase(pp) in (os.path.normcase(c.get("src", "")),
+                                                                   os.path.normcase(c.get("out", ""))):
             return c
         return None
 
@@ -4113,7 +4240,10 @@ def run_gui() -> None:
     def frame_dialog(r: dict, parent: object = None, after: object = None) -> None:
         """Choose which part of the proposed picture becomes the portrait. Drag the box, or resize it."""
         par = parent or root
-        path = props.get(rowkey(r))
+        was = crop_for(r)
+        path = (was or {}).get("src") or props.get(rowkey(r))        # frame the original, not a portrait cut from it
+        if not path or not os.path.isfile(path):
+            path = props.get(rowkey(r))
         if not path or not os.path.isfile(path):
             messagebox.showinfo("Portrait Scout", "Propose a picture for this creature first.", parent=par)
             return
@@ -4141,7 +4271,7 @@ def run_gui() -> None:
         cv.create_image(0, 0, image=img, anchor="nw")
         cv.image = img                                               # type: ignore[attr-defined]
         shown_w, shown_h = img.width(), img.height()                 # type: ignore[attr-defined]
-        start = crop_for(r)
+        start = was
         if start:
             box = [start["box"][0] * k, start["box"][1] * k, start["box"][2] * k, start["box"][3] * k]
         else:
@@ -4193,10 +4323,29 @@ def run_gui() -> None:
             draw()
 
         def keep() -> None:
-            crop_store()[rowkey(r)] = {"src": path, "box": [int(box[0] / k), int(box[1] / k),
-                                                            int(box[2] / k), int(box[3] / k)], "size": [pw, ph]}
+            px = [int(box[0] / k), int(box[1] / k), int(box[2] / k), int(box[3] / k)]
+            res_ = state["res"]
+            out = Path(__file__).resolve().parent / "generated" / re.sub(r"[^A-Za-z0-9_.#!-]+", "_",
+                                                                        str(res_["mod"]) if res_ else "proposed")
+            try:                                                     # cut it out now, so the card shows the portrait
+                out.mkdir(parents=True, exist_ok=True)
+                stem_ = re.sub(r"[^A-Za-z0-9_.#!-]+", "_", f"{r['name']}_{Path(path).stem}")[:60].strip("_") or "portrait"
+                bmp = str(out / f"{stem_}_{pw}x{ph}.bmp")
+                to_portrait_bmp(path, bmp, pw, ph, None, tuple(px))   # type: ignore[arg-type]
+            except Exception as e:  # noqa: BLE001
+                messagebox.showwarning("Portrait Scout", f"The picture could not be cut out ({e}).\n\nThe framing is "
+                                       "kept, and the mod will use it when it is made.", parent=w)
+                bmp = ""
+            crop_store()[rowkey(r)] = {"src": path, "box": px, "size": [pw, ph], "out": bmp}
+            if bmp:
+                props[rowkey(r)] = os.path.normpath(bmp)
+                persist_props()
+                state.setdefault("thumbs", {}).pop(bmp, None)        # type: ignore[union-attr]
+                if view_var.get() == "gallery":
+                    rebuild_keep_scroll()
+                refresh_table_only()
             save_settings(st)
-            status.set(f"Framed the portrait for {r['name']}.")
+            status.set(f"{r['name']}: framed, and cut to {pw}x{ph}.")
             if callable(after):
                 after()                                              # type: ignore[operator]
             w.destroy()

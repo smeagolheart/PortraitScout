@@ -22,6 +22,8 @@ import atexit
 import base64
 import json
 import os
+import hashlib
+import random
 import re
 import subprocess
 import sys
@@ -55,11 +57,31 @@ DEFAULTS: dict = {
                        "(abs:1.5), (belt:1.5), (chest armor:1.6), (waist up:1.5), (medium shot:1.5), (bust shot:1.4), "
                        "bare chest, bare shoulders, nude, wide shot, zoomed out, distant shot, far away, anime, "
                        "modern clothes, shiny, eyeglasses, signature",
-    "background": "a softly blurred, out-of-focus painterly wash of muted violet, slate gray and warm golden bokeh "
-                  "highlights",
-    "_background": "What is behind the head. The prompts below put it in at {background}, so it can be changed in one "
-                   "place; a style can also carry a 'background' of its own.",
-    "style": "BG2 framing, light LoRA",
+    "background": "a softly blurred, out-of-focus painterly wash of {random} with soft bokeh highlights",
+    "_background": "What is behind the head. The prompts put it in at {background}, so one change covers every "
+                   "look; a style can also carry a 'background' of its own. {random} here is replaced by one of "
+                   "background_palettes, picked fresh for each picture.",
+    "background_palettes": [
+        "muted warm brown and clay",
+        "aged canvas and parchment, cream and tan",
+        "dull ochre and soft grey-brown",
+        "faded red-brown and deep umber",
+        "smoky gold and warm brown",
+        "dusty olive and warm grey",
+        "deep green-grey and dull ochre",
+        "muted teal and warm shadow",
+        "desaturated slate blue and pale stone",
+        "muted indigo and bone white",
+        "dull brick red and dark umber",
+        "deep moss green and weak amber",
+    ],
+    "_background_palettes": "Colour schemes for the background, used wherever the background text says {random}. "
+                            "One is picked at random per picture so a few thousand portraits do not all sit "
+                            "against the same wash. All of them are deliberately muted and weighted towards earth "
+                            "colours, the way the game's own portraits are - a bright background pulls the eye "
+                            "off the face. Add or remove freely; take {random} out of the background text to go "
+                            "back to one fixed scheme.",
+    "style": "BG2 oil painting",
     "styles": {
         "_about": "Named looks to choose from in the Generate window. Each has its own 'prompt' (and optionally "
                   "'negative_prompt'); 'Current look' is the prompt above. Add your own here.",
@@ -70,7 +92,7 @@ DEFAULTS: dict = {
                       "or no cropping afterwards (zoom 1). If faces still come out small, raise the LoRA weight "
                       "(:.65 -> :1) or crop with Head zoom. Its trigger word 'b2g8' is left out on purpose: it pulls hard "
                       "towards the faces it was trained on and drops things like a tiefling's horns.",
-            "zoom": 1.25,
+            "zoom": 1.0,
             "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
                       "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
                       "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
@@ -81,10 +103,41 @@ DEFAULTS: dict = {
                       "from one side with soft shadows. <lora:Baldurs_Gate_Portrait_Flux:.65> Behind the head, "
                       "{background}."
         },
+        "BG2 oil painting": {
+            "_about": "The best Flux result worked out against the HPS portraits. Short on purpose: Flux weights "
+                      "the opening of a prompt hardest, so the character and the clothing come first and the "
+                      "painting instructions after. The lighting sentence that older styles carried ('warm light "
+                      "from one side') is left out - it was what put the sheen back on the forehead. Wants "
+                      "distilled_cfg_scale about 1.6; above 2 the skin goes glossy. Needs "
+                      "chargen_oil_painting_v2.safetensors in models/Lora.",
+            "zoom": 1.0,
+            "prompt": "in the style of chargen_oil_painting, extreme close-up face portrait of {character}. "
+                      "Painted in thick matte oils: broken colour, visible brush edges, dry-brush texture, no "
+                      "blending, no smooth skin, no sheen. The head fills most of the frame, cropped at the chest, "
+                      "chin level, eyes on the viewer, shoulders and collar fully clothed. "
+                      "<lora:chargen_oil_painting_v2:.85> Behind the head, {background}, kept off the face.",
+        },
+        "BG2 oil painting, long": {
+            "_about": "The longer wording this style had before: the same idea said at three times the length. "
+                      "Kept in case the short one is too terse for a character who needs a lot said about them; "
+                      "it frames looser and puts more shine on the skin.",
+            "zoom": 1.0,
+            "prompt": "in the style of chargen_oil_painting, extreme close-up face portrait of {character}, "
+                      "cropped at the collarbone. The head alone fills the picture: the hair nearly touches the "
+                      "top edge, the face reaches from edge to edge, the chin sits in the middle, and only a "
+                      "sliver of collar and shoulder shows along the bottom. Nothing below the collarbone, no "
+                      "chest, no hands, no weapons. Head upright, eyes on the viewer. A classic Baldur's Gate "
+                      "character portrait painted in oils: the face painted with the same loose brushwork as the "
+                      "clothing - broken colour, visible brush edges on the cheek and brow, no smooth blending - "
+                      "the skin mottled and uneven, flecks, blotches and stubble worked into the paint rather "
+                      "than blended away. Matte paint, no glossy highlights on the skin, the shine on metal only. "
+                      "Thick paint, canvas texture, deep rich colors. <lora:chargen_oil_painting_v2:.85> Behind "
+                      "the head, {background}.",
+        },
         "BG2 framing, light LoRA": {
             "_about": "The same framing on the small BG2 LoRA (BG_Portrait, 38 MB) that the setup notes point to. "
                       "It nudges the style instead of taking it over, so the description is followed more closely.",
-            "zoom": 1.25,
+            "zoom": 1.0,
             "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
                       "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
                       "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
@@ -96,7 +149,7 @@ DEFAULTS: dict = {
         },
         "Painterly": {
             "_about": "Closer than the HPS portraits: crop it with Head zoom 1.25 or so.",
-            "zoom": 1.25,
+            "zoom": 1.0,
             "prompt": "Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
                       "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
                       "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
@@ -105,7 +158,7 @@ DEFAULTS: dict = {
                       "<lora:Baldurs_Gate_Portrait_Flux:.55> Set against {background}."
         },
         "Painterly, lighter LoRA": {
-            "zoom": 1.25,
+            "zoom": 1.0,
             "prompt": "Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
                       "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
                       "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
@@ -117,8 +170,8 @@ DEFAULTS: dict = {
     "candidates": 2,
     "payload": {
         "_about": "Sent to the engine as is (Forge / Automatic1111 txt2img fields).",
-        "steps": 25, "sampler_name": "DPM++ 2M", "scheduler": "SGM Uniform", "cfg_scale": 1, "distilled_cfg_scale": 2,
-        "width": 652, "height": 1024, "seed": -1, "batch_size": 1,
+        "steps": 25, "sampler_name": "DPM++ 2M", "scheduler": "SGM Uniform", "cfg_scale": 1, "distilled_cfg_scale": 1.6,
+        "width": 656, "height": 1024, "seed": -1, "batch_size": 1,
         "override_settings": {"sd_model_checkpoint": "flux1-dev-bnb-nf4-v2.safetensors"},
     },
     "engine": {
@@ -129,6 +182,9 @@ DEFAULTS: dict = {
                   "address in url; 'start' is then never used.",
         "url": "http://127.0.0.1:7861",
         "autostart": True,
+        "show_window": False,
+        "_show_window": "true: the generator gets a window of its own, so you can watch what it prints (and nothing "
+                        "is written to engine.log, because it goes to that window instead).",
         "start": "generator\\start_engine.bat {port}",
         "start_timeout_seconds": 600,
         "image_timeout_seconds": 900,
@@ -138,7 +194,7 @@ DEFAULTS: dict = {
         "_about": "Size of the .bmp made when you press 'Use this' (the picture is cropped to this shape from the "
                   "middle, then shrunk). 169x266 is the size the HPS portrait project uses for speakers.",
         "width": 169, "height": 266,
-        "zoom": 1.25, "top": 0.0,
+        "zoom": 1.0, "top": 0.0,
         "_zoom": "zoom = how much closer the .bmp is than the generated picture (1 = whole picture, 1.25 = a quarter closer, "
                  "which matches the framing of the HPS portraits). top = where the crop starts, as a fraction of the picture's height "
                  "(0 = very top). The crop is centered left to right.",
@@ -150,18 +206,79 @@ DEFAULTS: dict = {
     },
     "look_terms": {
         "_about": "Offered as 'Look' in the Generate window; the text is added to the end of the description. "
-                  "Flux paints clean skin unless it is told otherwise, so these are worth using.",
+                  "Flux paints clean skin unless it is told otherwise, so these are worth using - and the "
+                  "blemishes have to be named one by one, because 'weathered' on its own is not enough.",
         "Ordinary": "",
-        "Weathered": "weathered sun-worn skin with deep lines, stubble, visible pores",
-        "Scarred": "an old scar across the face, rough skin",
+        "Weathered": "a deeply lined weather-beaten face, furrowed brow and heavy crow's feet, sun-darkened "
+                     "uneven skin with visible pores and broken veins across the nose and cheeks, grey-flecked "
+                     "stubble, shadowed eye sockets, dry chapped lips",
+        "Blotchy and freckled": "blotchy ruddy skin heavily freckled across the nose and cheeks, patches of red "
+                                "and sallow colour, flaking dry skin, pitted pores, uneven stubble, yellowed "
+                                "crooked teeth",
+        "Gaunt and old": "a gaunt deeply wrinkled old face, hollow cheeks and sunken temples, sagging skin, liver "
+                         "spots and broken veins, heavy eye bags, thin grey hair and straggly beard, sallow "
+                         "weathered colour",
+        "Scarred": "an old scar across the face, rough pitted skin",
         "Stern": "a stern, hard expression",
         "Friendly": "a warm, friendly expression, smiling eyes",
         "Sad": "a tired, downcast expression",
         "Fierce": "a fierce, angry expression, bared teeth",
         "Angry": "an angry, scowling expression, furrowed brow",
-        "Sickly": "pale, gaunt and unwell, dark rings under the eyes",
+        "Sickly": "pale, gaunt and unwell, grey blotchy skin, dark rings under the eyes",
         "Noble": "clean, well-kept, proud bearing",
     },
+    "feature_terms": {
+        "_about": "Drawn from the creature's own file name, so the same creature always gets the same face and "
+                  "two creatures with the same name and class do not. One is taken from each list below and added "
+                  "to the description; 'mark' is used only some of the time (feature_mark_chance). Edit the lists "
+                  "freely - anything you write in the Description box yourself is used as it is and overrides "
+                  "none of this.",
+        "face": [
+            "a broad square face",
+            "a long narrow face",
+            "a round face",
+            "a heavy-jawed face",
+            "a fine-boned face",
+            "a flat wide face",
+            "a gaunt hollow-cheeked face",
+            "a soft jowly face",
+        ],
+        "nose": [
+            "a hooked nose",
+            "a broken flattened nose",
+            "a snub nose",
+            "a long straight nose",
+            "a bulbous nose",
+            "a thin pinched nose",
+            "a crooked nose",
+        ],
+        "hair": [
+            "close-cropped hair",
+            "a receding hairline",
+            "lank shoulder-length hair",
+            "thick curly hair",
+            "a bald head",
+            "hair tied back",
+            "a tangled unwashed mane",
+            "a neat side parting",
+        ],
+        "mark": [
+            "a mole high on one cheek",
+            "a missing front tooth",
+            "a cauliflower ear",
+            "a split eyebrow",
+            "a crooked jaw",
+            "a drooping eyelid",
+            "a notched ear",
+            "a burn scar along the jaw",
+            "one eye paler than the other",
+            "a deep dent in the brow",
+        ],
+    },
+    "feature_mark_chance": 0.35,
+    "_feature_mark_chance": "How often a creature gets a distinguishing mark from feature_terms['mark'] (0 = "
+                            "never, 1 = always). Kept low on purpose: a crowd where everyone has a scar looks as "
+                            "uniform as a crowd where nobody does.",
     "race_terms": {
         "_about": "How a race from the game is worded in the prompt. Races not listed are used as they are.",
         "human": "human", "elf": "elf with subtly pointed ears", "half elf": "half-elf with slightly pointed ears",
@@ -170,16 +287,30 @@ DEFAULTS: dict = {
         "drow": "drow elf, dark grey skin, white hair, pointed ears",
     },
     "animation_terms": {
-        "_about": "Words in the creature's animation name -> what the speaker wears / looks like. Portraits are head "
-                  "and shoulders, so this is clothing, not held equipment.",
-        "fighter": "fighter, worn armor at the shoulders", "paladin": "paladin, polished plate armor at the shoulders",
-        "ranger": "ranger, leather and green cloak", "cleric": "cleric, priestly vestments",
-        "druid": "druid, rough natural robes", "mage": "mage, robes with a high collar",
-        "sorcerer": "sorcerer, ornate robes", "thief": "rogue, dark leather, hooded cloak", "bard": "bard, colorful clothes",
-        "monk": "monk, simple robes", "barbarian": "barbarian, furs", "shaman": "shaman, feathers and bone charms",
-        "peasant": "commoner, simple worn clothes", "noble": "noble, fine rich clothes", "beggar": "beggar, ragged clothes",
-        "slave": "ragged clothes", "fat": "heavyset, round face", "guard": "town guard, helmet and mail",
-        "merchant": "merchant, good practical clothes", "boy": "boy, simple clothes", "girl": "girl, simple clothes",
+        "_about": "Words in the creature's animation name -> what the speaker wears. Portraits are head and "
+                  "shoulders, so this is clothing, not held equipment, and each phrase is kept to a couple of "
+                  "words: the more the prompt says about armor and gear, the further back the picture is framed.",
+        "fighter": "fighter, worn armor",
+        "paladin": "paladin, plate armor",
+        "ranger": "ranger, green cloak",
+        "cleric": "cleric, vestments",
+        "druid": "druid, rough robes",
+        "mage": "mage, high-collared robe",
+        "sorcerer": "sorcerer, ornate robe",
+        "thief": "rogue, hooded cloak",
+        "bard": "bard, colorful clothes",
+        "monk": "monk, plain robe",
+        "barbarian": "barbarian, furs",
+        "shaman": "shaman, bone charms",
+        "peasant": "commoner, worn clothes",
+        "noble": "noble, rich clothes",
+        "beggar": "beggar, rags",
+        "slave": "rags",
+        "fat": "heavyset, round face",
+        "guard": "town guard, mail",
+        "merchant": "merchant, good clothes",
+        "boy": "boy, simple clothes",
+        "girl": "girl, simple clothes",
     },
 }
 
@@ -219,6 +350,47 @@ def term_names(settings: dict, which: str) -> List[str]:
     return [k for k in (settings.get(which) or {}) if not k.startswith("_")]
 
 
+def face_key(row: dict) -> str:
+    """What a creature's face is drawn from. The portrait file comes first, so creatures that share a portrait
+    (Ulua and Arbolon and the eighteen others on FARM) share a face; otherwise the creature's own CRE name."""
+    for k in ("large_name", "small_name"):
+        v = str(row.get(k) or "").strip()
+        if v:
+            return "p:" + v.upper()
+    cres = row.get("cre_list") or row.get("cres") or []
+    if cres:
+        return "c:" + str(cres[0]).upper()
+    return ("n:" + str(row.get("name") or "").strip().upper()) if row.get("name") else ""
+
+
+def creature_seed(key: str) -> int:
+    """A seed that is the same every time for the same creature (python's hash() is salted per run, so not that)."""
+    if not key:
+        return -1
+    return int(hashlib.md5(key.encode("utf-8", "replace")).hexdigest()[:8], 16)
+
+
+def features(key: str, settings: dict) -> str:
+    """One face, nose and hair for this creature, and sometimes a distinguishing mark - always the same ones."""
+    if not key:
+        return ""
+    terms = settings.get("feature_terms") or {}
+    rng = random.Random(creature_seed(key))
+    out = []
+    for slot in ("face", "nose", "hair"):
+        pool = [t for t in (terms.get(slot) or []) if str(t).strip()]
+        if pool:
+            out.append(rng.choice(pool))
+    marks = [t for t in (terms.get("mark") or []) if str(t).strip()]
+    try:
+        chance = float(settings.get("feature_mark_chance", 0.35))
+    except (TypeError, ValueError):
+        chance = 0.35
+    if marks and rng.random() < chance:
+        out.append(rng.choice(marks))
+    return ", ".join(out)
+
+
 def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[str, str]:
     """(subject, character) from a Portrait Scout row: gender, race and the animation name (which says what the
     speaker wears: 'Cleric Female Elf', 'Peasant Woman', 'Fat Man'). Nothing here is certain - it is a starting
@@ -248,6 +420,9 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
     for word, phrase in settings.get("animation_terms", {}).items():
         if not word.startswith("_") and word in aw and phrase not in parts:
             parts.append(phrase)
+    feat = features(face_key(row), settings)                         # the creature's own face, same every time
+    if feat:
+        parts.append(feat)
     look_txt = (settings.get("look_terms") or {}).get(look, "") if look else ""
     if look_txt:
         parts.append(look_txt)
@@ -336,6 +511,14 @@ def save_patch(settings: dict, patch: dict) -> None:
     settings.update(_merge(settings, patch))
 
 
+def pick_palette(settings: dict, text: str) -> str:
+    """{random} in the background text -> one of settings['background_palettes'], chosen fresh each time."""
+    if "{random}" not in text:
+        return text
+    choices = [p for p in (settings.get("background_palettes") or []) if str(p).strip()]
+    return text.replace("{random}", random.choice(choices) if choices else "muted colour")
+
+
 def fill_prompt(template: str, subject: str, character: str, extra: str = "", background: str = "") -> str:
     """A prompt template with the creature's description (and the background) put in. An empty background takes the
     whole sentence about it out, rather than leaving 'Behind the head, .' in the prompt."""
@@ -357,7 +540,8 @@ def style_background(settings: dict, style: str = "") -> str:
 
 def build_prompt(settings: dict, subject: str, character: str, extra: str = "", style: str = "") -> Tuple[str, str]:
     tmpl, negative = style_text(settings, style)
-    return fill_prompt(tmpl, subject, character, extra, style_background(settings, style)), negative
+    bg = pick_palette(settings, style_background(settings, style))
+    return fill_prompt(tmpl, subject, character, extra, bg), negative
 
 
 # ------------------------------------------------------------------------------------------- engine
@@ -410,12 +594,15 @@ class Engine:
                                  "'engine' folder (generator/README.md says how, and which two model files to add), or "
                                  "point engine.url in generator/settings.json at a generator you already run.")
         self.log("Starting the image engine (the first start loads the model and can take several minutes)...")
+        show = bool(self.e.get("show_window"))                       # a window of its own, to watch it work
         flags = 0
         if os.name == "nt":
-            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        logf = open(root / "generator" / "engine.log", "w", encoding="utf-8", errors="replace")
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | (0 if show else
+                                                                          getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        logf = None if show else open(root / "generator" / "engine.log", "w", encoding="utf-8", errors="replace")
         try:
-            self.proc = subprocess.Popen(cmd, cwd=str(root), shell=True, stdout=logf, stderr=subprocess.STDOUT,
+            self.proc = subprocess.Popen(cmd, cwd=str(root), shell=True, stdout=logf,
+                                         stderr=subprocess.STDOUT if logf else None,
                                          stdin=subprocess.DEVNULL, creationflags=flags,
                                          start_new_session=(os.name != "nt"))
         except OSError as e:
@@ -468,14 +655,18 @@ class Engine:
             pass
 
     def generate(self, prompt: str, negative: str, count: int,
-                 on_image: Callable[[int, bytes], None] = lambda i, b: None) -> List[bytes]:
+                 on_image: Callable[[int, bytes], None] = lambda i, b: None,
+                 seed: Optional[int] = None) -> List[bytes]:
         """`count` candidate images (PNG bytes), one request each so they can be shown as they arrive."""
         self.start()
         payload = {k: v for k, v in self.s.get("payload", {}).items() if not k.startswith("_")}
         payload.update(prompt=prompt, negative_prompt=negative, n_iter=1)
+        base = int(seed) if seed is not None else -1                 # the creature's own seed, so a re-run matches
         out: List[bytes] = []
         count = max(1, int(count))
         for i in range(count):
+            if base >= 0:
+                payload["seed"] = (base + i) % 2147483647
             self.log(f"Generating candidate {i + 1} of {count}...")
             self.progress(i / count, f"Candidate {i + 1} of {count}: starting...")
             stop = threading.Event()
