@@ -751,6 +751,42 @@ def parse_d(text: str) -> Tuple[List[Tuple[str, str, str, str]], List[Tuple[str,
 _TRA_RE = re.compile(r"@(-?\d+)\s*=\s*(~~~~~.*?~~~~~|~[^~]*~|\"[^\"]*\")(?:\s*\[([^\]\n]*)\])?", re.S)
 _TP2_STR = r"(?:~[^~]*~|\"[^\"]*\")"
 _COPY_RE = re.compile(r"\bCOPY(?:_EXISTING|_LARGE)?\b[ \t+\-]*((?:\s*" + _TP2_STR + r"){2,})", re.I)
+_RES_VAR = re.compile(r"%(DEST|SOURCE)_(?:RES|BASE)%", re.I)   # WeiDU: the copied file's own name
+_DEFPM_RE = re.compile(r"\bDEFINE_PATCH_MACRO\s+[~\"]([^~\"]+)[~\"]", re.I)
+_LPM_RE = re.compile(r"\b(?:LAUNCH_PATCH_MACRO|LPM)\s+[~\"]([^~\"]+)[~\"]", re.I)
+_BEGIN_END = re.compile(r"\bBEGIN\b|\bEND\b", re.I)
+
+
+def patch_macros(texts: object) -> Dict[str, str]:
+    """name -> body of every DEFINE_PATCH_MACRO. Mods keep the lines that name a new creature's dialog and
+    script in one of these and launch it from each COPY, so without them those creatures look nameless."""
+    out: Dict[str, str] = {}
+    for t in texts:
+        for m in _DEFPM_RE.finditer(t):
+            depth, start = 0, -1
+            for tok in _BEGIN_END.finditer(t, m.end()):
+                word = tok.group(0).upper()
+                if word == "BEGIN":
+                    if depth == 0:
+                        start = tok.end()
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth <= 0:
+                        if start >= 0:
+                            out.setdefault(m.group(1).strip().lower(), t[start:tok.start()])
+                        break
+    return out
+
+
+def expand_macros(body: str, macros: Dict[str, str]) -> str:
+    """LAUNCH_PATCH_MACRO ~x~ -> what x does, a few levels deep."""
+    for _ in range(3):
+        if not _LPM_RE.search(body):
+            break
+        body = _LPM_RE.sub(lambda m: macros.get(m.group(1).strip().lower(), ""), body)
+    return body
+
 _NEXT_ACTION = re.compile(r"\b(?:COPY(?:_EXISTING|_LARGE|_EXISTING_REGEXP|_RANDOM)?|COMPILE|EXTEND_TOP|EXTEND_BOTTOM|"
                           r"APPEND(?:_COL)?|ADD_\w+|LAF|LAM|INCLUDE|STRING_SET|MKDIR|ACTION_\w+|OUTER_\w+)\b|\bBEGIN\s+[~\"@]")
 _SAY_RE = re.compile(r"\bSAY\s+(NAME1|NAME2|0x0*8|0x0*c)\s+(@-?\d+|" + _TP2_STR + ")", re.I)
@@ -957,6 +993,7 @@ def scan_source(mod_dir: str, game_dir: str = "", progress: Progress = lambda s:
         return f"@{num}", "", False
 
     # creature facts the installer writes: names, dialog, portraits, script name
+    pmacros = patch_macros(tp_text.values())
     for p, t in tp_text.items():
         for m in _COPY_RE.finditer(t):
             strs = [subst(_unq(x)) for x in re.findall(_TP2_STR, m.group(1))]
@@ -969,8 +1006,13 @@ def scan_source(mod_dir: str, game_dir: str = "", progress: Progress = lambda s:
             if not targets:
                 continue
             nx = _NEXT_ACTION.search(t, m.end())
-            body = t[m.end():nx.start() if nx else len(t)]
+            body = expand_macros(t[m.end():nx.start() if nx else len(t)], pmacros)
             for dst_name, src_name in targets:
+                def res(v: str, _d: str = dst_name, _s: str = src_name) -> str:
+                    """WeiDU writes the new file's own name as %DEST_RES%; without this a creature made by
+                    COPY_EXISTING keeps the literal variable and never finds its dialog."""
+                    return _RES_VAR.sub(lambda m: _d if m.group(1).upper() == "DEST" else _s,
+                                        subst(_unq(v))).strip()
                 c = cres.get(dst_name)
                 if c is None and src_name in cres:
                     c = dict(cres[src_name], cre=dst_name)
@@ -982,11 +1024,11 @@ def scan_source(mod_dir: str, game_dir: str = "", progress: Progress = lambda s:
                     cres[dst_name] = c
                 for s in _SAY_RE.finditer(body):
                     val = s.group(2)
-                    txt = tra_text(int(val[1:]), p, True)[0] if val.startswith("@") else subst(_unq(val))
+                    txt = tra_text(int(val[1:]), p, True)[0] if val.startswith("@") else res(val)
                     if s.group(1).upper() in ("NAME1", "0X8", "0X08") or not c["name"]:
                         c["name"] = _COLOR.sub(r"\1", txt).strip()
                 for w in _WA_RE.finditer(body):
-                    off, val = int(w.group(1), 0), subst(_unq(w.group(2))).strip()
+                    off, val = int(w.group(1), 0), res(w.group(2))
                     if off == 0x2CC:
                         c["dialog"] = val.upper()
                     elif off == 0x34:
