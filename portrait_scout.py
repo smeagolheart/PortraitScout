@@ -36,13 +36,14 @@ import sys
 import time
 import tempfile
 import threading
+import traceback
 import wave
 import webbrowser
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-VERSION = "1.2"
+VERSION = "1.3c"
 T_BMP, T_WAV, T_BCS, T_IDS, T_CRE, T_DLG, T_2DA = 0x0001, 0x0004, 0x03EF, 0x03F0, 0x03F1, 0x03F3, 0x03F4
 T_ARE, T_WMP = 0x03F2, 0x03F7
 EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg", T_2DA: ".2da",
@@ -488,8 +489,10 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
             gports = {x.upper() for f in ("large", "small") for x in g[f].split("/") if x}
             glook = (g["race"], g["sex"], g["anim"])
             same_npc = bool(set(r["cres"]) & set(g["cres"]) or ports & gports)
+            same_file = bool(set(r["cres"]) & set(g["cres"]))        # the same creature file: certainly one creature
             if same_npc or not any(look) or not any(glook) or look == glook:
-                if not same_npc:                                     # merged on the name alone: they may be clones
+                if not same_file:                                    # a shared portrait is what commoners have in
+                    # common, not proof of one person, so these can still be split one by one
                     g.setdefault("parts", [_snapshot(g)]).append(_snapshot(r))
                 g["lines"] += r["lines"]
                 g["refs"] |= r["refs"]
@@ -1501,19 +1504,6 @@ def analyze_source(game_dir: str, mod_dir: str, merge_names: bool = False, progr
             "stats": st_, "eet": src["eet"], "has_game": game is not None}
 
 
-def source_text(res: dict) -> str:
-    st = res["stats"]
-    out = [f"Speakers of {res['mod']} read from the mod's own files", ""]
-    out += [f"  {k}: {v:,}" if isinstance(v, int) else f"  {k}: {v}" for k, v in st.items()] + [""]
-    w = max([len(r["name"]) for r in res["rows"]] + [8])
-    out.append(f"{'Creature'.ljust(w)}  Lines  Voiced  {'Portrait'.ljust(10)}  CRE file(s) / dialogs")
-    for r in res["rows"]:
-        dl = ", ".join(f"{d} ({n}{'; ' + how if how else ''})" for d, (n, how) in sorted(r["dialogs"].items()))
-        out.append(f"{r['name'].ljust(w)}  {r['lines']:5}  {r['voiced']:6}  {(r['portrait'] or '-').ljust(10)}  "
-                   f"{'/'.join(r['cres']) or '-'} | {dl}")
-    return "\n".join(out) + "\n"
-
-
 COLUMNS = [("name", "Creature"), ("lines", "Lines"), ("portrait", "Portrait"), ("race", "Race"), ("sex", "Gender"),
            ("anim", "Animation"), ("cre", "CRE file(s)"), ("area", "Area(s)")]
 
@@ -1535,6 +1525,14 @@ def as_text(res: dict, rows: Optional[List[dict]] = None) -> str:
         lines += ["", "Portraits used by several creatures:"] + [f"  {p}: {', '.join(n)}" for p, n in sorted(dups.items())]
     nop = sum(1 for r in rows if not (r["large"] or r["small"]))
     lines += ["", f"{nop} of {len(rows)} creature(s) have no portrait."]
+    if res.get("source"):                                            # read from the mod's own files: say what that found
+        vo = sum(r.get("voiced", 0) or 0 for r in rows)
+        if vo:
+            lines.append(f"{vo:,} of {sum(r['lines'] for r in rows):,} line(s) have a sound.")
+        st_ = res.get("stats") or {}
+        if st_:
+            lines += ["", "Read from the mod's own files:"] + [
+                f"  {k}: {v:,}" if isinstance(v, int) else f"  {k}: {v}" for k, v in st_.items()]
     return "\n".join(lines) + "\n"
 
 
@@ -2402,13 +2400,13 @@ def run_gui() -> None:
     tooltip(merge_chk, "Treat every dialog whose creature has the same name as one NPC.\n\nOff (usual): they are "
             "merged only when they also share a creature file or portrait, or do not differ in race, gender and "
             "animation - so two different \"Guard\" creatures stay apart.")
-    view_var = tk.StringVar(value="table")
+    view_var = tk.StringVar(value="gallery")                     # the portraits are what this is for
     sty.configure("View.Toolbutton", padding=(12, 4))
-    ttk.Radiobutton(btns, text="Table", value="table", variable=view_var, style="View.Toolbutton",
-                    command=lambda: show_view()).pack(side="left", padx=(16, 0))
     ttk.Radiobutton(btns, text="Gallery", value="gallery", variable=view_var, style="View.Toolbutton",
+                    command=lambda: show_view()).pack(side="left", padx=(16, 0))
+    ttk.Radiobutton(btns, text="Table", value="table", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(2, 0))
-    gen_tab_btn = ttk.Radiobutton(btns, text="Generate", value="generate", variable=view_var, style="View.Toolbutton",
+    gen_tab_btn = ttk.Radiobutton(btns, text="Propose", value="generate", variable=view_var, style="View.Toolbutton",
                                   command=lambda: show_view())
     gen_tab_btn.pack(side="left", padx=(2, 0))
     ttk.Radiobutton(btns, text="Proposals", value="export", variable=view_var, style="View.Toolbutton",
@@ -2431,19 +2429,25 @@ def run_gui() -> None:
     tab_gen, tab_exp = ttk.Frame(content), ttk.Frame(content)
 
     cols = [k for k, _ in COLUMNS]
-    tree = ttk.Treeview(tab_table, columns=cols + ["psize", "proposed"], show="headings", selectmode="browse")
-    vs = ttk.Scrollbar(tab_table, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=vs.set)
-    tree.pack(side="left", fill="both", expand=True)
+    tmid = ttk.Frame(tab_table)                                      # the table is wider than most windows, so it
+    tree = ttk.Treeview(tmid, columns=cols + ["psize", "proposed"], show="headings", selectmode="browse")
+    vs = ttk.Scrollbar(tmid, orient="vertical", command=tree.yview)
+    hs = ttk.Scrollbar(tab_table, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)   # always there: hiding it on resize never came back
+    hs.pack(side="bottom", fill="x")                                 # both scrollbars claim their strip before the
+    tmid.pack(side="top", fill="both", expand=True)                  # table expands into what is left of the cavity
     vs.pack(side="right", fill="y")
+    tree.pack(side="left", fill="both", expand=True)
     widths = {"name": 260, "lines": 70, "portrait": 220, "race": 110, "sex": 80, "anim": 220, "cre": 200, "area": 190, "proposed": 190, "psize": 150}
     for k, h in COLUMNS:
         tree.heading(k, text=h, command=lambda c=k: sort_by(c))
-        tree.column(k, width=widths[k], anchor="e" if k == "lines" else "w")
+        # stretch=False: columns keep the width they are given. Left to themselves they share out the window and
+        # squeeze back below it, so "Lines" ends up as "Li" and the scrollbar has nothing left to scroll.
+        tree.column(k, width=widths[k], minwidth=widths[k], stretch=False, anchor="e" if k == "lines" else "w")
     tree.heading("psize", text="Portrait size (L / M)")
-    tree.column("psize", width=widths["psize"], anchor="w")
+    tree.column("psize", width=widths["psize"], minwidth=widths["psize"], stretch=False, anchor="w")
     tree.heading("proposed", text="Proposed portrait")
-    tree.column("proposed", width=widths["proposed"], anchor="w")
+    tree.column("proposed", width=widths["proposed"], minwidth=widths["proposed"], stretch=False, anchor="w")
 
     SORTS = [("Lines, most first", ("lines", True)), ("Lines, fewest first", ("lines", False)),
              ("Name, A to Z", ("name", False)), ("Name, Z to A", ("name", True)),
@@ -2470,6 +2474,14 @@ def run_gui() -> None:
                       "portrait already.\n\nA creature that shares a script name or dialog with one of them can be "
                       "caught by this too.")
 
+    pick_var = tk.BooleanVar(value=False)                            # gallery select mode: a box on every card
+    gbar2 = ttk.Frame(tab_gal, padding=(0, 0, 0, 4))                 # its own row: the toolbar above is full
+    pick_bar = ttk.Frame(gbar2)
+    pick_cb = ttk.Checkbutton(gbar, text="Select", variable=pick_var)
+    pick_cb.pack(side="left", padx=(12, 0))
+    tooltip(pick_cb, "Put a tick box on every card, so a whole set of creatures can be dealt with at once.")
+    pick_count = tk.StringVar(value="")
+
     ebar = ttk.Frame(tab_exp, padding=(0, 0, 0, 6))                  # the Proposals tab: what you have chosen so far
     ebar.pack(side="top", fill="x")
     sty.configure("Export.TButton", font=("TkDefaultFont", 9, "bold"))
@@ -2480,6 +2492,8 @@ def run_gui() -> None:
     clear_btn = ttk.Button(ebar, text="Clear all proposals")
     clear_btn.pack(side="left", padx=6)
     ttk.Label(ebar, textvariable=prop_label, foreground="#555", font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=10)
+    folder_btn = ttk.Button(ebar, text="Propose from folder...")
+    folder_btn.pack(side="left", padx=(6, 0))
     hist_btn = ttk.Button(ebar, text="Saved sets...")
     hist_btn.pack(side="left", padx=(6, 0))
     ttk.Label(ebar, textvariable=prop_where, foreground="#888").pack(side="left", padx=10)
@@ -2556,8 +2570,9 @@ def run_gui() -> None:
             t.pack_forget()
         if view_var.get() == "gallery":
             tab_gal.pack(fill="both", expand=True)
-            root.update_idletasks()
-            build_gallery(sorted_rows())
+            if state["res"]:                                         # at startup there is nothing to build yet, and
+                root.update_idletasks()                              # build_gallery is not defined this early
+                build_gallery(sorted_rows())
         elif view_var.get() == "export":
             tab_exp.pack(fill="both", expand=True)
             fill_export()
@@ -2567,8 +2582,8 @@ def run_gui() -> None:
                 sel, rows = tree.selection(), sorted_rows()
                 idx = tree.index(sel[0]) if sel else -1
                 if generator_module() is None:
-                    gen_hint("Making pictures needs an image generator, which is not part of the Portrait Scout "
-                             "download. See generator/README.md for the setup.")
+                    gen_hint("The generator folder is missing: generator/portrait_generator.py should sit "
+                             "beside portrait_scout.py. See generator/README.md.")
                 else:
                     generate_dialog(rows[idx] if 0 <= idx < len(rows) else None)
         else:
@@ -2593,9 +2608,9 @@ def run_gui() -> None:
             pp = props[rowkey(r)]
             etree.insert("", "end", values=(r["name"], ", ".join(r.get("cre_list") or []), Path(pp).name,
                                             prop_dims(pp) or "", areas_text(r, 4)))
-        if not rows:
-            etree.insert("", "end", values=("(nothing proposed yet - use \"Propose portrait...\" or the Generate tab)",
-                                            "", "", "", ""))
+        if not rows:                                                 # a message has to fit the column it sits in
+            etree.insert("", "end", values=("(nothing proposed yet)", "", "Propose one from a gallery card.",
+                                            "", ""))
 
     def exp_row() -> Optional[dict]:
         sel = etree.selection()
@@ -2623,7 +2638,7 @@ def run_gui() -> None:
             m.add_command(label="Open the picture", command=exp_open)
             m.add_command(label="Open the folder it is in",
                           command=lambda: open_path(str(Path(props[rowkey(r)]).parent)))
-            m.add_command(label="Work on this creature in the Generate tab", command=lambda: generate_dialog(r))
+            m.add_command(label="Work on this creature in the Propose tab", command=lambda: generate_dialog(r))
             m.add_separator()
             m.add_command(label="Remove this proposal", command=exp_remove)
         else:
@@ -2639,7 +2654,8 @@ def run_gui() -> None:
     FORGE_ALL = "https://github.com/lllyasviel/stable-diffusion-webui-forge/releases"
     FORGE_DOC = "https://github.com/lllyasviel/stable-diffusion-webui-forge"
     FLUX_DL = "https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4"
-    LORA_DL = "https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux"
+    LORA_DL = "https://civitai.com/models/850634"                     # the one the default style asks for
+    LORA_DL2 = "https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux"
 
     def lora_files() -> List[str]:
         d = Path(__file__).resolve().parent / "engine" / "webui" / "models" / "Lora"
@@ -2649,7 +2665,10 @@ def run_gui() -> None:
             return []
 
     def engine_ready() -> bool:
-        return (Path(__file__).resolve().parent / "engine" / "webui").is_dir()
+        """Forge is really unpacked - the file start_engine.bat runs. An empty engine\\webui\\models\\ tree, made
+        while putting a model in place, must not count."""
+        w = Path(__file__).resolve().parent / "engine" / "webui"
+        return (w / "webui.bat").is_file() or (w / "webui.sh").is_file()
 
     def open_make(path: str, *fallbacks: str) -> None:
         """Open a folder of the engine, making it if it is not there yet (the deeper ones appear as Forge unpacks)."""
@@ -2676,6 +2695,15 @@ def run_gui() -> None:
                       "the repository. Set one up once:").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
 
         def step(n: int, text: object, buttons: List[Tuple[str, object]]) -> None:
+            try:
+                _step(n, text, buttons)
+            except Exception as e:  # noqa: BLE001 - a step that will not draw must not hide the ones after it
+                traceback.print_exc()
+                tk.Label(box, bg=BG, fg="#a03030", justify="left", wraplength=840,
+                         text=f"(step {n} could not be drawn: {e.__class__.__name__}: {e})"
+                         ).grid(row=n + 1, column=0, columnspan=2, sticky="w")
+
+        def _step(n: int, text: object, buttons: List[Tuple[str, object]]) -> None:
             """text: a string, or pieces of one where (piece, True) is shown in bold."""
             pieces = [(text, False)] if isinstance(text, str) else list(text)   # type: ignore[arg-type]
             t = tk.Text(box, bg=BG, width=78, height=2, wrap="word", bd=0, highlightthickness=0,
@@ -2683,12 +2711,11 @@ def run_gui() -> None:
             t.tag_configure("b", font=("TkDefaultFont", 9, "bold"))
             for piece, bold in pieces:
                 t.insert("end", piece, ("b",) if bold else ())
-            t.update_idletasks()
-            try:                                                     # as tall as the text actually needs
-                lines = t.count("1.0", "end", "displaylines")[0]      # type: ignore[index]
-            except (tk.TclError, TypeError, IndexError):
-                lines = max(1, len("".join(p for p, _b in pieces)) // 76 + 1)
-            t.config(height=max(1, int(lines)), state="disabled")
+            whole = "".join(p for p, _b in pieces)                   # as tall as the text needs, counted by hand:
+            lines = whole.count("\n") + 1                             # asking Tk before it is drawn gives nonsense
+            for para in whole.split("\n"):
+                lines += len(para) // 74
+            t.config(height=max(1, min(8, lines)), state="disabled")
             t.grid(row=n + 1, column=0, sticky="w", pady=2)
             if buttons:
                 f = tk.Frame(box, bg=BG)
@@ -2703,21 +2730,27 @@ def run_gui() -> None:
               ("Open folder", lambda: open_make(str(here / "engine"), str(here)))])
         step(2, [("2.  Run ", 0), ("engine\\update.bat", 1), (" once, then ", 0), ("engine\\run.bat", 1),
                  (" once and wait for the Forge page to open. That proves it works, then close it again.", 0)], [])
-        step(3, [("3.  Put ", 0), ("flux1-dev-bnb-nf4-v2.safetensors", 1), (" (11.5 GB) in "
-                  "engine\\webui\\models\\Stable-diffusion\\. A LoRA is optional but recommended: ", 0),
-                 ("BG_Portrait.safetensors", 1), (" (38 MB) in engine\\webui\\models\\Lora\\.", 0)],
+        step(3, [("3.  Put ", 0), ("flux1-dev-bnb-nf4-v2.safetensors", 1),
+                 (" (12 GB) in engine\\webui\\models\\Stable-diffusion\\. One file: the text encoders and the VAE "
+                  "are inside it.", 0)],
              [("Download model", lambda: webbrowser.open(FLUX_DL)),
-              ("Download LoRA", lambda: webbrowser.open(LORA_DL)),
-              ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models")
-                                                if (here / "engine" / "webui").is_dir() else str(here / "engine"),
+              ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Stable-diffusion"),
                                                 str(here / "engine"), str(here)))])
-        step(4, "4.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after that.", [])
+        step(4, [("4.  Optional: ", 0), ("chargen_oil_painting_v2.safetensors", 1),
+                 (" (86 MB, from Painterly Fantasy Portrait) in engine\\webui\\models\\Lora\\. The style Portrait "
+                  "Scout starts with asks for it by name - without it that style still runs, but the painted look is "
+                  "mostly gone.", 0)],
+             [("Download LoRA", lambda: webbrowser.open(LORA_DL)),
+              ("(other LoRA)", lambda: webbrowser.open(LORA_DL2)),
+              ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Lora"),
+                                                str(here / "engine"), str(here)))])
+        step(5, "5.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after that.", [])
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=860,
-                 text="Already run a generator of your own? None of the above is needed: open Generator settings "
-                      "below, put its address in, and turn \"start it for me\" off. Anything with an Automatic1111 / "
-                      "Forge API will do, with any model.").grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+                 text="Already run a generator of your own? None of the above is needed: open Generator settings on "
+                      "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
+                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         more = tk.Frame(box, bg=BG)
-        more.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        more.grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
         ttk.Button(more, text="Forge: what it is, and its install notes",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))
@@ -2769,8 +2802,50 @@ def run_gui() -> None:
         ttk.Button(row, text="Close", command=w.destroy).pack(side="right")
     hist_btn.config(command=saved_sets)
 
+    def setup_window() -> None:
+        """The setup steps and their download links, on their own, for when the Propose tab is not where you are."""
+        w = tk.Toplevel(root)
+        w.title("Setting up portrait generation")
+        w.geometry("920x560")
+        cv_ = tk.Canvas(w, highlightthickness=0)
+        sb_ = ttk.Scrollbar(w, orient="vertical", command=cv_.yview)
+        cv_.configure(yscrollcommand=sb_.set)
+        cv_.pack(side="left", fill="both", expand=True)
+        sb_.pack(side="right", fill="y")
+        inner = ttk.Frame(cv_, padding=10)
+        win_ = cv_.create_window(0, 0, window=inner, anchor="nw")
+        cv_.bind("<Configure>", lambda e: cv_.itemconfigure(win_, width=e.width))
+        inner.bind("<Configure>", lambda e: cv_.configure(scrollregion=cv_.bbox("all")))
+        def rechecked() -> None:
+            """Look again, then build the Propose tab afresh so the notice and the Generate button follow suit."""
+            state.pop("gen", None)                                   # drop the cache so the module is read again
+                                                                     # (setting it to None means "there is none")
+            w.destroy()
+            ready = engine_ready()
+            if state.get("gen_built"):
+                r_ = state.get("gen_row")
+                generate_dialog(r_ if isinstance(r_, dict) else None)
+            status.set("Image engine: found in the engine folder." if ready else
+                       "Image engine: still nothing in the engine folder - Forge's webui.bat is what is looked for.")
+
+        try:
+            setup_panel(inner, rechecked).pack(fill="x")
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            ttk.Label(inner, foreground="#a03030", wraplength=840, justify="left",
+                      text=f"The steps could not be drawn: {e.__class__.__name__}: {e}").pack(anchor="w")
+        det = ttk.Frame(inner, padding=(0, 10, 0, 0))
+        det.pack(fill="x")
+        ttk.Label(det, foreground="#555", wraplength=840, justify="left",
+                  text="The names, sizes and links above are what Portrait Scout was written against, as they stood "
+                       "in November 2026. Addresses move: if a button opens nothing, search the file name - they are "
+                       "all well known. Other models work too; name the checkpoint in payload.override_settings and "
+                       "whatever LoRA you have in the style's prompt. SDXL and SD1.5 want a CFG around 5 to 7 and no "
+                       "distilled CFG, where Flux wants CFG 1 and distilled CFG about 1.6."
+                  ).pack(anchor="w")
+
     def gen_hint(text: str = "") -> None:
-        """Empty the Generate tab (so it is built again next time it is shown), with a message if there is one."""
+        """Empty the Propose tab (so it is built again next time it is shown), with a message if there is one."""
         state["gen_built"] = False
         for w in tab_gen.winfo_children():
             w.destroy()
@@ -2779,7 +2854,7 @@ def run_gui() -> None:
         box = ttk.Frame(tab_gen, padding=20)
         box.pack(anchor="w", fill="x")
         ttk.Label(box, foreground="#555", justify="left", wraplength=840, text=text).pack(anchor="w", pady=(0, 10))
-        setup_panel(box, lambda: (state.__setitem__("gen", None), gen_hint(), show_view())).pack(anchor="w", fill="x")
+        setup_panel(box, lambda: (state.pop("gen", None), gen_hint(), show_view())).pack(anchor="w", fill="x")
 
     show_view()
 
@@ -2841,6 +2916,10 @@ def run_gui() -> None:
     def refresh() -> None:
         tree.delete(*tree.get_children())
         rows = sorted_rows()
+        if not rows:
+            blank = dict.fromkeys([k for k, _h in COLUMNS] + ["psize", "proposed"], "")
+            blank["name"] = "(nothing analyzed yet)" if not state["res"] else "(nothing matches the search)"
+            tree.insert("", "end", values=[blank[k] for k, _h in COLUMNS] + ["", ""])
         for r in rows:
             pp = props.get(rowkey(r))
             tree.insert("", "end", values=table_values(r))
@@ -2920,9 +2999,9 @@ def run_gui() -> None:
         res = state["res"]
         split = set((st.get("declone") or {}).get(str(res["mod"]), [])) if res else set()
         if rowkey(par) in split:
-            return f"Merge {n} creatures", f"Put the {n} \"{par['name']}\" creatures back in one row."
-        return f"Declone {n} creatures", (f"List the {n} \"{par['name']}\" creatures one by one, so each can have a "
-                                          "portrait of its own.")
+            return "Merge", f"Put the {n} \"{par['name']}\" creatures back in one row."
+        return "Declone", (f"List the {n} \"{par['name']}\" creatures one by one, so each can have a "
+                           "portrait of its own.")
 
     def toggle_declone(r: dict) -> None:
         par, n = clones_of(r)
@@ -3118,6 +3197,281 @@ def run_gui() -> None:
             parent.lift()                                                            # type: ignore[attr-defined]
             parent.focus_force()                                                     # type: ignore[attr-defined]
 
+    checked: set = set()                                             # rowkeys ticked in the gallery
+
+    def upd_pick_count() -> None:
+        pick_count.set(f"{len(checked):,} checked" if checked else "none checked")
+
+    def pick_set(which: str) -> None:
+        rows = sorted_rows()
+        checked.clear()
+        if which == "all":
+            checked.update(rowkey(r) for r in rows)
+        elif which == "proposals":
+            checked.update(rowkey(r) for r in rows if rowkey(r) in props)
+        upd_pick_count()
+        build_gallery(rows)
+
+    def harvest_current() -> None:
+        """Give the ticked creatures the portrait they have now, so the built mod does not rely on whatever else
+        happens to be installed. Pictures that come with the game are never taken - everyone has those - and nor,
+        by default, are the ones this very mod ships, since installing the mod brings them anyway."""
+        res = state["res"]
+        if not res or not checked:
+            messagebox.showinfo("Portrait Scout", "Tick some creatures in the gallery first.", parent=root)
+            return
+        w = tk.Toplevel(root)
+        w.title("Copy their portraits")
+        w.transient(root)
+        bx = ttk.Frame(w, padding=12)
+        bx.pack(fill="both", expand=True)
+        ttk.Label(bx, text=f"{len(checked):,} creature(s) ticked. Each gets, as a proposal, the portrait it is "
+                           "wearing in your game now.", wraplength=460, justify="left").pack(anchor="w")
+        skip_mod = tk.BooleanVar(value=True)
+        keep_w = tk.BooleanVar(value=True)
+        c1 = ttk.Checkbutton(bx, text="Leave out portraits this mod ships itself", variable=skip_mod)
+        c1.pack(anchor="w", pady=(8, 0))
+        tooltip(c1, "Installing the mod brings those pictures with it, so copying them into your portrait mod "
+                    "only duplicates them.")
+        c2 = ttk.Checkbutton(bx, text="Keep the pictures I chose by hand", variable=keep_w)
+        c2.pack(anchor="w")
+        tooltip(c2, "On: a creature you have already proposed a picture for keeps it. Untick to let the portrait it "
+                    "wears in the game replace your choice.")
+        ttk.Label(bx, text="Portraits that come with the game are never copied - everyone has those already.",
+                  foreground="#666", wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
+        go2 = {"ok": False}
+        rw = ttk.Frame(bx)
+        rw.pack(anchor="e", pady=(12, 0))
+        ttk.Button(rw, text="Copy them", command=lambda: (go2.__setitem__("ok", True), w.destroy())).pack(side="left")
+        ttk.Button(rw, text="Cancel", command=w.destroy).pack(side="left", padx=(6, 0))
+        w.grab_set()
+        root.wait_window(w)
+        if not go2["ok"]:
+            return
+        game: Game = res["game"]                                      # type: ignore[index]
+        over = getattr(game, "over", {}) or {}
+        own = mod_bmp_index() if skip_mod.get() else {}               # the pictures this mod itself ships
+        out = (Path(__file__).resolve().parent / "generated"
+               / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", str(res["mod"])) / "current")     # type: ignore[index]
+        rows = [r for r in all_rows() if rowkey(r) in checked]
+        took, biffed, none_, failed, mine = 0, 0, 0, 0, 0
+        for r in rows:
+            if rowkey(r) in props and keep_w.get():                  # a picture was already chosen for this one
+                continue
+            nm = next((x for x in (r.get("large_name"), r.get("small_name")) if x), "")
+            if not nm:
+                none_ += 1
+                continue
+            if (nm.lower() + ".bmp") not in over:                    # it comes with the game: everyone has it
+                biffed += 1
+                continue
+            if nm.upper() in own:                                    # the mod ships it, so installing the mod brings it
+                mine += 1
+                continue
+            data = game.get(nm, T_BMP)
+            if not data:
+                failed += 1
+                continue
+            try:
+                out.mkdir(parents=True, exist_ok=True)
+                dst = out / (nm.upper() + ".bmp")
+                dst.write_bytes(data)
+            except OSError:
+                failed += 1
+                continue
+            crop_store().pop(rowkey(r), None)
+            props[rowkey(r)] = os.path.normpath(str(dst))
+            took += 1
+        persist_props()
+        if view_var.get() == "gallery":
+            rebuild_keep_scroll()
+        refresh_table_only()
+        fill_export()
+        msg = f"Proposed the portrait {took:,} creature(s) have now, copied from override into {out}."
+        extra = []
+        if biffed:
+            extra.append(f"{biffed:,} already had a portrait that comes with the game, so nothing was copied")
+        if mine:
+            extra.append(f"{mine:,} wear a picture this mod ships itself, which installing it brings anyway")
+        if none_:
+            extra.append(f"{none_:,} have no portrait at all")
+        if failed:
+            extra.append(f"{failed:,} could not be read or written")
+        status.set(msg)
+        messagebox.showinfo("Portrait Scout", msg + ("\n\n" + ".\n".join(extra) + "." if extra else ""), parent=root)
+
+    def show_pick_bar() -> None:
+        on = bool(pick_var.get())
+        for w in pick_bar.winfo_children():
+            w.destroy()
+        if on:
+            ttk.Label(pick_bar, text="Tick:").pack(side="left", padx=(0, 4))
+            ab = ttk.Button(pick_bar, text="All", width=5, command=lambda: pick_set("all"))
+            ab.pack(side="left")
+            tooltip(ab, "Tick every creature the gallery is showing now - the search box and Party NPCs decide that.")
+            pb = ttk.Button(pick_bar, text="Proposals", width=10, command=lambda: pick_set("proposals"))
+            pb.pack(side="left", padx=2)
+            tooltip(pb, "Tick only the creatures you have already chosen a picture for.")
+            nb = ttk.Button(pick_bar, text="None", width=6, command=lambda: pick_set("none"))
+            nb.pack(side="left")
+            tooltip(nb, "Clear every tick.")
+            ttk.Label(pick_bar, textvariable=pick_count, foreground="#555").pack(side="left", padx=8)
+            hb = ttk.Button(pick_bar, text="Copy their portraits...", command=harvest_current)
+            hb.pack(side="left", padx=(8, 0))
+            tooltip(hb, "Give the ticked creatures, as a proposal, the portrait each is wearing in your game now, "
+                        "so the mod you build carries it instead of relying on whatever else the player has "
+                        "installed.\n\nIt asks what to leave out before it does anything.")
+            pick_bar.pack(side="left")
+            gbar2.pack(side="top", fill="x", after=gbar)
+        else:
+            pick_bar.pack_forget()
+            gbar2.pack_forget()
+        upd_pick_count()
+        if state["res"]:
+            build_gallery(sorted_rows())
+    pick_cb.config(command=show_pick_bar)
+
+    def propose_folder() -> None:
+        """A whole set of pictures at once: match the files in a folder to creatures by name.
+
+        Portrait projects name a picture after the creature file it belongs to (HPS's ACHEN.bmp is for ACHEN.CRE),
+        which is also what Create mod writes, so one pass can propose thousands."""
+        if not state["res"]:
+            messagebox.showinfo("Portrait Scout", "Analyze a mod or a game first.", parent=root)
+            return
+        w = tk.Toplevel(root)
+        w.title("Propose from a folder")
+        w.transient(root)
+        box = ttk.Frame(w, padding=12)
+        box.pack(fill="both", expand=True)
+        dir_var = tk.StringVar(value=str(st.get("propose_folder") or ""))
+        ttk.Label(box, text="Folder of pictures:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(box, textvariable=dir_var, width=62).grid(row=0, column=1, sticky="ew", padx=6)
+
+        def pick() -> None:
+            d = filedialog.askdirectory(parent=w, title="Folder of portraits", initialdir=dir_var.get() or None)
+            if d:
+                dir_var.set(d)
+                count()
+        ttk.Button(box, text="Browse...", command=pick).grid(row=0, column=2)
+        sub_var = tk.BooleanVar(value=True)
+        by_cre = tk.BooleanVar(value=True)
+        by_port = tk.BooleanVar(value=True)
+        over_var = tk.BooleanVar(value=False)
+        gap_var = tk.BooleanVar(value=False)
+        opts = ttk.Frame(box)
+        opts.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        for txt, var, tip in (
+                ("Look in subfolders", sub_var, "HPS keeps its pictures in portraits/core, portraits/minor_npcs and "
+                                                "so on, so this is usually wanted."),
+                ("Match the creature file name", by_cre, "ACHEN.bmp is proposed for ACHEN.CRE. This is how HPS and "
+                                                         "Create mod name their pictures."),
+                ("Match the portrait name", by_port, "HALFG3.bmp is proposed for every creature whose portrait is "
+                                                     "HALFG3 now - a stock picture shared by many creatures."),
+                ("Replace proposals already made", over_var, "Off: creatures you have already chosen a picture for "
+                                                             "are left alone."),
+                ("Only creatures with no portrait now", gap_var, "Fill the gaps and nothing else.")):
+            cb = ttk.Checkbutton(opts, text=txt, variable=var, command=lambda: count())
+            cb.pack(anchor="w")
+            tooltip(cb, tip)
+        note = tk.StringVar(value="")
+        ttk.Label(box, textvariable=note, foreground="#1a5fb4", wraplength=520, justify="left"
+                  ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        def index() -> Dict[str, str]:
+            """picture name (no extension, upper case) -> the file, .bmp winning over the rest."""
+            d = dir_var.get().strip()
+            found: Dict[str, str] = {}
+            if not os.path.isdir(d):
+                return found
+            for root_, dirs, names in (os.walk(d) if sub_var.get() else [(d, [], os.listdir(d))]):
+                dirs[:] = [x for x in dirs if x.lower() not in ("backup", "tutu", "bgt")]
+                for n in names:
+                    stem_, ext = os.path.splitext(n)
+                    if ext.lower() not in (".bmp", ".png", ".jpg", ".jpeg", ".tga", ".webp", ".gif"):
+                        continue
+                    k = stem_.upper()
+                    if k not in found or (ext.lower() == ".bmp" and not found[k].lower().endswith(".bmp")):
+                        found[k] = os.path.join(root_, n)
+            return found
+
+        def matches() -> Tuple[List[Tuple[dict, str]], int]:
+            pics = index()
+            out, seen = [], set()
+            for r in all_rows():
+                k = rowkey(r)
+                if k in seen:
+                    continue
+                if k in props and not over_var.get():
+                    continue
+                if gap_var.get() and (r.get("large") or r.get("small")):
+                    continue
+                hit = ""
+                if by_cre.get():
+                    hit = next((pics[c.upper()] for c in (r.get("cre_list") or []) if c.upper() in pics), "")
+                if not hit and by_port.get():
+                    hit = next((pics[n.upper()] for n in (r.get("large_name"), r.get("small_name")) if n and n.upper() in pics), "")
+                if hit:
+                    out.append((r, hit))
+                    seen.add(k)
+            return out, len(pics)
+
+        def count() -> None:
+            npics = 0
+            if not os.path.isdir(dir_var.get().strip()):
+                note.set("Choose a folder.")
+                go.config(state="disabled")
+                return
+            w.config(cursor="watch")
+            w.update_idletasks()
+            try:
+                got, npics = matches()
+            finally:
+                w.config(cursor="")
+            listed = len(all_rows())
+            if not listed:
+                note.set(f"{npics:,} picture(s) in that folder. No creatures or dialog detected, so there is "
+                         "nothing to match them to.")
+            else:
+                note.set(f"{npics:,} picture(s) in that folder, matching {len(got):,} creature(s) of the "
+                         f"{listed:,} listed." + ("" if got else "  Nothing would change."))
+            go.config(state="normal" if got else "disabled")
+
+        def apply_() -> None:
+            got, _n = matches()
+            if not got:
+                return
+            for r, pth in got:
+                crop_store().pop(rowkey(r), None)                    # a new picture: any old framing is gone
+                props[rowkey(r)] = os.path.normpath(pth)
+            st["propose_folder"] = dir_var.get().strip()
+            persist_props()
+            save_settings(st)
+            w.destroy()
+            if view_var.get() == "gallery":
+                rebuild_keep_scroll()
+            refresh_table_only()
+            fill_export()
+            status.set(f"Proposed {len(got):,} portrait(s) from {dir_var.get().strip()}.")
+        brow = ttk.Frame(box)
+        brow.grid(row=3, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        go = ttk.Button(brow, text="Propose these", command=apply_, state="disabled")
+        go.pack(side="left")
+        ttk.Button(brow, text="Cancel", command=w.destroy).pack(side="left", padx=(6, 0))
+        box.columnconfigure(1, weight=1)
+        dir_var.trace_add("write", lambda *_a: count())
+        count()
+
+    folder_btn.config(command=propose_folder)
+
+    def open_propose(r: dict, after: object = None, parent: object = None) -> None:
+        """Choosing a portrait, from a file or made on the spot: one window either way. Without the generator
+        folder there is nothing to open, so the file picker stands in."""
+        if generator_module() is None:
+            propose(r, after, parent)
+        else:
+            generate_dialog(r, after, parent)
+
     def generator_module() -> object:
         """The optional portrait generator (generator/portrait_generator.py next to this file), or None."""
         if "gen" not in state:
@@ -3135,22 +3489,22 @@ def run_gui() -> None:
         return state["gen"]
 
     def generate_dialog(r: Optional[dict] = None, after: object = None, parent: object = None) -> None:
-        """The Generate tab, with the problem shown in it if anything goes wrong while building it."""
+        """The Propose tab, with the problem shown in it if anything goes wrong while building it."""
         try:
             build_generate(r, after, parent)
         except Exception as e:  # noqa: BLE001
             import traceback
             traceback.print_exc()
-            gen_hint(f"The Generate tab could not be built: {e.__class__.__name__}: {e}")
+            gen_hint(f"The Propose tab could not be built: {e.__class__.__name__}: {e}")
 
     def build_generate(r: Optional[dict] = None, after: object = None, parent: object = None) -> None:
-        """Describe the creature from the game data, let the user add details, and ask the generator for candidates.
+        """The Propose tab: describe the creature, pick a picture or make one, and crop it to a game portrait.
         Without a creature (r = None) it is a plain picture maker: type what you want and press Generate."""
         pg = generator_module()
         res = state["res"]
         if pg is None:
-            gen_hint("Making pictures needs an image generator, which is not part of the Portrait Scout download. "
-                     "See generator/README.md.")
+            gen_hint("The generator folder is missing: generator/portrait_generator.py should sit beside "
+                     "portrait_scout.py. See generator/README.md.")
             return
         generic = r is None
         if r is None:
@@ -3168,7 +3522,7 @@ def run_gui() -> None:
         folder = Path(__file__).resolve().parent / str(gs.get("output_folder", "generated")) / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", mod_name)
         stem = re.sub(r"[^A-Za-z0-9_.#!-]+", "_", f"{r['name']}_{(r.get('cre_list') or [''])[0]}").strip("_") or "portrait"
 
-        for w in tab_gen.winfo_children():                           # the Generate tab works on one creature at a time
+        for w in tab_gen.winfo_children():                           # the Propose tab works on one creature at a time
             w.destroy()
         state["gen_row"] = r
         state["gen_built"] = True                                    # before the view switch below: it must not rebuild
@@ -3191,16 +3545,25 @@ def run_gui() -> None:
 
         eng_s = gs.get("engine") or {}
         if not engine_ready() and eng_s.get("autostart", True) and "start_engine.bat" in str(eng_s.get("start", "")):
-            setup_panel(dlg, lambda: generate_dialog(None if generic else r, after, parent)).pack(fill="x", padx=10, pady=(6, 0))
+            nb_ = tk.Frame(dlg, bg="#fdf6d8", highlightthickness=1, highlightbackground="#d9c97a")
+            nb_.pack(fill="x", padx=10, pady=(6, 0))
+            tk.Label(nb_, bg="#fdf6d8", fg="#5a4a00", justify="left", wraplength=620,
+                     text="No image generator is set up yet, so nothing can be generated. Choosing a picture from a "
+                          "file works as it is.").pack(side="left", padx=8, pady=6)
+            ttk.Button(nb_, text="Set it up...", command=setup_window).pack(side="right", padx=8, pady=6)
+            ttk.Button(nb_, text="Hide", width=6, command=lambda: fold_gen(True)).pack(side="right", pady=6)
+            state["gen_banner"] = nb_
         frm = ttk.Frame(dlg, padding=10)
         frm.pack(fill="x")
         frm.columnconfigure(1, weight=1)
-        ttk.Label(frm, text="Description:").grid(row=1, column=0, sticky="w")
+        dlab = ttk.Label(frm, text="Description:")
+        dlab.grid(row=1, column=0, sticky="w")
         desc0 = str(saved.get("desc") or character)
         if saved.get("extra") and str(saved["extra"]).strip() not in desc0:   # from when extra details had their own box
             desc0 = ", ".join(x for x in (desc0, str(saved["extra"]).strip()) if x)
         desc_var = tk.StringVar(value=desc0)
-        ttk.Entry(frm, textvariable=desc_var).grid(row=1, column=1, sticky="ew", padx=6)
+        dent = ttk.Entry(frm, textvariable=desc_var)
+        dent.grid(row=1, column=1, sticky="ew", padx=6)
         dbtn = ttk.Frame(frm)
         dbtn.grid(row=1, column=2)
         reset_btn = ttk.Button(dbtn, text="Reset", width=6,
@@ -3234,6 +3597,12 @@ def run_gui() -> None:
                    "Mage", "Sorcerer", "Thief", "Bard"]
         last = st.get("generic_pick") if isinstance(st.get("generic_pick"), list) else []
         last = (list(last) + ["Human", "Male", "Fighter"])[:3]
+        if not generic:                                              # start from what the creature file says
+            aw_ = str(r.get("anim") or "").split()
+            cre_race = next((x for x in RACES if x.lower() == str(r.get("race") or "").strip().lower()), "")
+            cre_sex = str(r.get("sex") or "").strip().title() if str(r.get("sex") or "").strip().lower() in ("male", "female") else ""
+            cre_cls = next((c for c in CLASSES if any(c.lower() == w.lower() for w in aw_)), "")
+            last = [cre_race or last[0], cre_sex or last[1], cre_cls or last[2]]
         race_v = tk.StringVar(value=str(saved.get("race") or last[0]))
         sex_v = tk.StringVar(value=str(saved.get("sex") or last[1]))
         class_v = tk.StringVar(value=str(saved.get("class") or last[2]))
@@ -3243,38 +3612,40 @@ def run_gui() -> None:
         look_v = tk.StringVar(value=str(saved.get("look") or st.get("last_look") or looks[0]))
 
         def pick_changed(*_a: object) -> None:
+            race, sex, cls = race_v.get() or "Human", sex_v.get() or "Male", class_v.get() or "Fighter"
+            row_ = {"race": race, "sex": sex, "anim": f"{cls} {sex} {race}"}
             if generic:
-                race, sex, cls = race_v.get() or "Human", sex_v.get() or "Male", class_v.get() or "Fighter"
-                row_ = {"race": race, "sex": sex, "anim": f"{cls} {sex} {race}"}
                 st["generic_pick"] = [race, sex, cls]                 # remembered until Reset
-            else:
-                row_ = r
+            else:                                                     # keep the creature's own face and files
+                row_ = dict(r, race=race, sex=sex, anim=f"{cls} {sex} {race}")
             st["last_age"], st["last_look"] = age_v.get(), look_v.get()
             save_settings(st)
             desc_var.set(pg.describe(row_, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
 
         def pick_reset() -> None:
             st.pop("generic_pick", None)
-            race_v.set("Human")
-            sex_v.set("Male")
-            class_v.set("Fighter")
+            race_v.set(last[0] if not generic else "Human")
+            sex_v.set(last[1] if not generic else "Male")
+            class_v.set(last[2] if not generic else "Fighter")
             age_v.set("Adult" if "Adult" in ages else ages[0])
             look_v.set(looks[0])
             pick_changed()
-        picks = ([(race_v, RACES, 10), (sex_v, ["Male", "Female"], 8), (class_v, CLASSES, 10)] if generic else []) \
-            + [(age_v, ages, 11), (look_v, looks, 11)]
+        picks = [(race_v, RACES, 10), (sex_v, ["Male", "Female"], 8), (class_v, CLASSES, 10),
+                 (age_v, ages, 11), (look_v, looks, 11)]
         for var_, vals_, w_ in picks:
             cb_ = ttk.Combobox(prow0, textvariable=var_, values=vals_, state="readonly", width=w_)
             cb_.pack(side="left", padx=(0, 4))
             cb_.bind("<<ComboboxSelected>>", pick_changed)
-        tooltip(prow0, ("Race, gender and class, then how old the character looks and anything about the face - "
-                        if generic else "How old the character looks, and anything about the face - ")
-                       + "they are written into the description. Flux paints clean, young skin unless it is told "
-                         "otherwise, so \"Old\" and \"Weathered\" are worth a try.")
+        tooltip(prow0, "Race, gender and class, then how old the character looks and anything about the face. They "
+                       + ("start from the creature's own file and nothing happens until you change one, which "
+                          "rewrites the description. " if not generic else "")
+                       + "Flux paints clean, young skin unless it is told otherwise, so \"Old\" and \"Weathered\" "
+                         "are worth a try.")
         if generic and not desc_var.get().strip():
             pick_changed()
         brow = ttk.Frame(frm)                                        # background, and what to make from it
         brow.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        gen_only = [brow]                                            # filled in below: the generation-only widgets
         bg_lab = ttk.Label(brow, text="Background:")
         bg_lab.pack(side="left")
         bg_var = tk.StringVar()
@@ -3304,6 +3675,26 @@ def run_gui() -> None:
         ttk.Button(brow, text="\u2922", width=3,
                    command=lambda: big_edit(bg_var, "Background")).pack(side="right", padx=(4, 0))
         ttk.Entry(brow, textvariable=bg_var).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        fold_lbl = tk.StringVar()
+
+        def fold_gen(hide: object = None) -> None:
+            """Put the description, the background and the no-generator notice away, for working from files only."""
+            if hide is not None:
+                st["gen_folded"] = bool(hide)
+                save_settings(st)
+            off = bool(st.get("gen_folded"))
+            fold_lbl.set(("\u25b6 Show generator settings" if off else "\u25bc Hide generator settings"))
+            for w_ in gen_only:
+                try:
+                    w_.grid_remove() if off else w_.grid()
+                except (tk.TclError, AttributeError):
+                    pass
+            nb = state.get("gen_banner")
+            if nb is not None:
+                try:
+                    nb.pack_forget() if off else nb.pack(fill="x", padx=10, pady=(6, 0), before=frm)
+                except (tk.TclError, AttributeError):
+                    pass
         erow = ttk.Frame(frm)                                        # Generate, then the engine it talks to
         erow.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         erow2 = ttk.Frame(frm)                                       # the engine, and the prompt it is sent
@@ -3318,6 +3709,40 @@ def run_gui() -> None:
                             activeforeground="white", font=("TkDefaultFont", 9, "bold"), padx=12, relief="raised",
                             disabledforeground="#e8e8e8")
         gen_btn.pack(side="left")
+        no_engine = (not engine_ready() and (gs.get("engine") or {}).get("autostart", True)
+                     and "start_engine.bat" in str((gs.get("engine") or {}).get("start", "")))
+        if no_engine:                                                # nothing to send the prompt to
+            gen_btn.config(state="disabled", bg="#9bbfa6")
+            tooltip(gen_btn, "There is no image generator set up yet, so there is nothing to send the prompt to. "
+                             "Use \"Select image...\" for a picture you already have, or set one up from the "
+                             "Engine menu.")
+
+        def pick_image() -> None:
+            """A picture from a file, put in with the candidates so it can be framed like a generated one."""
+            q = filedialog.askopenfilename(
+                parent=dlg, title=f"Picture for {r['name']}",
+                initialdir=os.path.dirname(props.get(key, "")) or str(folder) if folder.is_dir() else None,
+                filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tga *.tif *.tiff"), ("All files", "*.*")])
+            if not q:
+                return
+            same_q = lambda x: os.path.normcase(os.path.normpath(x))  # noqa: E731
+            if not any(same_q(c["path"]) == same_q(q) for c in cells):
+                add_candidate(os.path.normpath(q))
+            gstat.set(f"{Path(q).name} added. Frame it with the crop box, then press "
+                      + ("Make portrait." if generic else "Use this."))
+        ttk.Label(bar, text="or").pack(side="left", padx=(8, 8))
+        sel_btn = tk.Button(bar, text="Select image...", bg="#2f6fb5", fg="white", activebackground="#27598f",
+                            activeforeground="white", font=("TkDefaultFont", 9, "bold"), padx=12, relief="raised",
+                            disabledforeground="#e8e8e8", command=pick_image)
+        sel_btn.pack(side="left")
+        gen_only.extend([dlab, dent, dbtn, prow0])
+        fb_ = ttk.Button(bar, textvariable=fold_lbl, command=lambda: fold_gen(not st.get("gen_folded")))
+        fb_.pack(side="left", padx=(12, 0))
+        tooltip(fb_, "Fold away the description, the background and the generator notice, for when you are only "
+                     "choosing pictures from files.")
+        fold_gen()
+        tooltip(sel_btn, "Use a picture you already have instead of generating one. It joins the candidates below, "
+                         "so the crop box works on it the same way.")
         gstat = tk.StringVar(value="Type what the portrait should show, then press Generate." if generic else
                              "Description comes from the creature's gender, race and animation type - edit it freely.")
 
@@ -3433,12 +3858,17 @@ def run_gui() -> None:
             save_settings(st)
             crop_preview()
 
+        move_ws: List[object] = []
         for txt, dx, dy in (("\u25c0", -0.02, 0), ("\u25b6", 0.02, 0), ("\u25b2", 0, -0.02), ("\u25bc", 0, 0.02)):
             mv_ = ttk.Button(crow, text=txt, width=2, command=lambda a=dx, b=dy: shift(a, b))
-            mv_.pack(side="left", padx=1)
+            mv_._ps_pack = {"side": "left", "padx": 1}               # type: ignore[attr-defined]
+            mv_.pack(**mv_._ps_pack)                                 # type: ignore[attr-defined]
             tooltip(mv_, "Move the crop box on every candidate at once. \"Middle\" puts it back.")
+            move_ws.append(mv_)
         mid_btn = ttk.Button(crow, text="Middle", width=7, command=lambda: shift(0, 0))
-        mid_btn.pack(side="left", padx=(4, 8))
+        mid_btn._ps_pack = {"side": "left", "padx": (4, 8)}          # type: ignore[attr-defined]
+        mid_btn.pack(**mid_btn._ps_pack)                             # type: ignore[attr-defined]
+        move_ws.append(mid_btn)
         tooltip(mid_btn, "Put the box back in the middle. The arrows move it on every candidate at once; the picture "
                          "that \"Use this\" makes is exactly what the box shows.")
         full_var = tk.BooleanVar(value=bool(st.get("cand_full_size", False)))
@@ -3632,6 +4062,11 @@ def run_gui() -> None:
                 return
             show_ = zm > 1.005 or nudge["dx"] or nudge["dy"]       # at zoom 1, centred, the box is the whole picture
             cropnote.set("the yellow box is what the game portrait keeps" if show_ else "")
+            for mw in move_ws:                                       # nothing to nudge when the box is the picture
+                try:
+                    mw.pack(**mw._ps_pack) if show_ else mw.pack_forget()   # type: ignore[attr-defined]
+                except (tk.TclError, AttributeError):
+                    pass
             for c in cells:
                 cvs = c.get("canvas")
                 if not cvs or "rect" not in c:                        # a cropped portrait: nothing to outline
@@ -3895,6 +4330,7 @@ def run_gui() -> None:
         emenu.add_separator()
         emenu.add_command(label="Show the log...", command=open_log)
         emenu.add_command(label="Open the generator's own page...", command=lambda: webbrowser.open(eurl))
+        emenu.add_command(label="Set up the generator...", command=setup_window)
         emenu.add_command(label="Edit settings.json...",
                           command=lambda: open_path(str(here_ / "generator" / "settings.json")))
         ebtn = ttk.Menubutton(erow2, text="Engine \u25be", menu=emenu, width=9)
@@ -4525,7 +4961,7 @@ def run_gui() -> None:
         res = state["res"]
         rows = [r for r in sorted_rows(False) if rowkey(r) in props]
         if not res or not rows:
-            messagebox.showinfo("Portrait Scout", "No portraits proposed yet. Use 'Propose portrait...' or 'Generate...' first.")
+            messagebox.showinfo("Portrait Scout", "No portraits proposed yet. Use 'Propose portrait...' on a gallery card first.")
             return
         d = ask_mod_folder(str(res["mod"]))                          # type: ignore[index]
         if not d:
@@ -4574,6 +5010,11 @@ def run_gui() -> None:
         root.update_idletasks()
         try:
             _build_gallery(rows)
+        except Exception as e:  # noqa: BLE001 - a half-drawn gallery looks like a wrong analysis; say what happened
+            traceback.print_exc()
+            messagebox.showwarning("Portrait Scout", f"The gallery could not be drawn in full:\n\n"
+                                   f"{e.__class__.__name__}: {e}\n\nWhat you see may be only the first few "
+                                   "creatures. The table tab is unaffected.")
         finally:
             loading_var.set("")
             root.update_idletasks()
@@ -4649,6 +5090,14 @@ def run_gui() -> None:
                             highlightbackground="#2e9e4f" if prop else CARD, highlightcolor="#2e9e4f" if prop else CARD)
             card.grid(row=i // per_row, column=i % per_row, padx=4, pady=4, sticky="nsew")   # a row is as tall as its tallest card
             cards.append((card, r))
+            if pick_var.get():                                       # select mode: a box in the corner of the card
+                kx = rowkey(r)
+                cv_ = tk.BooleanVar(value=kx in checked)
+                cb_ = tk.Checkbutton(card, variable=cv_, bg=CARD, activebackground=CARD, highlightthickness=0,
+                                     command=lambda k=kx, v=cv_: (checked.add(k) if v.get() else checked.discard(k),
+                                                                  upd_pick_count()))
+                cb_._ps_var = cv_            # keep it alive: a collected tk variable takes the card down with it
+                cb_.pack(anchor="w")
             img = load_thumb(prop) if prop else None
             shown_field = "prop" if img else ""
             src_mode = hasattr(game, "get_mod")                       # the mod's own files were read
@@ -4721,13 +5170,16 @@ def run_gui() -> None:
             brow = tk.Frame(card, bg=CARD)
             brow.pack(side="bottom", pady=2)
             b1 = tk.Button(brow, text="Change proposal..." if prop else "Propose portrait...", font=("TkDefaultFont", 8),
-                           command=lambda rr=r: propose(rr))
+                           command=lambda rr=r: open_propose(rr))
             b1.pack(side="left")
             b1._copy_label = True                                                          # type: ignore[attr-defined]
-            if generator_module() is not None:
-                bg_ = tk.Button(brow, text="Generate...", font=("TkDefaultFont", 8), command=lambda rr=r: generate_dialog(rr))
-                bg_.pack(side="left", padx=(2, 0))
-                bg_._copy_label = True                                                     # type: ignore[attr-defined]
+            tooltip(b1, "Pick a picture from a file or make one, frame it, and propose it.")
+            dl_g, dl_gw = declone_label(r)
+            if dl_g:
+                db_ = tk.Button(brow, text=dl_g, font=("TkDefaultFont", 8), command=lambda rr=r: toggle_declone(rr))
+                db_.pack(side="left", padx=(2, 0))
+                db_._copy_label = True                                                     # type: ignore[attr-defined]
+                tooltip(db_, dl_gw)
             if prop:
                 b2 = tk.Button(brow, text="x", font=("TkDefaultFont", 8), command=lambda rr=r: clear_prop(rr))
                 b2.pack(side="left", padx=2)
@@ -4748,7 +5200,8 @@ def run_gui() -> None:
         res = state["res"]
         win = tk.Toplevel(root)
         win.title(f"{r['name']} - {r['lines']} line(s)")
-        win.geometry("760x640")
+        win.geometry("900x640")
+        win.minsize(680, 320)
         head = ttk.Frame(win, padding=8)
         head.pack(fill="x")
         img = None
@@ -4809,38 +5262,62 @@ def run_gui() -> None:
             clear_prop(r)
             upd_prop()
 
-        ttk.Button(pf, text="Propose portrait...", command=lambda: propose(r, upd_prop, win)).pack(side="left")
-        if generator_module() is not None:
-            ttk.Button(pf, text="Generate portrait...",
-                       command=lambda: (generate_dialog(r, upd_prop, win), win.lower())).pack(side="left", padx=(4, 0))
-        clr = ttk.Button(pf, text="Clear proposal", command=clear_here)
+        prop_btn = ttk.Button(pf, text="Propose...", command=lambda: (open_propose(r, upd_prop, win), win.lower()))
+        prop_btn.pack(side="left")
+        tooltip(prop_btn, "Pick a picture from a file or make one, frame it, and propose it.")
+        clr = ttk.Button(pf, text="Clear", command=clear_here)
         clr.pack(side="left", padx=4)
+        tooltip(clr, "Forget the portrait proposed for this creature.")
         frame_btn = ttk.Button(pf, text="Frame...", command=lambda: frame_dialog(r, win, upd_prop))
         frame_btn.pack(side="left", padx=(0, 4))
         tooltip(frame_btn, "Choose which part of the proposed picture becomes the portrait. Without it the middle is "
                            "used, cut to the portrait's shape.")
-        same_btn = ttk.Button(pf, text="Use for others...", command=lambda: share_portrait(r, win, upd_prop))
+        same_btn = ttk.Button(pf, text="Share...", command=lambda: share_portrait(r, win, upd_prop))
         same_btn.pack(side="left")
         dl_lbl, dl_why = declone_label(r)
         if dl_lbl:
             dl_btn = ttk.Button(pf, text=dl_lbl, command=lambda: (toggle_declone(r), win.destroy()))
             dl_btn.pack(side="left", padx=(8, 0))
             tooltip(dl_btn, dl_why + "\n\nThey were put in one row only because they share a name and look the same. "
-                            "Creatures that share a creature file or a portrait are never split.")
+                            "Creatures that share a creature file are never split.")
         tooltip(same_btn, "Give the proposed picture to other creatures of the same name, or to the ones that share "
                           "this creature's portrait now. Useful after decloning.")
-        ttk.Label(pf, textvariable=pl, foreground="#1f7a3a").pack(side="left", padx=8)
+        ttk.Label(info, textvariable=pl, foreground="#1f7a3a", wraplength=520, justify="left").pack(anchor="w")
         upd_prop()
-        ttk.Label(info, text="(Clear or export proposals from the Gallery tab.)", foreground="#888").pack(anchor="w")
-        chips = ttk.Frame(info)
-        chips.pack(anchor="w", pady=(2, 0))
-        ttk.Label(chips, text="Click to copy:", foreground="#888").pack(side="left", padx=(0, 4))
-        for kind, names in (("CRE", r["cre_list"]), ("DLG", sorted(set(r["dialogs"])))):
-            for nm in names[:8]:
-                ch = tk.Label(chips, text=nm, fg="#1a5fb4", cursor="hand2",
-                              font=("TkDefaultFont", 9, "bold underline" if (kind == "CRE" and nm in r["cre_known"]) else "underline"))
-                ch.pack(side="left", padx=4)
-                ch.bind("<Button-1>", lambda e, n=nm: copy_text(n))
+        ttk.Label(info, text="(Clear or export proposals from the Proposals tab.)", foreground="#888").pack(anchor="w")
+        chip_head = ttk.Frame(info)                                  # a well-used creature has dozens of these:
+        chip_head.pack(anchor="w", pady=(2, 0))                      # a row would run off the window
+        chips = ttk.Frame(info, padding=(14, 0, 0, 2))
+        names_all = [(kind, nm) for kind, names in (("CRE", r["cre_list"]), ("DLG", sorted(set(r["dialogs"]))))
+                     for nm in names]
+        if names_all:
+            per = 8                                                  # chips per line, wrapped instead of one long row
+            for i in range(0, len(names_all), per):
+                line = ttk.Frame(chips)
+                line.pack(anchor="w")
+                for kind, nm in names_all[i:i + per]:
+                    ch = tk.Label(line, text=nm, fg="#1a5fb4", cursor="hand2",
+                                  font=("TkDefaultFont", 9, "bold underline" if (kind == "CRE" and nm in r["cre_known"])
+                                        else "underline"))
+                    ch.pack(side="left", padx=4)
+                    ch.bind("<Button-1>", lambda e, n=nm: copy_text(n))
+            ctxt = tk.StringVar()
+            n_cre, n_dlg = len(r["cre_list"]), len(set(r["dialogs"]))
+
+            def show_chips(opened: bool) -> None:
+                ctxt.set(("\u25bc" if opened else "\u25b6")
+                         + f" Creature and dialog files ({n_cre} CRE, {n_dlg} DLG) - click one to copy")
+                if opened:
+                    chips.pack(anchor="w", after=chip_head)
+                else:
+                    chips.pack_forget()
+
+            def toggle_chips() -> None:
+                st["chips_open"] = not st.get("chips_open", False)
+                save_settings(st)
+                show_chips(bool(st["chips_open"]))
+            ttk.Button(chip_head, textvariable=ctxt, command=toggle_chips).pack(side="left")
+            show_chips(bool(st.get("chips_open", False)))
 
         def copy_all() -> None:
             win.clipboard_clear()
@@ -5057,7 +5534,7 @@ def run_gui() -> None:
         for r_ in res["rows"]:                                       # a split creature knows the row it came from
             for p_ in r_.get("parts") or []:
                 p_["_parent"] = r_
-        state["gen_row"] = None                                      # the Generate tab belonged to the last analysis
+        state["gen_row"] = None                                      # the Propose tab belonged to the last analysis
         gen_hint()
         props.clear()
         props.update({k: v for k, v in (st.get("proposals", {}).get(res["mod"], {}) or {}).items()          # type: ignore[index]
@@ -5131,24 +5608,28 @@ def run_gui() -> None:
     go_btn.config(command=analyze_clicked)
     save_btn.config(command=save_text)
     csv_btn.config(command=save_csv)
+    refresh()                                                        # the table says what to do before the first run
     root.mainloop()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Creatures / speakers of an installed mod: name, lines, portrait, race, gender, animation.")
     ap.add_argument("--cli", nargs=2, metavar=("GAMEDIR", "MODDIR"), help="no window: analyze and print")
-    ap.add_argument("--out", default="", help="with --cli: also write this text file")
-    ap.add_argument("--csv", default="", help="with --cli: also write this CSV file")
+    ap.add_argument("--out", default="", help="also write this text file")
+    ap.add_argument("--csv", default="", help="also write this CSV file")
     ap.add_argument("--merge-names", action="store_true")
-    ap.add_argument("--source", metavar="MODDIR", default="", help="experimental, no window: read the mod's own files "
+    ap.add_argument("--source", metavar="MODDIR", default="", help="no window: read the mod's own files "
                     "(works before the mod is installed); add --game GAMEDIR to name NPCs of the game")
     ap.add_argument("--game", default="", help="with --source: the game folder (optional)")
     a = ap.parse_args()
     if a.source:
-        txt = source_text(scan_source(a.source, a.game, lambda s: print(s, file=sys.stderr)))
+        res = analyze_source(a.game, a.source, a.merge_names, lambda s: print(s, file=sys.stderr))
+        txt = as_text(res)
         print(txt)
         if a.out:
             Path(a.out).write_text(txt, encoding="utf-8")
+        if a.csv:
+            write_csv(res, a.csv)
         return 0
     if not a.cli:
         run_gui()

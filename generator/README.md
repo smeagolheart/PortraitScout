@@ -8,7 +8,7 @@ so they are not in this repository and never will be. This folder is only the pa
 the prompt, sends it, and turns the picture into a game portrait. You supply the generator - either the private
 copy of Forge described below, or one you already run.
 
-Everything here is optional. Without it Portrait Scout works as before; the **Generate** tab just explains what
+Everything here is optional. Without it Portrait Scout works as before; the **Propose** tab just explains what
 is missing.
 
 ## Setting up the engine (once)
@@ -28,8 +28,9 @@ memory or more.
 
    | File | Copy to | From |
    |---|---|---|
-   | `flux1-dev-bnb-nf4-v2.safetensors` (11.5 GB) | `engine\webui\models\Stable-diffusion\` | [lllyasviel/flux1-dev-bnb-nf4](https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4) on Hugging Face |
-   | `BG_Portrait.safetensors` (38 MB) | `engine\webui\models\Lora\` | [Baldur's Gate 2 Portrait Style Flux](https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux) on Civitai |
+   | `flux1-dev-bnb-nf4-v2.safetensors` (12 GB) | `engine\webui\models\Stable-diffusion\` | [lllyasviel/flux1-dev-bnb-nf4](https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4) on Hugging Face |
+   | `chargen_oil_painting_v2.safetensors` (86 MB) | `engine\webui\models\Lora\` | [Painterly Fantasy Portrait](https://civitai.com/models/850634) on Civitai - **the style Portrait Scout starts with asks for this one** |
+   | `BG_Portrait.safetensors` (38 MB) | `engine\webui\models\Lora\` | [Baldur's Gate 2 Portrait Style Flux](https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux) on Civitai - used by the "BG2 framing, light LoRA" style |
 
    Other models work too: name the checkpoint in `payload.override_settings` and the LoRA in the style prompts
    of `settings.json`.
@@ -72,7 +73,7 @@ Automatic1111 install you already have, SD.Next, a copy on another machine on yo
   the generator was started with `--api-server-stop`.
 - `payload` is sent to the generator untouched, so the model, sampler, steps, size and anything else your
   generator accepts go there - including `override_settings` for the checkpoint.
-- The prompts are yours: edit them in the **Prompt** box in the Generate tab (**Save**, **Save as new style...**,
+- The prompts are yours: edit them in the **Prompt** box on the **Propose** tab (**Save**, **Save as new style...**,
   **Revert to baseline**) or in `styles` here. A style is just a name, a prompt, an optional negative prompt and
   an optional `zoom`.
 - Nothing else in Portrait Scout needs changing, and `portrait_generator.py` itself only needs editing if your

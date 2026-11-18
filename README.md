@@ -1,11 +1,11 @@
 # Portrait Scout
 
-Finds the speaking creatures of an Infinity Engine mod - or of a whole game install (BG1EE, SoD, BG2EE, EET, IWDEE, and classic BG1, BG2, IWD) - and shows who talks, how much, what portrait each one has, and where in the game they turn up. Then it helps you fill the gaps: propose portraits, make new ones with an image generator, and export the lot as a WeiDU mod.
+Finds the speaking creatures of an Infinity Engine mod - or a whole install (BG1EE, SoD, BG2EE, EET, IWDEE, and classic BG1, BG2, IWD) - and shows who talks, how much, what portrait each one has, and where they turn up. Then it helps you fill the gaps: propose portraits, generate new ones, and export the lot as a WeiDU mod.
 
 It only **reads** your game folder. Nothing there is installed, changed or deleted.
 
 | Creature | Lines | Portrait | Race | Gender | Animation | CRE file(s) | Area(s) |
-|---|---|---|---|---|---|---|---|
+|---------------------------------------------------------------------------------|
 | Skie | 21 | SKIEL | Human | Female | Thief Female Human | SKIE | AR0700 Docks District |
 | Urnn Indigospit | 11 | L#SSMAG | Human | Male | Mage Male Human | L#SSMAG | AR1203 Firkraag's Dungeon |
 
@@ -20,65 +20,82 @@ It only **reads** your game folder. Nothing there is installed, changed or delet
 
 ## Use
 
-1. Copy `portrait_scout.py` into the game folder and run `python portrait_scout.py` there. Both folders are remembered.
-2. Pick the **Mod folder**. Leave it empty, or pick the game folder, to list the whole install.
-3. Press **Analyze** (a minute or two on a large install).
+1. Put `portrait_scout.py` in a folder of its own and run `python portrait_scout.py` there. It writes its reports, proposals, generated pictures and any mod it builds beside itself, so keep it out of the game folder.
+2. Set the **Game folder** (the one with `chitin.key`). It is remembered, along with the mod folder.
+3. Pick the **Mod folder**. Leave it empty, or pick the game folder, to list the whole install.
+4. Press **Analyze** (can take a minute or two on a large install).
 
-| Tab | What it holds |
-|---|---|
-| **Table** | Every speaker, sortable, with lines, portrait, race, gender, animation, creature files and areas. |
-| **Gallery** | The same creatures as cards with their portraits, 200 to a page. |
-| **Generate** | Make a portrait for the selected creature, or any portrait at all. |
-| **Proposals** | Everything you have chosen a picture for, and the exports. |
+| Tab                 | What it holds |
+|-------------------------------------|
+| **Gallery**         | Creatures as cards with their portraits, 200 to a page. Opens here. |
+| **Table**           | Every speaker, sortable, with lines, portrait, race, gender, animation, creature files and areas. |
+| **Propose**         | Choose a picture for a creature, or make one, and crop it to a game portrait. |
+| **Proposals**       | Everything you have chosen a picture for, and the exports. |
 
-**Search** (or **Ctrl+F**) filters Table and Gallery as you type; every word must match. The gallery's **Sort** box orders by lines or by name, either way round (clicking a table heading does the same). **Party NPCs**, unticked, hides the joinable ones - the game's and the mods' alike. Both are remembered.
+**Search** (or **Ctrl+F**) filters Table and Gallery; every word must match. **Sort** orders by lines or name, either way round - so does clicking a table heading. **Party NPCs** off hides the joinable ones. Both are remembered.
 
-Creatures put in one row only because they share a name and look alike - a mod's 27 "Kobold Commoner" creatures, say - can be **listed one by one**, so each takes a portrait of its own: the button is in the creature's lines window, and in the right-click menu of its portrait. It is remembered per creature, and creatures that share a creature file or a portrait are never split. Needs the installed-game reading. Click a creature or CRE name to copy it for NearInfinity, and right-click a portrait to save it. **Double-click** a creature for its lines: **Copy** one or all, **▶ Play** the voiced ones, search them, and read "Where this comes from" for speakers that needed working out.
+**Double-click** a creature for its lines: play the voiced ones, search them, and see "Where this comes from" when a speaker had to be worked out. Click a creature or CRE name to copy it for NearInfinity; right-click a portrait to save it.
 
-A `<ModName>-creatures.txt` report is saved next to the script; **Save as text file...** and **Save as CSV...** save elsewhere.
+Creatures merged only because they share a name and look alike - a mod's 27 "Commoner" - can be **listed one by one** (decloned), so each gets its own portrait from a button on the gallery card, in the lines window and in the portrait's right-click menu; remembered per creature. Creatures sharing a single creature file are never split. Needs the installed-game reading.
 
-Dialogs of one NPC (a joined-party dialog, several creature files) are shown as one row when they share a creature file or portrait, or do not differ in race, gender and animation. **Merge same names** forces this by name alone - leave it off when different creatures share a name, though identical ones (several plain "Peasant" creatures) still merge, and their Area(s) column is the giveaway.
+Two creatures **of the same name** become one row when they share a creature file or the same portrait file, or do not differ in race, gender and animation - so two different "Guard" creatures stay apart. Creatures with different names are never merged, however alike they look.
+**Merge same names** forces it by name alone - leave it off when different creatures share a name.
+
+A `<ModName>-creatures.txt` report is written next to the script each time, and **Save as text file...** saves that same report elsewhere: the table, plus a list of portraits used by several creatures and a count of how many have none. **Save as CSV...** writes more per creature instead - the small portrait on its own, the pixel size of each, the dialog files, and a `notes` column saying how an uncertain speaker was worked out.
 
 ## Reading the mod's own files
 
-Tick **Read the mod's own files** (marked *install not needed*) to work from the mod's `.d`, `.tra`, `.tp2`, `.cre`, `.baf` and `.are` files instead of matching its text against the installed game.
+Tick **Read the mod's own files** (*install not needed*) to work from the mod's `.d`, `.tra`, `.tp2`, `.cre`, `.baf` and `.are` files instead of matching its text against the installed game.
 
-- The mod does not have to be installed, and every component is counted.
-- Every line comes with its speaker, so short stock lines ("Yes.") are not credited to the wrong creature.
-- The game folder is still needed: it names the NPCs the mod only adds lines to (Imoen, Jaheira...), through party tables, scripts, other mods' installers and, on EET, its own name tables.
-- Dialogs of NPCs from mods that are not installed stay `Unknown (DIALOGNAME)`.
-- **Show mod's own portraits only** switches the gallery to the pictures the mod itself ships, instead of what the game shows now.
+- The mod need not be installed, all components get counted.
+- Every line comes with its speaker (Stock lines ("Yes.") are not credited to the wrong creature).
+- The game folder is still needed: it names the NPCs the mod only adds lines to (Imoen, Jaheira...).
+- Crossmod NPC dialogs that are not installed are undetectable; they show as `Unknown (DIALOGNAME)`.
+- **Show mod's own portraits only** switches the gallery to the pictures the selected mod itself ships.
 
-## Generating portraits (optional)
+## Generating portraits (optional) (**No image generator and no models come with Portrait Scout**)
 
-The **Generate** tab works on the selected creature, or on nobody in particular - pick Race, Gender and Class and it writes the description for you.
+The **Propose** tab works on the selected creature, or can be used to freely generate images - pick Race, Gender and Class and it writes the description for you.
 
-> **No image generator and no models come with Portrait Scout.** They are many gigabytes and separately licensed. You supply one: a copy of [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) in an `engine` folder, or any generator with an Automatic1111 / Forge API, including one you already run. **The Generate tab shows the steps with the download links as buttons**, and [generator/README.md](generator/README.md) has the long version. About 16 GB of disk and an 8 GB graphics card are comfortable; 6 GB works, slower.
+Image Generators are large files and separately licensed. 
 
-- **Description** comes from the creature's gender, race and animation, plus a face drawn from the creature's own file - shape, nose, hair and sometimes a scar or a missing tooth. The same creature always gets the same face, and creatures sharing a portrait share it, so a decloned crowd comes out as a crowd of different people. Edit the text freely; what you type wins.
-- **Age** and **Look** shade that face - *Old*, *Weathered*, *Blotchy and freckled* and so on. Flux paints clean young skin unless told otherwise, so they earn their place.
-- **Background** is used by every style. `{random}` in it picks one of the muted earth schemes in `background_palettes` per picture, so a few thousand portraits do not all sit against the same wash.
-- **Candidates**, **Style** and **LoRA** sit on the same row. LoRA off takes the `<lora:...>` part out, which matters for creatures with features of their own - horns, green skin - that a LoRA tends to paint away.
-- **Start** and **Stop** run the generator. **Engine** holds the rest: keep it open after Portrait Scout closes, give it a window of its own, show its log, open its own page, edit `settings.json`.
-- **Prompt** and **Generator settings** open the words sent to the generator and the model, picture size, steps, sampler and CFG. **Copy prompt** puts both prompts on the clipboard. **Save** keeps changes, **Revert to baseline** puts a built-in style back.
-- Click a candidate for full size, right-click to save a copy, **Discard** to delete it. **Full size** off shows every candidate the same size for comparing; on shows each at its own.
-- **Use this** crops a candidate to a game portrait - **speaker 169x266** or **large 210x330** from the size box - and proposes it. **Head zoom** above 1 crops closer, with a yellow box showing what is kept, and the arrows move that box on every candidate at once. Making a new game portrait replaces the one before it.
+Supply your own, suggested working steps below: 
+
+Download [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) in an `engine` folder (or any generator with an Automatic1111 / Forge API)
+
+ **The Propose tab shows the steps with download links as buttons**; [generator/README.md](generator/README.md) has more detailed instructions. 
+ Typically, 16 GB of disk and an 8 GB card are comfortable; 6 GB of graphics RAM works, though slower.
+
+- **Description** comes from the creature's gender, race and animation, plus a face drawn from its own file - shape, nose, hair, sometimes a scar. The same creature always gets the same face, and creatures sharing a portrait share it, so a decloned crowd comes out as different people. Edit it freely; what you type wins.
+- **Race**, **Gender** and **Class** start from the creature's own file and do nothing until you change one, which rewrites the description. With no creature selected they are the whole description.
+- **Age** and **Look** shade that face. Flux paints clean young skin unless told otherwise, so *Weathered* and *Blotchy and freckled* might help if aiming for something different.
+- **Background** is what is behind the creature in the image. `{random}` picks one of the muted earth schemes in `background_palettes` for generating a generic Baldur's Gate style background.
+- **LoRA** off drops the `<lora:...>` part - worth it for creatures with features of their own, like horns or green skin, that a LoRA might paint away.
+- **Select image...** takes a picture you already have. With no generator set up, **Generate** is greyed and a notice offers **Set it up...**; choosing a file still works. **Hide generator settings** folds away the description, the pickers, the background and that notice, for when you are only working from files.
+- **Engine** holds the generator's own settings such as: keep it running after Portrait Scout closes, give it a window, show its log, open its page, edit `settings.json`.
+- **Prompt** and **Generator settings** hold the words sent and the model, size, steps, sampler and CFG, **Revert to baseline** restores a built-in style.
+- **Full size**, off, shows every candidate at one size for comparing; right-click an image to save a copy.
+- **Use this** crops a candidate to **169x266** or **210x330** and proposes it. **Head zoom** above 1 crops closer. A yellow box shows what would be kept; use arrows buttons to move that box (affects all candidates at once).
 
 ## Proposing portraits
 
-**Propose portrait...** on a gallery card or in a lines window picks an image for a creature; it shows with a green border. A creature's lines window names the others using its portrait, and **Use for others...** hands the proposed picture to any of them - a quick way to give one new portrait to a whole decloned bunch. Proposals are kept for each thing you analyze and come back when you analyze it again - the **Proposals** tab lists them, with **Saved sets...** for the ones kept from before.
+**Propose portrait...** on a gallery card or in a lines window opens the **Propose** tab for that creature, where **Select image...** takes a picture from a file and **Generate** makes one. Either way it lands with the candidates, so the crop box applies, and what you keep shows on the card with a green border. A lines window names the others using that portrait, and **Use for others...** hands the picture to any of them - handy after decloning. Proposals are kept per analyzed mod and come back when you analyze it again; the **Proposals** tab lists them, with **Saved sets...** for earlier ones.
 
-Any picture will do - **Create mod...** cuts it to the portrait's shape, shrinks it to the chosen size and saves it as a 24-bit BMP named after the creature file. BMP and PNG are handled on their own; `pip install pillow` adds JPG and the rest, and sharper shrinking.
+### Proposing in bulk
 
-**Export proposed changes...** writes a to-do list, one line per creature file:
+**Propose from folder...** matches a folder of pictures to creatures by name and proposes the lot in one press. Portrait projects name a picture after its creature file.  For example, it would match `ACHEN.bmp` to `ACHEN.CRE`.  If you use the mod creator function, **Create mod** writes `ACHEN.bmp` to `ACHEN.CRE`, so an exported set can be read straight back in. It also matches the *portrait* name, so `HALFG3.bmp` covers every creature wearing HALFG3. Subfolders are read; proposals manually selected not replaced with files in folders using this method. Finally, you see what would happen *7,589 pictures, matching 1,804 of the 3,357 creatures listed* before writing anything.
 
-```
-B!ASTER.CRE  Aster -> BB12020.bmp   [now: none]   [areas: AR1000 Athkatla (placed)]
-```
+**Select**, in the gallery toolbar, puts a tick box on every card, with **All**, **Proposals** and **None**. Ticks survive sorting and paging. **Use portraits they have now** proposes, for each ticked creature, the portrait it is wearing in your game, copied out of `override`. This could be useful to make sure someone who installs the mod gets all the same portraits that you see in the gallery. A creature can look covered on your install only because another mod put a picture there; a mod built from that has a hole in it for everyone else. This finds them.
+
+Pictures that come from baseline game installed files aren't included.  Hand-picked proposals aren't overwritten. You will get a report that shows how many were taken, how many were already the game's, and how many have no portrait at all. That last number is the one to act on: those are the gaps nothing has filled.
+
+Any picture will do - **Create mod...** cuts each one to the portrait's shape, shrinks it to the selected size and saves it as a 24-bit BMP named after the creature file, so a square photo is cropped rather than squeezed. BMP and PNG work on their own; `pip install pillow` adds JPG and the rest.
+
+**Export proposed changes...** writes a to-do list, one line per creature file, without creating a WeiDU mod.
 
 ### Create mod
 
-**Create mod...** turns the proposals into a ready-to-install WeiDU mod. It asks for a name and writes `mod\<name>\` next to `portrait_scout.py`, with a copy of WeiDU beside it (taken from your game folder):
+**Create mod...** turns your proposals into a ready-to-install WeiDU mod. It asks for a name and writes `mod\<name>\` next to `portrait_scout.py`, with a copy of WeiDU beside it (taken from your game folder):
 
 ```
 mod/
@@ -91,35 +108,27 @@ mod/
     portraits/blackhearts/      b!aster.bmp ...  portraits.txt
 ```
 
-- As in the HPS portraits mod, each picture is named after its creature file and written into both portrait slots. Whatever you proposed is converted on the way in, so a square photo or a PNG comes out as a correctly shaped game portrait.
-- Each set - one per analyzed mod - is its own choice in the installer, offered twice: give the portraits to every creature listed, or only to those with none. Creature files not in the game are skipped.
-- Edit `portraits/<set>/portraits.txt` and create the mod again to change what is installed, or edit the `.tp2` by hand.
-- Creating it again with the same name updates that mod; another name starts a new one.
+- Each picture is named after its creature file and written into both portrait slots. 
+- Each set - one per analyzed mod - is its own choice in the installer, offered twice: give the portraits to every creature listed, or only to those with none.  
+- Creatures not present in your installed game will be skipped.
+
+- You can manually edit `portraits/<set>/portraits.txt` and create the mod again to change what installs. Same name updates that mod; another name starts a new one.
 
 ## Columns
 
 ![Portrait Scout table view](screenshot2.png)
 
-- **Lines**: NPC lines the creature speaks (player replies excluded).
+- **Lines**: NPC lines spoken (player replies excluded).
 - **Portrait**: large portrait name, or `(none)`, `(file missing)`, `(creature not found)`.
 - **Race / Gender / Animation**: from the creature file and the game's `race.ids` / `animate.ids`.
-- **Area(s)**: the maps the creature appears in, by code and world-map name - placed by the area file, made by a spawn point, or created by the area's script. Creatures that only appear through a dialog or cutscene have none.
+- **Area(s)**: maps the creature appears in, by code and world-map name - placed by the area file, made by a spawn point, or created by its script. Creatures seen only in a dialog or cutscene have none.
 - **CRE file(s)**: creature files sharing the dialog. **Bold** (`[brackets]` in the table) means the mod ships or names that file.
 - **Proposed portrait**: your proposal (table only).
 
-The text report also lists portraits shared by several creatures, and how many have none.
-
-## Command line
-
-```
-python portrait_scout.py --cli "C:\Games\BG2EE" "C:\Games\BG2EE\MyMod" --out creatures.txt --csv creatures.csv
-python portrait_scout.py --source "C:\Games\BG2EE\MyMod" --game "C:\Games\BG2EE" --out speakers.txt
-```
-
-`--cli` analyzes as the window does (`--merge-names` merges same-named creatures); `--source` reads the mod's own files.
 
 ## Notes
 
-- It reads `chitin.key`, the archives, override and `dialog.tlk` directly. Only plain (uncompressed) archives are read, as in the Enhanced Editions.
-- Without **Read the mod's own files**, matching is by text: accurate, not perfect. Unlinked speakers show as `Unknown (DIALOGNAME)`, and the lines window and the CSV `notes` column explain what is known.
+- It reads `chitin.key`, the archives, override and `dialog.tlk` directly. Only uncompressed archives, as in the Enhanced Editions.
+- Without **Read the mod's own files**, matching is by text: accurate, not perfect. Unlinked speakers show as `Unknown (DIALOGNAME)`; the lines window and the CSV `notes` column say what is known.
+- There is a command line for scripting and debugging - `python portrait_scout.py --help` lists it.
 - Folders, proposals and your choices live in `portrait_scout.settings.json` next to the script; delete it to start over.
