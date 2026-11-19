@@ -351,16 +351,18 @@ def term_names(settings: dict, which: str) -> List[str]:
 
 
 def face_key(row: dict) -> str:
-    """What a creature's face is drawn from. The portrait file comes first, so creatures that share a portrait
-    (Ulua and Arbolon and the eighteen others on FARM) share a face; otherwise the creature's own CRE name."""
+    """What a creature's face is drawn from: its own creature file. A shared portrait is not proof of one person -
+    a stock picture like FARM is worn by twenty unrelated commoners - so it is only used when there is no creature
+    file at all, and the name only when there is neither."""
+    cres = row.get("cre_list") or row.get("cres") or []
+    if cres:
+        return "c:" + str(cres[0]).upper()
     for k in ("large_name", "small_name"):
         v = str(row.get(k) or "").strip()
         if v:
             return "p:" + v.upper()
-    cres = row.get("cre_list") or row.get("cres") or []
-    if cres:
-        return "c:" + str(cres[0]).upper()
-    return ("n:" + str(row.get("name") or "").strip().upper()) if row.get("name") else ""
+    nm = str(row.get("name") or "").strip().upper()
+    return "n:" + nm if nm and nm != "ANY PORTRAIT" else ""        # the stand-in name is not a creature
 
 
 def creature_seed(key: str) -> int:

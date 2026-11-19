@@ -3490,6 +3490,8 @@ def run_gui() -> None:
 
     def generate_dialog(r: Optional[dict] = None, after: object = None, parent: object = None) -> None:
         """The Propose tab, with the problem shown in it if anything goes wrong while building it."""
+        if view_var.get() in ("gallery", "table"):                   # where "Back" should return to
+            state["gen_from"] = view_var.get()
         try:
             build_generate(r, after, parent)
         except Exception as e:  # noqa: BLE001
@@ -3534,6 +3536,12 @@ def run_gui() -> None:
         root.lift()
         head_ = ttk.Frame(dlg, padding=(10, 6, 10, 0))
         head_.pack(fill="x")
+        if not generic:                                              # with no creature there is nothing to go back to
+            back_to = str(state.get("gen_from") or "gallery")
+            back_b = ttk.Button(head_, text="\u25c0 " + ("Gallery" if back_to == "gallery" else "Table"), width=10,
+                                command=lambda: (view_var.set(back_to), show_view()))
+            back_b.pack(side="left", padx=(0, 10))
+            tooltip(back_b, "Back to the creature you came from, with whatever you proposed on its card.")
         ttk.Label(head_, text=r["name"], font=("TkDefaultFont", 11, "bold")).pack(side="left")
         if not generic:
             ttk.Button(head_, text="Unselect", width=9, command=lambda: generate_dialog()).pack(side="left", padx=(8, 0))
@@ -3725,6 +3733,14 @@ def run_gui() -> None:
                 filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tga *.tif *.tiff"), ("All files", "*.*")])
             if not q:
                 return
+            try:                                                     # a copy: Discard deletes candidates, and the
+                folder.mkdir(parents=True, exist_ok=True)            # picture you picked is not ours to delete
+                dst = folder / f"{stem}_f{int(time.time())}{Path(q).suffix.lower()}"
+                shutil.copyfile(q, dst)
+                q = str(dst)
+            except OSError as e:
+                messagebox.showwarning("Portrait Scout", f"Could not copy {Path(q).name} into {folder} ({e}).\n\n"
+                                       "It is used where it lies instead - take care with Discard.", parent=dlg)
             same_q = lambda x: os.path.normcase(os.path.normpath(x))  # noqa: E731
             if not any(same_q(c["path"]) == same_q(q) for c in cells):
                 add_candidate(os.path.normpath(q))
@@ -3830,7 +3846,7 @@ def run_gui() -> None:
         size_shown()
         tooltip(size_box, "The two sizes the game uses: 169x266 for the small portrait a speaker shows, 210x330 for "
                           "the large one. Type your own in the boxes to the left for anything else.")
-        ttk.Label(crow, text="Head zoom:").pack(side="left")
+        ttk.Label(crow, text="Zoom:").pack(side="left")
         z_box = ttk.Spinbox(crow, from_=1.0, to=2.5, increment=0.1, width=4, format="%.1f", textvariable=zoom_var)
         z_box.pack(side="left", padx=(4, 8))
         tooltip(z_box, "How much closer the .bmp is than the picture (1 = the whole picture, which is already the "
@@ -3865,7 +3881,7 @@ def run_gui() -> None:
             mv_.pack(**mv_._ps_pack)                                 # type: ignore[attr-defined]
             tooltip(mv_, "Move the crop box on every candidate at once. \"Middle\" puts it back.")
             move_ws.append(mv_)
-        mid_btn = ttk.Button(crow, text="Middle", width=7, command=lambda: shift(0, 0))
+        mid_btn = ttk.Button(crow, text="Mid", width=4, command=lambda: shift(0, 0))
         mid_btn._ps_pack = {"side": "left", "padx": (4, 8)}          # type: ignore[attr-defined]
         mid_btn.pack(**mid_btn._ps_pack)                             # type: ignore[attr-defined]
         move_ws.append(mid_btn)
@@ -4134,18 +4150,30 @@ def run_gui() -> None:
             info = {"path": path, "cell": cell, "image": None}
             done_bmp = path.lower().endswith(".bmp")                 # a game portrait made from one of the candidates
             try:
-                if done_bmp:
-                    ppm = bmp_to_ppm(open(path, "rb").read(), 1)
-                    if not ppm:
-                        raise tk.TclError("not a picture")
-                    pi = tk.PhotoImage(data=ppm)
+                pil = None
+                try:                                                 # jpg, webp, tga... Tk reads none of them
+                    from PIL import Image, ImageTk
+                    pil = Image.open(path).convert("RGB")
+                except Exception:  # noqa: BLE001 - no Pillow, or a format it will not open
+                    pil = None
+                if pil is not None:
+                    box_ = (CAND_W, CAND_H) if not full_var.get() else (10_000, 300)
+                    sc = min(box_[0] / max(1, pil.width), box_[1] / max(1, pil.height), 1.0)
+                    sm = pil.resize((max(1, round(pil.width * sc)), max(1, round(pil.height * sc))))
+                    pi, k = ImageTk.PhotoImage(sm), (1.0 / sc if sc else 1.0)
                 else:
-                    pi = tk.PhotoImage(file=path)
-                if full_var.get():                               # each at its own size
-                    k = max(1, -(-pi.height() // 300))
-                    pi = pi.subsample(k, k) if k > 1 else pi
-                else:                                                # all the same, so they compare side by side
-                    pi, k = fit_card(pi, path)
+                    if done_bmp:
+                        ppm = bmp_to_ppm(open(path, "rb").read(), 1)
+                        if not ppm:
+                            raise tk.TclError("not a picture")
+                        pi = tk.PhotoImage(data=ppm)
+                    else:
+                        pi = tk.PhotoImage(file=path)
+                    if full_var.get():                               # each at its own size
+                        k = max(1, -(-pi.height() // 300))
+                        pi = pi.subsample(k, k) if k > 1 else pi
+                    else:                                            # all the same, so they compare side by side
+                        pi, k = fit_card(pi, path)
                 cvs = tk.Canvas(cell, width=pi.width(), height=pi.height(), highlightthickness=0, cursor="hand2")
                 cvs.create_image(0, 0, image=pi, anchor="nw")
                 if not done_bmp:                                     # what "Use this" would keep at the settings above
@@ -4223,14 +4251,15 @@ def run_gui() -> None:
 
         def discard_all() -> None:
             try:
-                every = [str(q) for q in folder.glob(f"{stem}_c*.png")] + [str(q) for q in folder.glob(f"{stem}_c*.bmp")]
+                every = [str(q) for q in folder.glob(f"{stem}_c*.png")] + [str(q) for q in folder.glob(f"{stem}_c*.bmp")] \
+                    + [str(q) for q in folder.glob(f"{stem}_f*") if q.is_file()]   # pictures brought in from a file
             except OSError:
                 every = []
             if not every:
                 gstat.set("Nothing to discard.")
                 return
             discard(every, f"Delete all {len(every)} generated picture(s) for {r['name']}? This cannot be undone.")
-        ttk.Button(crow, text="Discard all", command=discard_all).pack(side="left", padx=(10, 0))
+        ttk.Button(erow2, text="Discard all", command=discard_all).pack(side="right", padx=(10, 12))
 
         def done(err: str) -> None:
             status.set(f"Portrait for {r['name']}: " + (err if err else "candidates ready"))
@@ -5262,7 +5291,8 @@ def run_gui() -> None:
             clear_prop(r)
             upd_prop()
 
-        prop_btn = ttk.Button(pf, text="Propose...", command=lambda: (open_propose(r, upd_prop, win), win.lower()))
+        # the lines window has done its job once you are choosing a picture: it closes rather than lurking behind
+        prop_btn = ttk.Button(pf, text="Propose...", command=lambda: (win.destroy(), open_propose(r, None, root)))
         prop_btn.pack(side="left")
         tooltip(prop_btn, "Pick a picture from a file or make one, frame it, and propose it.")
         clr = ttk.Button(pf, text="Clear", command=clear_here)
