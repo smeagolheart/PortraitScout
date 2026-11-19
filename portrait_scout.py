@@ -387,6 +387,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
     progress("Reading creatures...")
     cre_by_dlg: Dict[str, List[dict]] = {}
     cre_by_name: Dict[str, dict] = {}
+    cre_by_script: Dict[str, List[dict]] = {}
     cres = game.names(T_CRE)
     for k, cn in enumerate(cres):
         if k % 1000 == 0:
@@ -396,14 +397,44 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
             continue
         info = {"cre": cn, "long": struct.unpack_from("<i", b, 8)[0], "short": struct.unpack_from("<i", b, 12)[0],
                 "anim": struct.unpack_from("<I", b, 0x28)[0], "small": _r8(b, 0x34), "large": _r8(b, 0x3C),
-                "race": b[0x272], "cls": b[0x273], "sex": b[0x275], "dialog": _r8(b, 0x2CC).upper()}
+                "race": b[0x272], "cls": b[0x273], "sex": b[0x275], "dialog": _r8(b, 0x2CC).upper(),
+                "colours": list(b[0x2C:0x33]),                       # metal, minor, major, skin, leather, armor, hair
+                "scripts": {_r8(b, o).upper() for o in (0x248, 0x250, 0x258, 0x260, 0x268)} - {""}}
         cre_by_name[cn] = info
         if info["dialog"]:
             cre_by_dlg.setdefault(info["dialog"], []).append(info)
+        for sn in info["scripts"]:
+            cre_by_script.setdefault(sn, []).append(info)
     cre_names_sorted = sorted(cre_by_name)
 
-    def resolve(dlg: str) -> Tuple[List[dict], str, str]:
+    # Some conversations are never named by a creature file: a script says StartDialogue("QBTREC") instead. Those
+    # dialogs have no owner, so find the script that starts each one and credit the creature that runs the script.
+    by_script: Dict[str, List[dict]] = {}
+    script_of: Dict[str, str] = {}
+    orphans = {d for d in per_dlg if d not in cre_by_dlg and d not in cre_by_name and not d.endswith("J")}
+    #                                   a dialog ending in J is a companion's own joined-party conversation, and
+    #                                   other creatures' scripts start it with the companion as the speaker
+    if orphans:
+        progress("Looking for dialogs that scripts start...")
+        names = sorted(cre_by_script)
+        if all((d + ".dlg").lower() in game.over for d in orphans):  # every one of them is a mod file, and a script
+            names = [n for n in names if (n + ".bcs").lower() in game.over]   # still in the archives cannot name it
+        for k, sn in enumerate(names):
+            if k % 500 == 0:
+                progress(f"Looking for dialogs that scripts start... {k}/{len(names)}")
+            sb = game.get(sn, T_BCS)
+            if not sb:
+                continue
+            for d in orphans.intersection(_QUOTED.findall(sb.decode("latin-1").upper())):
+                for inf in cre_by_script[sn]:
+                    if inf not in by_script.setdefault(d, []):
+                        by_script[d].append(inf)
+                script_of.setdefault(d, sn)
+
+    def by_name(dlg: str) -> Tuple[List[dict], str, str]:
         """(creature files, how): 'dialog' = the creature's own dialog field points here, 'name' = same file name,
+        'script' = no creature names it, but a script a creature runs starts it, 'scriptname' = a creature runs a
+        script of the same name,
         'related' = the dialog of the same NPC (VALYGARJ -> VALYGAR), 'guess' = matched by name similarity,
         '' = not found. The third value is the related dialog."""
         if dlg in cre_by_dlg:
@@ -441,7 +472,21 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
                         return [cre_by_name[cn]], "guess", ""
         return [], "", ""
 
+    def resolve(dlg: str) -> Tuple[List[dict], str, str]:
+        """What the creature files say first; the scripts only where a name match would be a guess. A companion's
+        own dialog is named by plenty of other creatures' scripts, so the scripts must not outrank a real match -
+        but a creature that runs the script is better evidence than a name that merely starts the same way."""
+        got = by_name(dlg)
+        if got[1] not in ("", "guess"):                              # dialog, name, related: nothing beats those
+            return got
+        if dlg in by_script:                                         # a script starts it; its owner is the speaker
+            return by_script[dlg], "script", script_of.get(dlg, "")
+        if dlg in cre_by_script:                                     # a creature runs a script of the same name
+            return cre_by_script[dlg], "scriptname", dlg
+        return got
+
     race_ids, anim_ids = game.read_ids("RACE"), game.read_ids("ANIMATE")
+    pal = palette_rgb(game)                                          # the game's own colour ramps, for what they wear
 
     def strip_name(strref: int) -> str:
         return _COLOR.sub(r"\1", tlk.text(strref)).strip() if strref >= 0 else ""
@@ -476,6 +521,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
                 r["sex"] = SEX_NAMES.get(c["sex"], "")
                 an = anim_ids.get(c["anim"]) or anim_ids.get(c["anim"] & 0xFF00) or ""
                 r["anim"] = nice(an) or (f"0x{c['anim']:04X}" if c["anim"] else "")
+                r["colours"] = creature_colours(c.get("colours") or [], pal)
     # one row per NPC: dialogs of the same-named creature are one row when they share a creature file or portrait, or
     # do not differ in race / gender / animation (two different "Guard" creatures stay apart)
     merged: Dict[str, List[dict]] = defaultdict(list)
@@ -545,7 +591,18 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
     for r in out:
         notes: List[str] = []
         for dn, how in r["how"]:
-            if how not in ("", "guess", "related"):
+            if how not in ("", "guess", "related", "script", "scriptname"):
+                continue
+            if how == "scriptname":
+                notes.append(f"No creature file points at dialog {dn}, but {', '.join(r['cre_list'])} runs a script "
+                             f"of that same name, so the conversation is that creature's. Mods name a creature's "
+                             "script and its extra dialog alike, and start the dialog from the script.")
+                continue
+            if how == "script":
+                notes.append(f"No creature file points at dialog {dn}. The script {r['via'].get(dn, '')} starts it, "
+                             f"and these creature files run that script: {', '.join(r['cre_list'])}. Scripts start "
+                             "conversations this way for quest scenes and cutscenes, so the lines belong to that "
+                             "creature even though its dialog field names a different file.")
                 continue
             where = "override folder" if (dn + ".dlg").lower() in game.over else "the game's own archives"
             if how == "related":
@@ -754,6 +811,7 @@ def parse_d(text: str) -> Tuple[List[Tuple[str, str, str, str]], List[Tuple[str,
 _TRA_RE = re.compile(r"@(-?\d+)\s*=\s*(~~~~~.*?~~~~~|~[^~]*~|\"[^\"]*\")(?:\s*\[([^\]\n]*)\])?", re.S)
 _TP2_STR = r"(?:~[^~]*~|\"[^\"]*\")"
 _COPY_RE = re.compile(r"\bCOPY(?:_EXISTING|_LARGE)?\b[ \t+\-]*((?:\s*" + _TP2_STR + r"){2,})", re.I)
+_QUOTED = re.compile(r'"([A-Z0-9_#!\-]{2,8})"')
 _RES_VAR = re.compile(r"%(DEST|SOURCE)_(?:RES|BASE)%", re.I)   # WeiDU: the copied file's own name
 _DEFPM_RE = re.compile(r"\bDEFINE_PATCH_MACRO\s+[~\"]([^~\"]+)[~\"]", re.I)
 _LPM_RE = re.compile(r"\b(?:LAUNCH_PATCH_MACRO|LPM)\s+[~\"]([^~\"]+)[~\"]", re.I)
@@ -1686,6 +1744,107 @@ def add_areas(rows: List[dict], game: Optional["Game"], text: Optional[Callable[
             r.setdefault("origin", []).append("Appears in: " + ", ".join(
                 f"{a}{' ' + nm if nm else ''} ({how})" for a, nm, how in r["areas"][:40])
                 + (f" and {len(r['areas']) - 40} more" if len(r["areas"]) > 40 else ""))
+
+
+_COLOUR_SLOTS = ("metal", "minor", "major", "skin", "leather", "armor", "hair")
+
+
+def _hsv(rgb: Tuple[int, int, int]) -> Tuple[float, float, float]:
+    r, g, bl = rgb
+    mx, mn = max(rgb), min(rgb)
+    v, c = mx / 255.0, (mx - mn) / 255.0
+    if mx == mn:
+        h = 0.0
+    elif mx == r:
+        h = (60 * ((g - bl) / (mx - mn))) % 360
+    elif mx == g:
+        h = 60 * (2 + (bl - r) / (mx - mn))
+    else:
+        h = 60 * (4 + (r - g) / (mx - mn))
+    return h, c, v
+
+
+def _rgb_word(rgb: Tuple[int, int, int], slot: str = "cloth") -> str:
+    """A plain name for a colour, worded for what wears it: hair, skin, metal or cloth."""
+    h, c, v = _hsv(rgb)
+    if slot == "skin":                                               # the ramp is a skin tone, not a garment
+        if c > 0.18 and not 5 <= h < 50:                             # orcs, goblins, drow: skin that is not flesh
+            return _rgb_word(rgb) + " skin"
+        if c < 0.07 and v < 0.55:                                    # a grey, bloodless ramp: drow, duergar, undead
+            return ("deep charcoal-grey skin the colour of wet slate" if v < 0.30 else
+                    "charcoal-grey skin the colour of wet slate" if v < 0.45 else
+                    "ashen grey skin")                               # a bare colour word reads as pallor, so the
+        #                                                              dark end has to say what it looks like
+        return ("deep brown skin, nearly black" if v < 0.30 else "dark brown skin" if v < 0.46 else
+                "brown skin" if v < 0.60 else "olive skin" if v < 0.72 and h < 50 else
+                "tanned skin" if v < 0.82 else "fair skin")
+    if slot == "hair":
+        if c < 0.12 or (not 0 <= h < 70 and c < 0.45):               # a cool, washed-out ramp is silver or white
+            if 150 <= h < 260 and v > 0.45:                          # hair in a sprite, not a dye job
+                return "silver-white hair" if v > 0.52 else "steel grey hair"
+            return "black hair" if v < 0.30 else "grey hair" if v < 0.75 else "white hair"
+        if v < 0.30:
+            return "black hair"
+        if h < 20:
+            return "auburn hair" if v < 0.65 else "red hair"
+        if h < 45:
+            return "dark brown hair" if v < 0.55 else "brown hair" if v < 0.75 else "sandy hair"
+        if h < 70:
+            return "blond hair"
+        return "hair dyed " + _rgb_word(rgb)                         # strong green or purple: a mod meant that
+    if slot == "metal":
+        if c < 0.12:
+            return "dark iron" if v < 0.40 else "steel" if v < 0.78 else "silver"
+        return ("bronze" if v < 0.55 else "gold") if h < 60 else _rgb_word(rgb) + " metal"
+    if c < 0.10:                                                     # cloth and leather
+        return "black" if v < 0.18 else "dark grey" if v < 0.40 else "grey" if v < 0.72 else "white"
+    if 25 <= h < 55:
+        base = "brown" if v < 0.55 else "gold"
+    else:
+        base = ("red" if h < 12 else "orange" if h < 25 else "yellow" if h < 70 else "green" if h < 160 else
+                "teal" if h < 195 else "blue" if h < 255 else "purple" if h < 290 else
+                "magenta" if h < 330 else "red")
+    if base in ("brown", "gold"):
+        return base
+    shade = "dark " if v < 0.42 else "pale " if v > 0.80 and c < 0.45 else "deep " if c > 0.70 and v < 0.78 else ""
+    return (shade + base).strip()
+
+
+def palette_rgb(game: "Game") -> Dict[int, Tuple[int, int, int]]:
+    """index -> RGB, read from the game's MPALETTE.BMP (12 shades a row, one row per index)."""
+    out: Dict[int, Tuple[int, int, int]] = {}
+    b = game.get("MPALETTE", T_BMP)
+    try:
+        if not b or b[:2] != b"BM":
+            return out
+        off = struct.unpack_from("<I", b, 10)[0]
+        _hs, w, h, _pl, bpp, _c = struct.unpack_from("<IiiHHI", b, 14)
+        if bpp != 24 or w < 1:
+            return out
+        stride = ((w * 3) + 3) // 4 * 4
+        rows = abs(h)
+        for idx in range(min(256, rows)):
+            y = rows - 1 - idx if h > 0 else idx                     # bottom-up unless the height is negative
+            i = off + y * stride + min(w - 1, 6) * 3                 # a middle shade of the ramp
+            if i + 2 < len(b):
+                out[idx] = (b[i + 2], b[i + 1], b[i])                # keep the colour; the slot decides the words
+    except (struct.error, IndexError, ValueError):
+        return out
+    return out
+
+
+def creature_colours(raw: List[int], pal: Dict[int, Tuple[int, int, int]]) -> Dict[str, str]:
+    """The seven colour bytes of a creature file as words: what it wears, its hair and its skin. The sprite the
+    player sees is painted from these, so a portrait that matches them looks like the same character."""
+    out: Dict[str, str] = {}
+    if not pal or len(raw) < 7 or len(set(raw[:7])) <= 1:
+        return out                                                   # all the same (usually all zero): not set up
+    for i, slot in enumerate(_COLOUR_SLOTS):
+        rgb = pal.get(raw[i])
+        if rgb is None:
+            continue
+        out[slot] = _rgb_word(rgb, slot if slot in ("skin", "hair", "metal") else "cloth")
+    return out
 
 
 def areas_text(r: dict, limit: int = 0) -> str:
@@ -3528,6 +3687,9 @@ def run_gui() -> None:
         elif saved and not saved.get("whose"):                       # written before notes were stamped: claim it
             saved["whose"] = whose                                   # now, so it cannot drift to another creature
             save_settings(st)
+        fvars = st.setdefault("face_variant", {}).setdefault(mod_name, {})
+        if not generic:
+            r["face_variant"] = fvars.get(key, 0)                    # which draw of the face this creature is on
         character = "" if generic else pg.describe(r, gs)[1]         # type: ignore[attr-defined]
         folder = Path(__file__).resolve().parent / str(gs.get("output_folder", "generated")) / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", mod_name)
         stem = re.sub(r"[^A-Za-z0-9_.#!-]+", "_", f"{r['name']}_{(r.get('cre_list') or [''])[0]}").strip("_") or "portrait"
@@ -3550,14 +3712,24 @@ def run_gui() -> None:
                                 command=lambda: (view_var.set(back_to), show_view()))
             back_b.pack(side="left", padx=(0, 10))
             tooltip(back_b, "Back to the creature you came from, with whatever you proposed on its card.")
-        ttk.Label(head_, text=r["name"], font=("TkDefaultFont", 11, "bold")).pack(side="left")
-        if not generic:
+        nm_lab = ttk.Label(head_, text=r["name"], font=("TkDefaultFont", 11, "bold"),
+                           cursor="" if generic else "hand2")
+        nm_lab.pack(side="left")
+        if not generic:                                              # click a name or a CRE to copy it, as elsewhere
+            nm_lab.bind("<Button-1>", lambda e, n=r["name"]: copy_text(n))
+            tooltip(nm_lab, "Click to copy the name.")
             ttk.Button(head_, text="Unselect", width=9, command=lambda: generate_dialog()).pack(side="left", padx=(8, 0))
         ttk.Label(head_, foreground="#666",
                   text=("no creature: type what you want below - nothing is proposed for a creature" if generic else
                         "  ".join(x for x in (r["race"], r["sex"], r["anim"]) if x) or "(no creature details)")
                   ).pack(side="left", padx=10)
-        ttk.Label(head_, text=", ".join(r.get("cre_list") or []) or "", foreground="#888").pack(side="left")
+        for cn_ in (r.get("cre_list") or [])[:6]:
+            cl_ = tk.Label(head_, text=cn_, fg="#1a5fb4", cursor="hand2",
+                           font=("TkDefaultFont", 9, "bold underline" if cn_ in (r.get("cre_known") or [])
+                                 else "underline"))
+            cl_.pack(side="left", padx=(0, 6))
+            cl_.bind("<Button-1>", lambda e, n=cn_: copy_text(n))
+            tooltip(cl_, "Click to copy, for NearInfinity's search.")
 
         eng_s = gs.get("engine") or {}
         if not engine_ready() and eng_s.get("autostart", True) and "start_engine.bat" in str(eng_s.get("start", "")):
@@ -3582,10 +3754,10 @@ def run_gui() -> None:
         dent.grid(row=1, column=1, sticky="ew", padx=6)
         dbtn = ttk.Frame(frm)
         dbtn.grid(row=1, column=2)
-        reset_btn = ttk.Button(dbtn, text="Reset", width=6,
-                               command=(lambda: pick_reset()) if generic else (lambda: desc_var.set(character)))
-        tooltip(reset_btn, "Put the description back to what the game data says." if not generic else
-                "Back to Human, Male, Fighter, Adult.")
+        reset_btn = ttk.Button(dbtn, text="\u21bb", width=3, command=lambda: pick_reset())
+        tooltip(reset_btn, "Reset: put the description back to what the animation and the creature file say, "
+                           "losing anything typed here and any new face." if not generic else
+                "Reset: back to Human, Male, Fighter, Adult.")
 
         def big_edit(var: tk.StringVar, title: str) -> None:
             """A roomy box for text too long to read in one line."""
@@ -3606,6 +3778,43 @@ def run_gui() -> None:
             ttk.Button(row_, text="Cancel", command=w.destroy).pack(side="right", padx=6)
         ttk.Button(dbtn, text="\u2922", width=3, command=lambda: big_edit(desc_var, "Description")).pack(side="left")
         reset_btn.pack(side="left", padx=(3, 0))
+        if not generic:
+
+            def clauses(t: str) -> List[str]:
+                return [c.strip() for c in t.split(",") if c.strip()]
+
+            def described(n: int) -> List[str]:
+                """The description this creature would get on face n."""
+                r["face_variant"] = n
+                return clauses(pg.describe(r, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
+
+            def new_face() -> None:
+                """Another face for this creature. Only the drawn face is swapped out - anything typed by hand
+                stays where it is. Reset is the one that starts over."""
+                now, nxt = int(fvars.get(key, 0)), int(fvars.get(key, 0)) + 1
+                before, after = described(now), described(nxt)
+                gone = [c for c in before if c not in after]         # what this creature's face used to be
+                fresh = [c for c in after if c not in before]        # and what it is now
+                parts, at = clauses(desc_var.get()), -1
+                for c in gone:                                       # swap them where they stand, in place
+                    if c in parts:
+                        at = parts.index(c)
+                        parts[at] = fresh.pop(0) if fresh else ""
+                if at < 0:                                           # nothing of the drawn face is left to swap
+                    r["face_variant"] = now
+                    gstat.set("The description has been written over, so there is no drawn face left to change. "
+                              "Reset starts it over.")
+                    return
+                parts[at + 1:at + 1] = fresh                         # anything left over goes in beside it
+                fvars[key] = nxt
+                save_settings(st)
+                desc_var.set(", ".join(c for c in parts if c))
+                gstat.set(f"Face {nxt + 1} for {r['name']}. Press again for another; Reset starts over.")
+            nf_ = ttk.Button(dbtn, text="New face", width=9, command=new_face)
+            nf_.pack(side="left", padx=(3, 0))
+            tooltip(nf_, "Draw this creature another face - a different shape, nose and hair. Only the face "
+                         "changes; anything you typed yourself stays. The creature keeps its new face from then "
+                         "on, so it is the same person every time you come back. Reset starts over.")
         prow0 = ttk.Frame(frm)                                       # what the description is built from
         prow0.grid(row=1, column=3, sticky="w", padx=(8, 0))
         RACES = ["Human", "Elf", "Half-Elf", "Dwarf", "Halfling", "Gnome", "Half-Orc"]
@@ -3613,11 +3822,19 @@ def run_gui() -> None:
                    "Mage", "Sorcerer", "Thief", "Bard"]
         last = st.get("generic_pick") if isinstance(st.get("generic_pick"), list) else []
         last = (list(last) + ["Human", "Male", "Fighter"])[:3]
+        race_vals, class_vals = list(RACES), list(CLASSES)
         if not generic:                                              # start from what the creature file says
             aw_ = str(r.get("anim") or "").split()
-            cre_race = next((x for x in RACES if x.lower() == str(r.get("race") or "").strip().lower()), "")
+            raw_race = str(r.get("race") or "").strip()
+            cre_race = next((x for x in RACES if x.lower() == raw_race.lower()), "")
+            if raw_race and not cre_race:                            # an orc, a sahuagin: not a playable race, but
+                cre_race = raw_race                                  # it is what this creature is, so offer it
+                race_vals = [raw_race] + race_vals
             cre_sex = str(r.get("sex") or "").strip().title() if str(r.get("sex") or "").strip().lower() in ("male", "female") else ""
             cre_cls = next((c for c in CLASSES if any(c.lower() == w.lower() for w in aw_)), "")
+            if not cre_cls and aw_:                                  # "Orog", "Sahuagin": the animation is the role
+                cre_cls = aw_[0]
+                class_vals = [cre_cls] + class_vals
             last = [cre_race or last[0], cre_sex or last[1], cre_cls or last[2]]
         race_v = tk.StringVar(value=str(saved.get("race") or last[0]))
         sex_v = tk.StringVar(value=str(saved.get("sex") or last[1]))
@@ -3645,8 +3862,11 @@ def run_gui() -> None:
             class_v.set(last[2] if not generic else "Fighter")
             age_v.set("Adult" if "Adult" in ages else ages[0])
             look_v.set(looks[0])
-            pick_changed()
-        picks = [(race_v, RACES, 10), (sex_v, ["Male", "Female"], 8), (class_v, CLASSES, 10),
+            if generic:
+                pick_changed()
+            else:                                                    # the creature as its own file describes it
+                desc_var.set(pg.describe(r, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
+        picks = [(race_v, race_vals, 12), (sex_v, ["Male", "Female"], 8), (class_v, class_vals, 11),
                  (age_v, ages, 11), (look_v, looks, 11)]
         for var_, vals_, w_ in picks:
             cb_ = ttk.Combobox(prow0, textvariable=var_, values=vals_, state="readonly", width=w_)

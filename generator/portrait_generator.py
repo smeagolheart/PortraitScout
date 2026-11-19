@@ -189,6 +189,10 @@ DEFAULTS: dict = {
         "start_timeout_seconds": 600,
         "image_timeout_seconds": 900,
     },
+    "use_creature_colours": True,
+    "_use_creature_colours": "The creature file says what colour its sprite's clothes, hair and skin are. true: "
+                             "those words go into the description, so the portrait matches the figure walking "
+                             "around. false: leave them out and let the look decide.",
     "output_folder": "generated",
     "portrait_bmp": {
         "_about": "Size of the .bmp made when you press 'Use this' (the picture is cropped to this shape from the "
@@ -227,6 +231,12 @@ DEFAULTS: dict = {
         "Sickly": "pale, gaunt and unwell, grey blotchy skin, dark rings under the eyes",
         "Noble": "clean, well-kept, proud bearing",
     },
+    "bald_animations": ["fat"],
+    "_bald_animations": "Words from the creature's animation name whose sprite is bald (the 'Fat Man' sprite "
+                        "several merchants use). These win over the creature file, which can give a hair colour "
+                        "to a creature whose sprite has no hair. Anything else with a hair colour is never drawn "
+                        "bald. Minsc is the other way round - bald in the art, hair in his file - so a creature "
+                        "the game draws bald without using one of these sprites has to be typed in by hand.",
     "feature_terms": {
         "_about": "Drawn from the creature's own file name, so the same creature always gets the same face and "
                   "two creatures with the same name and class do not. One is taken from each list below and added "
@@ -302,11 +312,30 @@ DEFAULTS: dict = {
                             "never, 1 = always). Kept low on purpose: a crowd where everyone has a scar looks as "
                             "uniform as a crowd where nobody does.",
     "race_terms": {
-        "_about": "How a race from the game is worded in the prompt. Races not listed are used as they are.",
-        "human": "human", "elf": "elf with subtly pointed ears", "half elf": "half-elf with slightly pointed ears",
-        "dwarf": "dwarf, stocky", "halfling": "halfling", "gnome": "gnome",
-        "half orc": "half-orc, pale green skin, muscular", "tiefling": "tiefling, small horns",
+        "_about": "How a race from the game is worded in the prompt. Races not listed are used as they are, which is rarely enough for a monster: a bare \"orc\" is painted as a human with pointed ears, so say what makes one.",
+        "human": "human",
+        "elf": "elf with subtly pointed ears",
+        "half elf": "half-elf with slightly pointed ears",
+        "dwarf": "dwarf, stocky",
+        "halfling": "halfling",
+        "gnome": "gnome",
+        "half orc": "half-orc, pale green skin, heavy brow, muscular",
+        "orc": "orc, green skin, a heavy jutting brow and small eyes, a broad flat nose, jutting lower tusks, pointed ears, coarse black hair",
+        "goblin": "goblin, sickly green skin, huge pointed ears, a long hooked nose, small yellow eyes, sharp teeth",
+        "hobgoblin": "hobgoblin, orange-red skin, a flat broad face, dark beady eyes, blue-grey nose, coarse dark hair",
+        "kobold": "kobold, small reptilian head, rust-red scaled skin, a short snout, horns, beady red eyes",
+        "gnoll": "gnoll, hyena head, coarse spotted fur, a long muzzle with bared teeth, dark eyes",
+        "ogre": "ogre, huge lumpen head, dull yellow-brown skin, a heavy jaw and small eyes, tusks",
+        "troll": "troll, long rubbery green head, a hooked nose, sunken eyes, lank hair",
+        "lizard man": "lizard man, green scaled head, a blunt snout, slit yellow eyes, a crest of spines",
+        "sahuagin": "sahuagin, green-black fish head, round black eyes, gill slits, needle teeth, a finned crest",
+        "githyanki": "githyanki, gaunt yellow-skinned head, sunken black eyes, pointed ears, a hairless skull",
+        "duergar": "grey dwarf, ashen grey skin, a bald head, a long grey beard, hard pale eyes",
+        "tiefling": "tiefling, small horns",
         "drow": "drow elf, dark grey skin, white hair, pointed ears",
+        "aasimar": "aasimar, fair luminous skin, pale golden eyes",
+        "half ogre": "half-ogre, broad coarse face, dull ruddy skin, a heavy jaw, small tusks",
+        "lycanthrope": "werewolf, a wolf's head on a man's shoulders, coarse grey fur, yellow eyes, bared fangs",
     },
     "animation_terms": {
         "_about": "Words in the creature's animation name -> what the speaker wears. Portraits are head and "
@@ -372,7 +401,7 @@ def term_names(settings: dict, which: str) -> List[str]:
     return [k for k in (settings.get(which) or {}) if not k.startswith("_")]
 
 
-def face_key(row: dict) -> str:
+def _face_key(row: dict) -> str:
     """What a creature's face is drawn from: its own creature file. A shared portrait is not proof of one person -
     a stock picture like FARM is worn by twenty unrelated commoners - so it is only used when there is no creature
     file at all, and the name only when there is neither."""
@@ -387,6 +416,14 @@ def face_key(row: dict) -> str:
     return "n:" + nm if nm and nm != "ANY PORTRAIT" else ""        # the stand-in name is not a creature
 
 
+def face_key(row: dict) -> str:                                    # noqa: F811 - the variant wraps the plain key
+    """As _face_key, plus the creature's 'face_variant' when one has been asked for, so a face can be re-rolled
+    and still be the same every time afterwards."""
+    k = _face_key(row)
+    v = str(row.get("face_variant") or "").strip()
+    return f"{k}#{v}" if k and v not in ("", "0") else k
+
+
 def creature_seed(key: str) -> int:
     """A seed that is the same every time for the same creature (python's hash() is salted per run, so not that)."""
     if not key:
@@ -394,8 +431,15 @@ def creature_seed(key: str) -> int:
     return int(hashlib.md5(key.encode("utf-8", "replace")).hexdigest()[:8], 16)
 
 
-def features(key: str, settings: dict) -> str:
-    """One face, nose and hair for this creature, and sometimes a distinguishing mark - always the same ones."""
+_BALD = ("bald", "balding", "hairless")
+_HAIR_COLOUR = re.compile(r"\b(greying|graying|grey|gray|white|black|blond|blonde|red|auburn|brown|silver)\s+"
+                          r"(?=hair|mane|curls|locks)", re.I)
+
+
+def features(key: str, settings: dict, has_hair: bool = False, bald: bool = False) -> str:
+    """One face, nose and hair for this creature, and sometimes a distinguishing mark - always the same ones.
+    has_hair: the creature file gives a hair colour, so it has hair - don't draw it bald.
+    bald: its sprite is bald, whatever the file says - draw it bald."""
     if not key:
         return ""
     terms = settings.get("feature_terms") or {}
@@ -403,8 +447,12 @@ def features(key: str, settings: dict) -> str:
     out = []
     for slot in ("face", "nose", "hair"):
         pool = [t for t in (terms.get(slot) or []) if str(t).strip()]
+        if slot == "hair" and has_hair and not bald:
+            kept = [t for t in pool if not any(w in str(t).lower() for w in _BALD)]
+            pool = kept or pool                                  # unless bald is all there is
         if pool:
-            out.append(rng.choice(pool))
+            pick = rng.choice(pool)                              # drawn either way, so the mark below is unmoved
+            out.append("a bald head" if slot == "hair" and bald else pick)
     marks = [t for t in (terms.get("mark") or []) if str(t).strip()]
     try:
         chance = float(settings.get("feature_mark_chance", 0.35))
@@ -430,7 +478,10 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
     if not rkey or rkey.startswith("race "):                         # no usable race: look in the animation name
         rkey = next((k for k in ("half elf", "half orc", "elf", "dwarf", "halfling", "gnome", "human")
                      if set(k.split()) <= aw), "")
-    race_txt = races.get(rkey, rkey)
+    race_txt = races.get(rkey, "")
+    if not race_txt and rkey:                                        # a race nobody has written a line for: the
+        race_txt = (f"{rkey}, with the head and face of a {rkey} and not of a person"   # model paints a human
+                    if rkey not in _HUMANOID else rkey)              # unless it is told plainly not to
     if rkey and rkey not in _HUMANOID and rkey not in races and not gender:
         subject = anim.lower() or rkey                               # a wolf, a golem...: say what it is
         return subject, subject
@@ -441,12 +492,34 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
     parts = [" ".join(x for x in (lead.strip(), gender, race_txt) if x)]
     if extra.strip():
         parts.append(extra.strip())
+    manlike = rkey in ("", "human", "elf", "half elf", "dwarf", "halfling", "gnome", "half orc", "tiefling",
+                       "drow", "aasimar", "duergar", "genasi")
+    col = row.get("colours") or {} if settings.get("use_creature_colours", True) else {}
+    bald = bool(aw & {str(w).lower() for w in (settings.get("bald_animations") or [])
+                      if not str(w).startswith("_")})            # the sprite is bald; the file does not know it
+    feat = features(face_key(row), settings, bool(col.get("hair")), bald) if manlike else ""
+    #                                                            a neat side parting on a gnoll helps nobody
+    if col.get("hair"):
+        feat = _HAIR_COLOUR.sub("", feat)                        # the file says what colour it is; the draw only
+    said = parts[0].lower()                                      # says what it does. What the race already covers
+    for slot in ("skin", "hair"):                                # right behind the race: at the end of a long
+        if not col.get(slot) or slot in said:                    # description the model ignores colour
+            continue
+        if slot == "hair" and any(w in feat.lower() for w in _BALD):     # no hair colour on a bald head
+            continue
+        parts.append(col[slot])
     for word, phrase in settings.get("animation_terms", {}).items():
         if not word.startswith("_") and word in aw and phrase not in parts:
             parts.append(phrase)
-    feat = features(face_key(row), settings)                         # the creature's own face, same every time
     if feat:
         parts.append(feat)
+    if col:
+        major, minor = col.get("major", ""), col.get("minor", "")
+        if major:
+            parts.append(f"dressed in {major} with {minor} trim" if minor and minor != major
+                         else f"dressed in {major}")
+        if col.get("metal") and col["metal"] not in ("dark iron",):
+            parts.append(col["metal"] + " fittings")
     look_txt = (settings.get("look_terms") or {}).get(look, "") if look else ""
     if look_txt:
         parts.append(look_txt)
