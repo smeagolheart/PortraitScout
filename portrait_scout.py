@@ -3520,6 +3520,14 @@ def run_gui() -> None:
         mod_name = "_anything" if generic or not res else str(res["mod"])   # type: ignore[index]
         notes = st.setdefault("portrait_notes", {}).setdefault(mod_name, {})
         saved = notes.get(key, {})
+        # a kept description belongs to one creature: if the note was written for another (two rows can share a
+        # dialog key, and old notes outlive an analysis), start from the game data again rather than its words
+        whose = ",".join(str(c).upper() for c in (r.get("cre_list") or [])) or str(r.get("name") or "")
+        if saved and str(saved.get("whose") or whose) != whose:
+            saved = {}
+        elif saved and not saved.get("whose"):                       # written before notes were stamped: claim it
+            saved["whose"] = whose                                   # now, so it cannot drift to another creature
+            save_settings(st)
         character = "" if generic else pg.describe(r, gs)[1]         # type: ignore[attr-defined]
         folder = Path(__file__).resolve().parent / str(gs.get("output_folder", "generated")) / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", mod_name)
         stem = re.sub(r"[^A-Za-z0-9_.#!-]+", "_", f"{r['name']}_{(r.get('cre_list') or [''])[0]}").strip("_") or "portrait"
@@ -4278,7 +4286,8 @@ def run_gui() -> None:
                 n = max(1, min(8, int(count_var.get())))
             except (tk.TclError, ValueError):
                 n = 2
-            notes[key] = {"desc": desc_var.get().strip(), "count": n, "age": age_v.get(), "look": look_v.get()}
+            notes[key] = {"desc": desc_var.get().strip(), "count": n, "age": age_v.get(), "look": look_v.get(),
+                          "whose": whose}
             if generic:
                 notes[key].update(race=race_v.get(), sex=sex_v.get(), **{"class": class_v.get()})
             st["portrait_style"] = style_var.get()
