@@ -193,6 +193,11 @@ DEFAULTS: dict = {
     "_use_creature_colours": "The creature file says what colour its sprite's clothes, hair and skin are. true: "
                              "those words go into the description, so the portrait matches the figure walking "
                              "around. false: leave them out and let the look decide.",
+    "ghost_fade": 0.55,
+    "_ghost_fade": "How far a ghostly creature is faded into its own background once the picture is made, from 0 "
+                   "(not at all) to 1.5. Past 1 the dissolve starts higher up the face and the mist thickens. The engine will not paint a see-through person whatever the description "
+                   "says, so the picture is faded afterwards: solid at the brow, gone by the bottom, with the "
+                   "eyes left burning. Switched on by itself for spectres, ghosts and wraiths.",
     "output_folder": "generated",
     "portrait_bmp": {
         "_about": "Size of the .bmp made when you press 'Use this' (the picture is cropped to this shape from the "
@@ -320,9 +325,59 @@ DEFAULTS: dict = {
         "halfling": "halfling",
         "gnome": "gnome",
         "half orc": "half-orc, pale green skin, heavy brow, muscular",
+        "sirine": "sirine, a sea fey woman, green skin, long dark hair wet and tangled with seaweed, large dark "
+                  "eyes, a serene unsettling beauty",
+        "doppleganger": "doppelganger, a half-formed grey humanoid with blank featureless eyes, smooth unfinished "
+                        "features caught between faces",
+        "imp": "imp, a small red devil, bat wings, little horns, a barbed tail, a sly pointed face, yellow eyes",
+        "demonic": "demon, a monstrous fiend with a beast's head, horns, burning eyes, dark hide, bared fangs",
+        "rakshasa": "rakshasa, a tiger's head on a man's shoulders, orange and black striped fur, amber eyes, "
+                    "rich embroidered robes",
+        "mind flayer": "mind flayer, a purple-grey octopus head with four writhing face tentacles, white pupilless "
+                       "eyes, no nose",
+        "beholder": "beholder, a floating sphere of flesh with one huge central eye and eyestalks writhing above "
+                    "it, a wide toothed maw",
+        "minotaur": "minotaur, a bull's head on a man's shoulders, heavy curved horns, a brass nose ring, "
+                    "shaggy brown fur",
+        "svirfneblin": "deep gnome, small and wiry, grey stone-coloured skin, large black eyes, a bald head, a "
+                       "wispy grey beard",
+        "genie": "djinni, a towering blue-skinned spirit of the air, white eyes with no pupils, a pointed beard, "
+                 "the lower body trailing away into smoke",
+        "fairy": "fey creature, small and sharp-featured, bright inhuman eyes, pointed ears, a faint glow",
+        "golem": "golem, a mute figure built of stone and iron, blank carved features, no eyes, seams and rivets",
+        "mephit": "mephit, a small winged imp of elemental stuff, a mischievous pinched face, little bat wings",
+        "myconid": "myconid, a walking fungus, a domed mushroom cap for a head, mottled spotted skin, tiny dark eyes",
+        "gibberling": "gibberling, a small hunched shrieking creature, a mouth too wide, matted fur, wild eyes",
+        "kuo-toa": "kuo-toa, a fish-headed humanoid, bulging silver eyes on the sides of the head, scaled grey "
+                   "skin, a lipless mouth of needle teeth",
+        "yuanti": "yuan-ti, a serpent-headed humanoid, green and gold scales, slit yellow eyes, a forked tongue",
+        "solar": "solar, a towering winged celestial, burning golden eyes, skin like polished bronze, great "
+                 "white wings",
+        "planatar": "planetar, a tall winged celestial with smooth green-white skin, a bald head, white feathered "
+                    "wings, pupilless eyes",
+        "ogrillon": "ogrillon, a half-ogre brute, coarse grey-brown skin, a heavy misshapen jaw, small eyes",
+        "wererat": "wererat, a rat's head on a man's shoulders, patchy brown fur, a long snout, yellow incisors, "
+                   "pink ears",
+        "revenant": "revenant, a corpse come back, grey tight skin, sunken burning eyes, old wounds unhealed",
+        "ghast": "ghast, a ravening corpse, grey rotting skin, bared teeth, sunken eyes, lank clumps of hair",
+        "spectre": "spectre, a ghostly undead spirit, hollow eyes lit from within, gaunt drawn face, "
+                   "colourless bloodless skin, wisps of mist where the shoulders fade away",
+        "spectral undead": "spectral undead, a ghostly spirit, hollow eyes lit from within, gaunt drawn face, "
+                           "colourless bloodless skin, the edges fading into mist",
+        "wraith": "wraith, a hooded shape of darkness, no face but two points of cold light, tattered shroud",
+        "ghost": "ghost, a pale ghostly figure, hollow eyes, bloodless colourless skin, edges fading away",
+        "shadow": "living shadow, a man-shaped darkness, two cold points of light for eyes",
+        "vampire": "vampire, bloodless white skin, red eyes, long fangs, sunken cheeks",
+        "ghoul": "ghoul, grey rotting skin stretched over the skull, sunken eyes, bared teeth, patchy hair",
+        "zombie": "zombie, grey rotting skin, clouded eyes, slack jaw, matted hair",
+        "skeleton": "skeleton, a bare skull and bones, empty eye sockets, no flesh at all",
+        "lich": "lich, a skull face with shrivelled grey skin drawn tight over it, points of light in the sockets",
+        "mummy": "mummy, dried blackened skin wrapped in filthy bandages, sunken sockets",
         "orc": "orc, green skin, a heavy jutting brow and small eyes, a broad flat nose, jutting lower tusks, pointed ears, coarse black hair",
         "goblin": "goblin, sickly green skin, huge pointed ears, a long hooked nose, small yellow eyes, sharp teeth",
-        "hobgoblin": "hobgoblin, orange-red skin, a flat broad face, dark beady eyes, blue-grey nose, coarse dark hair",
+        "hobgoblin": "hobgoblin, orange-red skin, a flat broad face with a heavy jutting brow, dark beady eyes, a "
+                     "blue-grey flattened nose, pointed ears, yellowed teeth, wearing a battered "
+                     "horned rusty steel helmet",
         "kobold": "kobold, small reptilian head, rust-red scaled skin, a short snout, horns, beady red eyes",
         "gnoll": "gnoll, hyena head, coarse spotted fur, a long muzzle with bared teeth, dark eyes",
         "ogre": "ogre, huge lumpen head, dull yellow-brown skin, a heavy jaw and small eyes, tusks",
@@ -432,6 +487,12 @@ def creature_seed(key: str) -> int:
 
 
 _BALD = ("bald", "balding", "hairless")
+_NAME_BLIND = frozenset(("shadow",))    # the Shadow Thieves are a guild of people, not forty-five living shadows
+_VAGUE_RACES = frozenset(("human", "fairy", "demonic", "monster", "animal", "mammal", "no race", "undead",
+                          "giant", "golem", "elemental", "statue"))
+_COVERED_HEAD = ("helm", "hood", "coif", "cowl", "turban", "veil")
+_ROLES = frozenset(("fighter", "paladin", "ranger", "cleric", "druid", "mage", "sorcerer", "thief", "bard", "monk",
+                    "barbarian", "shaman", "peasant", "noble", "beggar", "slave", "guard", "merchant"))
 _HAIR_COLOUR = re.compile(r"\b(greying|graying|grey|gray|white|black|blond|blonde|red|auburn|brown|silver)\s+"
                           r"(?=hair|mane|curls|locks)", re.I)
 
@@ -475,9 +536,29 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
              "male" if sex == "male" or aw & {"male", "man", "boy"} else ""
     races = {k: v for k, v in settings.get("race_terms", {}).items() if not k.startswith("_")}
     rkey = race.lower().replace("-", " ").replace("_", " ")
+    rkey = re.sub(r"^half ?(orc|elf|ogre)$", r"half \1", rkey)      # RACE.IDS writes HALFORC, HALFELF
+    _SPRITE_RACES = ("half elf", "half orc", "elf", "dwarf", "halfling", "gnome", "human")
+    anim_race = next((k for k in _SPRITE_RACES if set(k.split()) <= aw), "")
     if not rkey or rkey.startswith("race "):                         # no usable race: look in the animation name
-        rkey = next((k for k in ("half elf", "half orc", "elf", "dwarf", "halfling", "gnome", "human")
-                     if set(k.split()) <= aw), "")
+        rkey = anim_race
+    elif rkey == "human" and anim_race and anim_race != "human":     # human is the race byte's default, so a sprite
+        rkey = anim_race                                             # picked on purpose is the better evidence.
+    kind = next((k for k in races if k and k not in _SPRITE_RACES and set(k.split()) <= aw), "")
+    if kind and (rkey not in races or rkey in _VAGUE_RACES):         # a sirine's file says FAIRY and only its
+        rkey = kind                                                  # sprite says sirine; the sprite wins there
+    said_kind = str((row.get("colours") or {}).get("kind") or "")    # DrowSkin and the like: the surest of all
+    if said_kind in races and said_kind != rkey:
+        rkey = said_kind
+    named = set(re.findall(r"[a-z]+", str(row.get("name") or "").lower()))
+    kind = next((k for k in sorted((x for x in races if x and set(x.split()) <= named),
+                                   key=lambda x: -len(x.split())) if k not in _NAME_BLIND), "")
+    if (kind and kind != rkey and (rkey in _VAGUE_RACES or rkey in _SPRITE_RACES)
+            and not (rkey.startswith("half ") and kind == rkey.split()[-1])):   # a half-elf is not an elf
+        rkey = kind                                                  # a creature called Drow whose file says ELF
+    #                                                                  is a drow: the kinds the race field has no
+    #                                                                  room for live in the name instead
+    #   Only this way round: a half-elf, tiefling or werewolf has no sprite of its own and borrows one, so a
+    #   non-human file race keeps what it says however the creature walks around the map.
     race_txt = races.get(rkey, "")
     if not race_txt and rkey:                                        # a race nobody has written a line for: the
         race_txt = (f"{rkey}, with the head and face of a {rkey} and not of a person"   # model paints a human
@@ -502,15 +583,31 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
     if col.get("hair"):
         feat = _HAIR_COLOUR.sub("", feat)                        # the file says what colour it is; the draw only
     said = parts[0].lower()                                      # says what it does. What the race already covers
-    for slot in ("skin", "hair"):                                # right behind the race: at the end of a long
-        if not col.get(slot) or slot in said:                    # description the model ignores colour
+    covered = not manlike or any(w in said for w in ("fur", "scale", "hide", "feather", "pelt", "undead",
+                                                     "ghostly", "translucent", "skeleton", "bones", "rotting",
+                                                     "bandages", "shadow", "mist"))
+    #   the colour bytes are a sprite's palette: on a face with no skin and no hair - a mind flayer's tentacles,
+    #   a doppelganger's blank grey - they are nonsense. What it wears still comes through.
+    #                                                            not a face with skin and
+    col = {k: v for k, v in col.items() if k != "kind"}          # a label, not something to say
+    for slot in ("skin", "hair"):                                # hair on it. Right behind the race: at the end
+        if not col.get(slot) or slot in said or covered:         # of a long description the model ignores colour
             continue
-        if slot == "hair" and any(w in feat.lower() for w in _BALD):     # no hair colour on a bald head
+        if slot == "hair" and (any(w in feat.lower() for w in _BALD)     # no hair colour on a bald head, nor
+                               or any(w in said for w in _COVERED_HEAD)):   # under a helm the sprite never takes off
             continue
         parts.append(col[slot])
+    took_role = any(w in race_txt.lower() for w in ("ghostly", "translucent", "mist", "darkness"))
+    #                                                            nothing is wearing armor inside a spirit, and the
+    #                                                            sprite's class says only which BAM was borrowed
     for word, phrase in settings.get("animation_terms", {}).items():
-        if not word.startswith("_") and word in aw and phrase not in parts:
-            parts.append(phrase)
+        if word.startswith("_") or word not in aw or phrase in parts:
+            continue
+        if word in _ROLES:                                       # PEASANT_WOMAN_FIGHTER is one person, not two:
+            if took_role:                                        # the class is said before the station, so it wins
+                continue
+            took_role = True
+        parts.append(phrase)
     if feat:
         parts.append(feat)
     if col:
@@ -806,7 +903,210 @@ class Engine:
         return out
 
 
-def save_candidates(images: List[bytes], folder: Path, stem: str) -> List[str]:
+_INCORPOREAL = ("ghostly", "translucent", "apparition", "spectre", "specter", "wraith", "ghost",
+                "undead spirit", "made of mist", "column of pale grey smoke", "living shadow")
+
+
+def incorporeal(text: str) -> bool:
+    """Whether a description is of something with no solid body. The model paints these as a pale, solid person
+    however they are worded, so the fading is done afterwards instead."""
+    t = (text or "").lower()
+    return any(w in t for w in _INCORPOREAL)
+
+
+def ghost_image(data: bytes, depth: float = 0.55) -> bytes:
+    """Fade a painted figure into its own background, dissolving from the chest up, and leave the eyes burning.
+    This is the see-through no prompt gets out of the model: it will not paint a transparent person, so the
+    picture is made transparent once it exists. depth 0 returns the picture untouched."""
+    if depth <= 0:
+        return data
+    try:
+        import io
+        from PIL import Image, ImageChops, ImageFilter
+    except ImportError:
+        return data                                              # no Pillow: the portrait is simply not faded
+    try:
+        depth = min(1.5, depth)                                  # past 1 it keeps going: smokier, and higher up
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+        w, h = im.size
+        over = max(0.0, depth - 1.0)                             # how far past "all of it" the slider has gone
+        wash = im.filter(ImageFilter.GaussianBlur(max(8, int(w // 9 * (1 + over)))))   # what is behind her
+        base = max(0.0, 1.0 - depth * 0.6)                       # solid at the brow, gone by the bottom - and
+        y0, y1 = 0.42 - over * 0.34, 0.97                        # the dissolve starts higher the further it goes
+
+        def fade(v: int) -> int:
+            y = v / 255.0
+            a = base if y <= y0 else 0.0 if y >= y1 else base * (y1 - y) / (y1 - y0)
+            return int(round(a * 255))
+        mask = Image.linear_gradient("L").resize((w, h)).point(fade)
+        out = Image.composite(im, wash, mask)
+
+        grey = im.convert("L")                                   # the eyes: the brightest spots in the top half
+        hist, total, cut = grey.histogram(), w * h, 255
+        seen = 0
+        for v in range(255, -1, -1):                             # the brightest 2% of the picture
+            seen += hist[v]
+            if seen >= total * 0.02:
+                cut = v
+                break
+        spots = grey.point(lambda v: 255 if v >= max(cut, 170) else 0)
+        top = Image.new("L", (w, h), 0)
+        top.paste(255, (0, 0, w, int(h * 0.55)))
+        glow = ImageChops.multiply(spots, top).filter(ImageFilter.GaussianBlur(max(1, w // 90)))
+        out = Image.composite(im, out, glow)
+        buf = io.BytesIO()
+        out.save(buf, "PNG")
+        return buf.getvalue()
+    except (OSError, ValueError):
+        return data
+
+
+SKIN_TINTS = {                                                   # name: (hue in degrees, how much colour)
+    "Green": (110, 1.30), "Grey": (210, 0.55), "Ashen white": (200, 0.35), "Blue": (220, 1.25),
+    "Red-orange": (18, 1.55), "Yellow-brown": (40, 1.30), "Purple-grey": (280, 0.75), "Sea green": (150, 1.20),
+}
+
+
+def suggest_tint(text: str) -> str:
+    """Which tint the description is asking for, if any - so the button opens on the right colour."""
+    t = (text or "").lower()
+    for word, name in (("ashen", "Ashen white"), ("charcoal", "Grey"), ("grey skin", "Grey"), ("gray skin", "Grey"),
+                       ("green skin", "Green"), ("sea-green", "Sea green"), ("sea green", "Sea green"),
+                       ("orange-red skin", "Red-orange"), ("red skin", "Red-orange"), ("blue skin", "Blue"),
+                       ("purple-grey", "Purple-grey"), ("yellow-brown", "Yellow-brown"), ("sirine", "Green"),
+                       ("orc", "Green"), ("hobgoblin", "Red-orange"), ("drow", "Grey")):
+        if word in t:
+            return name
+    return ""
+
+
+SPOT_TINTS = {                           # name: (hue in degrees, how colourful to make it, how bright; -1 = leave)
+    "Leave": (0, 0, -1), "Amber": (35, 185, -1), "Green": (110, 165, -1), "Blue": (215, 175, -1),
+    "Pale blue": (205, 85, -1), "Violet": (280, 160, -1), "Red": (5, 205, -1), "Gold": (45, 195, -1),
+    "Copper": (20, 165, -1), "Teal": (175, 160, -1), "Pink": (330, 150, -1), "Silver": (210, 25, 200),
+    "Black": (0, 0, 35), "White": (0, 0, 235),
+}
+EYE_TINTS = SPOT_TINTS                   # it began as an eye colour; it works on anything you click
+LIP_TINTS = {                                                    # name: (hue in degrees, how much colour)
+    "Leave": (0, 0.0), "Red": (6, 1.70), "Dark red": (2, 1.35), "Berry": (340, 1.45), "Pink": (352, 1.25),
+    "Pale": (20, 0.55), "Grey": (210, 0.45), "Green": (110, 1.30), "Black": (0, 0.20),
+}
+
+
+def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.3, catch: float = 0.6,
+             light: float = 0.0, lip_hue: float = 6, lip_amount: float = 0.0, lip_sat: float = 1.7,
+             spots: Optional[List[Tuple[float, float]]] = None, eye_hue: float = 35, eye_amount: float = 0.0,
+             eye_sat: float = 185, eye_size: float = 0.035, eye_val: float = -1) -> bytes:
+    """Work on the skin of a finished picture: its colour, how dark it is, and the lips on their own.
+
+    The engine paints a person it recognises whatever the description says, so this is done afterwards. Skin is
+    not found by looking for flesh colours - a picture can have a colour cast of its own, and a creature's skin
+    may be green or grey already. The face's own hue is read off the picture first (the middle hue inside the
+    oval a face sits in, ignoring the dark and the strongly coloured), and pixels near that hue are worked on,
+    along with the warm band that lips, nose and ears sit in. catch widens both. light makes the skin darker or
+    lighter, from -1 to 1. The lips are the warm, coloured part of that, and can be given a colour of their own.
+    """
+    if amount <= 0 and lip_amount <= 0 and abs(light) < 0.01 and not (spots and eye_amount > 0):
+        return data
+    try:
+        import io
+        from PIL import Image, ImageChops, ImageDraw, ImageFilter
+    except ImportError:
+        return data
+    try:
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+        w, h = im.size
+        hc, sc, vc = im.convert("HSV").split()
+        catch = max(0.0, min(1.0, catch))
+        oval = Image.new("L", im.size, 0)                        # skin is where a face is
+        ImageDraw.Draw(oval).ellipse((w * 0.04, -h * 0.05, w * 0.96, h * 0.80), fill=255)
+        oval = oval.filter(ImageFilter.GaussianBlur(max(1, w // 14)))
+        lit = vc.point(lambda x: 255 if 60 <= x <= 250 else 0)   # not hair, not the shadows
+        cal = sc.point(lambda x: 255 if 10 <= x <= int(90 + catch * 120) else 0)   # not gold, not gems
+        here = ImageChops.multiply(ImageChops.multiply(oval.point(lambda x: 255 if x > 128 else 0), lit), cal)
+        hist, run, mid = hc.histogram(here), 0, 0
+        total = sum(hist) or 1
+        for i, n in enumerate(hist):                             # the face's own hue, whatever colour it is
+            run += n
+            if run >= total * 0.5:
+                mid = i
+                break
+        win = int(10 + catch * 26)
+        near = hc.point(lambda x: 255 if abs(((x - mid + 128) % 256) - 128) <= win else 0)
+        warm = hc.point(lambda x: 255 if x <= int(26 + catch * 18) else 0)         # lips, nose, ears
+        face = ImageChops.multiply(ImageChops.multiply(ImageChops.lighter(near, warm), cal),
+                                   ImageChops.multiply(lit, oval))
+        face = face.filter(ImageFilter.GaussianBlur(max(1, w // 160)))   # feathered, or the patches it does not
+        #                                                                  take show up as hard-edged blotches
+        hc2, sc2, vc2 = hc, sc, vc
+        if amount > 0:
+            tgt = int(round(hue % 360 / 360 * 255))
+            hc2 = Image.composite(hc.point(lambda x: int(round(x + (tgt - x) * min(1.0, amount)))), hc, face)
+            sc2 = Image.composite(sc.point(lambda x: max(0, min(255, int(round(x * sat))))), sc, face)
+        if abs(light) >= 0.01:                                   # darker or lighter skin, the rest left alone
+            k = 1.0 + max(-1.0, min(1.0, light)) * 0.60
+            vc2 = Image.composite(vc.point(lambda x: max(0, min(255, int(round(x * k))))), vc, face)
+        if lip_amount > 0:                                       # the lips: the coloured part of the lower face,
+            mouth = Image.new("L", im.size, 0)                   # and not the nose, the ears or a red gem
+            ImageDraw.Draw(mouth).ellipse((w * 0.26, h * 0.46, w * 0.74, h * 0.74), fill=255)
+            mouth = mouth.filter(ImageFilter.GaussianBlur(max(1, w // 40)))
+            lips = ImageChops.multiply(ImageChops.multiply(warm, sc.point(lambda x: 255 if x >= 70 else 0)),
+                                       ImageChops.multiply(lit, mouth))
+            ltgt = int(round(lip_hue % 360 / 360 * 255))
+            hc2 = Image.composite(hc.point(lambda x: int(round(x + (ltgt - x) * min(1.0, lip_amount)))), hc2, lips)
+            sc2 = Image.composite(sc.point(lambda x: max(0, min(255, int(round(x * lip_sat))))), sc2, lips)
+        if spots and eye_amount > 0:                             # a spot has to be pointed at: an iris is no
+            rad = max(2.0, eye_size * w)                         # different in colour from a cheek. Inside the
+            etgt = int(round(eye_hue % 360 / 360 * 255))         # ring, though, the iris can be found: read what
+            from PIL import ImageOps
+            bump = ImageOps.invert(Image.radial_gradient("L"))       # full at the click, fading to nothing at the
+            bump = bump.point(lambda x: min(255, int(x * 1.7)))      # edge: what is under the finger counts most
+            for fx, fy in spots[:8]:
+                ring = Image.new("L", im.size, 0)
+                cx, cy = fx * w, fy * h
+                box = (int(cx - rad), int(cy - rad * 0.85), int(cx + rad), int(cy + rad * 0.85))
+                if box[2] <= box[0] or box[3] <= box[1]:
+                    continue
+                ring.paste(bump.resize((box[2] - box[0], box[3] - box[1])), box)
+                # What is under the click is the iris: take its colour and brightness from a few pixels at the
+                # centre, then keep what matches inside the ring. Lashes are far darker, the white far brighter
+                # and the lid a different colour, so all three drop out without having to be described.
+                px = max(1, int(rad * 0.22))
+                patch = im.crop((int(cx - px), int(cy - px), int(cx + px + 1), int(cy + px + 1))).convert("HSV")
+                hs, ss, vs = (sum(c[i] for c in patch.getdata()) / max(1, len(patch.getdata())) for i in range(3))
+                near_v = vc.point(lambda x: 255 if abs(x - vs) <= 62 else 0)
+                near_h = hc.point(lambda x: 255 if abs(((x - hs + 128) % 256) - 128) <= 40 else 0)
+                grey_ = sc.point(lambda x: 255 if x < 36 else 0)     # a grey iris has no hue worth matching
+                iris = ImageChops.multiply(ImageChops.multiply(ring, near_v),
+                                           ImageChops.lighter(near_h, grey_ if ss < 60 else grey_.point(lambda x: 0)))
+                iris = iris.filter(ImageFilter.GaussianBlur(max(1, int(rad * 0.12))))   # no hard speckled edges
+                a_e = min(1.0, eye_amount)
+                if eye_sat > 0:                                  # move the colour there, do not scale what is
+                    hc2 = Image.composite(hc.point(lambda x: int(round(x + (etgt - x) * a_e))), hc2, iris)
+                sc2 = Image.composite(sc.point(lambda x: max(0, min(255, int(round(x + (eye_sat - x) * a_e))))),
+                                      sc2, iris)                 # there: a grey iris has nothing to scale up
+                if eye_val >= 0:
+                    vc2 = Image.composite(vc.point(lambda x: max(0, min(255, int(round(x + (eye_val - x) * a_e))))),
+                                          vc2, iris)
+                elif eye_sat > 0:                                # a hue on a near-black iris is still near-black:
+                    floor = 70 + a_e * 55                        # lift it enough for the colour to be seen
+                    vc2 = Image.composite(vc.point(lambda x: int(x + (floor - x) * a_e * 0.75) if x < floor else x),
+                                          vc2, iris)
+        buf = io.BytesIO()
+        Image.merge("HSV", (hc2, sc2, vc2)).convert("RGB").save(buf, "PNG")
+        return buf.getvalue()
+    except (OSError, ValueError):
+        return data
+
+
+def skin_tint(data: bytes, hue: float = 110, amount: float = 0.9, sat: float = 1.3, catch: float = 0.6) -> bytes:
+    """Kept for older callers: the skin colour part of touch_up()."""
+    return touch_up(data, hue, amount, sat, catch)
+
+
+def save_candidates(images: List[bytes], folder: Path, stem: str, ghost: float = 0.0) -> List[str]:
+    if ghost > 0:
+        images = [ghost_image(d, ghost) for d in images]
     folder.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     safe = re.sub(r"[^A-Za-z0-9_.#!-]+", "_", stem).strip("_") or "portrait"
