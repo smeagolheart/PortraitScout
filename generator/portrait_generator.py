@@ -1191,7 +1191,8 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
              reach: float = 0.17, ridge: float = 0.5, blood: str = "Blood", line: float = 1.0,
              angle: Optional[float] = None, edge: float = 0.5,
              speckles: float = 0.0, speckle_points: Optional[List[Tuple[float, float]]] = None,
-             speckle_size: float = 0.16,
+             speckle_size: float = 0.16, speckle_depth: float = 0.6,   # -1 lighter than the skin .. +1 darker
+             speckle_amount: float = 0.75,                       # and how strongly they are laid on
              glow: str = "None", glow_tint: str = "Fire", glow_amount: float = 0.0,
              glow_size: float = 0.035, glow_spill: float = 0.5, glow_round: float = 0.42) -> bytes:
     """Work on the skin of a finished picture: its color, how dark it is, and the lips on their own.
@@ -1457,10 +1458,26 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
                 dd.ellipse([cx - r_, cy - r_ * 0.9, cx + r_, cy + r_ * 0.9], fill=rp.randrange(150, 256))
             dots = ImageChops.multiply(dots, skin_here)          # on skin, not on hair, cloth or the background
             dots = dots.filter(ImageFilter.GaussianBlur(max(0.6, w / 900)))
-            # darker than whatever they fall on, rather than one flat color: a freckle in shadow is still a
-            # freckle, and the paint underneath keeps its texture
-            darker = Image.merge("RGB", [c.point(lambda x: int(x * 0.68)) for c in out.split()])
-            out = Image.composite(darker, out, dots.point(lambda x: int(x * a_p * 0.85)))
+            # Darker than whatever they fall on, rather than one flat color, so the paint underneath keeps its
+            # texture - but with a floor taken from the face's own level, or darkening the skin would take the
+            # speckles down with it and a weathered face would end up smooth again.
+            lvl = out.convert("L")
+            inked = [v for v, m in zip(lvl.getdata(), skin_here.getdata()) if m > 40]   # getdata: every Pillow
+            ref = sorted(inked)[len(inked) // 2] if inked else 128
+            deep = max(-1.0, min(1.0, speckle_depth))           # how they sit against the skin: - lighter than
+            mag = abs(deep)                                      # it, + darker. How many is only how many.
+            step = max(1, int(ref * (0.08 + 0.45 * mag)), int(34 * mag))   # a floor too: on skin darkened almost
+            #                                            to nothing, a share of very little is not a marking
+            if deep >= 0:
+                mul = 1.0 - 0.62 * mag
+                shade = Image.merge("RGB", [c.point(lambda x: max(0, min(x - step, int(x * mul))))
+                                            for c in out.split()])
+            else:
+                mul = 1.0 + 0.70 * mag
+                shade = Image.merge("RGB", [c.point(lambda x: min(255, max(x + step, int(x * mul))))
+                                            for c in out.split()])
+            lay = max(0.0, min(1.0, speckle_amount))             # Strength does this and nothing else
+            out = Image.composite(shade, out, dots.point(lambda x: int(x * lay)))
         if grime > 0:
             # The engine washes everybody: a peasant comes out as clean as a prince, and no wording stops it.
             # Dirt is a thing done to a picture - soft smudges where sweat and soot gather, and a little grain

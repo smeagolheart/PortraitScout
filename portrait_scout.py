@@ -44,7 +44,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-VERSION = "1.4a"
+VERSION = "1.4b"
 T_BMP, T_WAV, T_BCS, T_IDS, T_CRE, T_DLG, T_2DA = 0x0001, 0x0004, 0x03EF, 0x03F0, 0x03F1, 0x03F3, 0x03F4
 T_ARE, T_WMP = 0x03F2, 0x03F7
 EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg", T_2DA: ".2da",
@@ -4387,6 +4387,9 @@ def run_gui() -> None:
             catch_wheel(w_)
         cells: List[dict] = []                                       # one per candidate shown: path, cell, image
 
+        cut_out = lambda q: (str(q).lower().endswith(".bmp") and bool(   # noqa: E731
+            re.search(r"_\d+x\d+(_z\d+)?(_m-?\d+_-?\d+)?$", Path(q).stem)))
+
         def use(path: str) -> None:
             # the proposal is a game-ready .bmp (cropped and shrunk); the full-size picture stays next to it
             size = gs.get("portrait_bmp", {}) or {}
@@ -4436,9 +4439,9 @@ def run_gui() -> None:
             finally:
                 dlg.config(cursor="")
             same_ = lambda q: os.path.normcase(os.path.normpath(q))  # noqa: E731
-            if path.lower().endswith(".bmp"):                        # only one game portrait at a time: the old one goes
-                for c in [c for c in cells if str(c["path"]).lower().endswith(".bmp")
-                          and same_(c["path"]) != same_(path)]:
+            if path.lower().endswith(".bmp"):                        # only one cut-out portrait at a time: the old one
+                for c in [c for c in cells if cut_out(c["path"])     # goes. The portrait it wears in the game, and
+                          and same_(c["path"]) != same_(path)]:      # anything touched up, are not ours to delete
                     try:
                         os.remove(c["path"])
                     except OSError:
@@ -4556,6 +4559,12 @@ def run_gui() -> None:
                 ttk.Button(bar_, text="Fit", width=4,
                            command=lambda: (zoom.update(k=round(fit, 2)), render())).pack(side="left", padx=(4, 10))
                 ttk.Label(bar_, textvariable=cap, foreground="#666").pack(side="left")
+                tu_ = ttk.Button(bar_, text="Touch up", width=9,
+                                 command=lambda: (v.destroy(), skinned(path)))
+                tu_.pack(side="right")
+                tooltip(tu_, "Work on this picture: skin, lips, speckles, a spot of color, scars and wounds, "
+                             "light, and the shape of what you click. It opens on the picture you are looking "
+                             "at, and this window closes behind it.")
                 render()
                 lab.bind("<Button-1>", lambda e: v.destroy())
                 lab.bind("<Button-3>", lambda e: save_image(v, Path(path).name, None, path))
@@ -4694,8 +4703,10 @@ def run_gui() -> None:
                 cvs.bind("<Button-1>", lambda e: view_full(path))     # click: full size
                 cvs.bind("<Button-3>", lambda e: cand_menu(e, path))  # right click: save a copy
                 rw, rh = int(round(pi.width() * k)), int(round(pi.height() * k))
-                ttk.Label(cell, text=(f"game portrait {rw}x{rh}" if done_bmp else f"{rw}x{rh}"),
-                          foreground="#1a7f37" if done_bmp else "#888",
+                in_game = "_gnow_" in Path(path).stem             # the picture it wears in the game right now
+                ttk.Label(cell, text=(f"its portrait now {rw}x{rh}" if in_game else
+                                      f"game portrait {rw}x{rh}" if done_bmp else f"{rw}x{rh}"),
+                          foreground="#1a5fb4" if in_game else "#1a7f37" if done_bmp else "#888",
                           font=("TkDefaultFont", 9, "bold") if done_bmp else "TkDefaultFont").pack()
                 info.update(image=pi, canvas=cvs, sw=rw, sh=rh,
                             tw=pi.width(), th=pi.height())
@@ -4711,14 +4722,14 @@ def run_gui() -> None:
                        command=lambda: (propose(path) if done_bmp else use(path))).pack(side="left")
             ttk.Button(btns, text="Discard", width=8, command=lambda: discard([path])).pack(side="left", padx=(4, 0))
             worked = Path(path).stem.endswith(("_ghost", "_skin", "_touch"))
-            if hasattr(pg, "touch_up") and not done_bmp:
+            if hasattr(pg, "touch_up"):
                 kb = ttk.Button(btns, text="Touch up", width=9, command=lambda: skinned(path))
                 kb.pack(side="left", padx=(4, 0))
                 tooltip(kb, "Work on this one's skin: its color (green, gray, red), how dark it is, and the "
                             "lips on their own. Hair, cloth, metal and the background are left alone. The engine "
                             "paints a person it recognizes whatever the description says, so this is done to the "
                             "picture afterwards.")
-            if worked and not done_bmp:
+            if worked:
                 gb = ttk.Button(btns, text="Plain", width=6, command=lambda: plain_again(path))
                 gb.pack(side="left", padx=(4, 0))
                 tooltip(gb, "Put the picture back as it came out of the engine.")
@@ -4801,19 +4812,53 @@ def run_gui() -> None:
             body.pack(fill="both", expand=True, padx=10, pady=10)
             hold = ttk.Frame(body)
             hold.grid(row=0, column=0, rowspan=2, padx=(0, 12), sticky="n")
+            pane = ttk.Frame(hold)                                   # the picture and its scrollbars
+            pane.pack(side="top")
+            zrow = ttk.Frame(hold)                                   # how big it is shown
+            zrow.pack(side="top", fill="x", pady=(5, 0))
+            fit_k = min(room_w / max(1, small.width), room_h * 0.8 / max(1, small.height), 3.0)
+            zoom_at = {"k": round(fit_k, 2) if fit_k >= 1.5 else 1.0}   # a game portrait opens big enough to work on
             view_w, view_h = min(small.width, room_w), min(small.height, room_h)
-            lab = tk.Canvas(hold, width=view_w, height=view_h, highlightthickness=0, cursor="tcross",
+            lab = tk.Canvas(pane, width=view_w, height=view_h, highlightthickness=0, cursor="tcross",
                             scrollregion=(0, 0, small.width, small.height))
-            if small.height > view_h:
-                pv = ttk.Scrollbar(hold, orient="vertical", command=lab.yview)
-                pv.pack(side="right", fill="y")
-                lab.configure(yscrollcommand=pv.set)
-            if small.width > view_w:
-                ph = ttk.Scrollbar(hold, orient="horizontal", command=lab.xview)
-                ph.pack(side="bottom", fill="x")
-                lab.configure(xscrollcommand=ph.set)
-            lab.pack(side="left")
+            pv = ttk.Scrollbar(pane, orient="vertical", command=lab.yview)
+            ph = ttk.Scrollbar(pane, orient="horizontal", command=lab.xview)
+            lab.configure(yscrollcommand=pv.set, xscrollcommand=ph.set)
+            zcap = tk.StringVar(value="")
+
+            def shown() -> Tuple[int, int]:
+                """The picture's size on screen. The touch up itself is always done at the picture's own size."""
+                k = zoom_at["k"]
+                return max(1, int(small.width * k)), max(1, int(small.height * k))
+
+            def fit_view() -> None:
+                """The canvas, its scrollbars and the caption, for whatever zoom is set now."""
+                nonlocal view_w, view_h
+                sw_, sh_ = shown()
+                view_w, view_h = min(sw_, room_w), min(sh_, room_h)
+                lab.configure(width=view_w, height=view_h, scrollregion=(0, 0, sw_, sh_))
+                for w__ in (pv, ph, lab):                            # packed in this order, so the bar under the
+                    w__.pack_forget()                                # picture does not run under the side one
+                if sh_ > view_h:
+                    pv.pack(side="right", fill="y")
+                if sw_ > view_w:
+                    ph.pack(side="bottom", fill="x")
+                lab.pack(side="left")
+                zcap.set(f"{small.width}x{small.height} at {int(zoom_at['k'] * 100)}%")
+
+            def zoom_to(k: float) -> None:
+                zoom_at["k"] = max(0.25, min(8.0, round(k, 2)))
+                fit_view()
+                draw()
+            ttk.Label(zrow, text="Zoom:").pack(side="left")
+            ttk.Button(zrow, text="-", width=3, command=lambda: zoom_to(zoom_at["k"] / 1.25)).pack(side="left", padx=(4, 0))
+            ttk.Button(zrow, text="+", width=3, command=lambda: zoom_to(zoom_at["k"] * 1.25)).pack(side="left", padx=(4, 0))
+            ttk.Button(zrow, text="1:1", width=4, command=lambda: zoom_to(1.0)).pack(side="left", padx=(4, 0))
+            ttk.Button(zrow, text="Fit", width=4, command=lambda: zoom_to(fit_k)).pack(side="left", padx=(4, 8))
+            ttk.Label(zrow, textvariable=zcap, foreground="#888").pack(side="left")
+            fit_view()
             lab.bind("<MouseWheel>", lambda e: lab.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+            lab.bind("<Control-MouseWheel>", lambda e: zoom_to(zoom_at["k"] * (1.25 if e.delta > 0 else 1 / 1.25)))
             sidebox = ttk.Frame(body)                            # the settings scroll: there are more of them
             sidebox.grid(row=0, column=1, sticky="nsew")         # than a short screen has room for
             scan = tk.Canvas(sidebox, highlightthickness=0, borderwidth=0, width=1, height=min(room_h, 820))
@@ -4870,6 +4915,8 @@ def run_gui() -> None:
             shapes: List[Tuple[float, float]] = list(mem.get("shapes", []))
             blots: List[Tuple[float, float]] = list(mem.get("blots", []))
             spkarea = tk.DoubleVar(value=float(mem.get("spkarea", 0.16)))
+            spkdeep = tk.DoubleVar(value=float(mem.get("spkdeep", 0.6)))
+            spkamt = tk.DoubleVar(value=float(mem.get("spkamt", 0.75)))
             mark_kind = tk.StringVar(value="color")
             warp = tk.DoubleVar(value=float(mem.get("warp", 0.0)))
             warpsize = tk.DoubleVar(value=float(mem.get("warpsize", 0.17)))
@@ -4902,7 +4949,7 @@ def run_gui() -> None:
                         "glowtint": glowclr.get(), "glowamt": glowamt.get(), "glowsize": glowsize.get(),
                         "glowspill": glowspill.get(), "glowround": glowround.get(),
                         "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
-                        "spkarea": spkarea.get()}
+                        "spkarea": spkarea.get(), "spkdeep": spkdeep.get(), "spkamt": spkamt.get()}
 
             def remember() -> None:
                 """Put the state as it was before this change on the pile."""
@@ -4938,6 +4985,8 @@ def run_gui() -> None:
                 blots.clear()
                 blots.extend(d.get("blots") or [])                   # type: ignore[arg-type]
                 spkarea.set(float(d.get("spkarea", spkarea.get())))
+                spkdeep.set(float(d.get("spkdeep", spkdeep.get())))
+                spkamt.set(float(d.get("spkamt", spkamt.get())))
                 prev.clear()
                 prev.update(d)
                 tab_marks(redraw=False)                              # the tab, not the undone step, says where
@@ -4951,6 +5000,7 @@ def run_gui() -> None:
                 rb = io.BytesIO()
                 small.resize((max(1, small.width // 2), max(1, small.height // 2)), Image.BILINEAR).save(rb, "PNG")
                 thumb_rough = rb.getvalue()
+                fit_view()                                           # in case the painted-in pass is another size
 
             def values() -> Tuple[object, ...]:
                 hue, sat = skins.get(skin_v.get(), (110, 1.3))
@@ -4971,12 +5021,13 @@ def run_gui() -> None:
                         0.0 if glow_v.get() == "None" or not spots else round(float(glowamt.get()), 2),
                         round(float(glowsize.get()), 3), round(float(glowspill.get()), 2),
                         round(float(glowround.get()), 2), round(float(stretch.get()), 2),
-                        round(float(speckle.get()), 2), round(float(spkarea.get()), 3))
+                        round(float(speckle.get()), 2), round(float(spkarea.get()), 3),
+                        round(float(spkdeep.get()), 2), round(float(spkamt.get()), 2))
 
             def draw(fast: bool = False) -> None:
                 keep.pop("job", None)
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa) = values()
+                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
                 gpct2.config(text=f"{int(gri * 100)}%")
                 cpct3.config(text=f"{int(max(scr, wnd) * 100)}%")
                 for rb__ in bbtn:
@@ -4996,11 +5047,15 @@ def run_gui() -> None:
                 cpct.config(text=f"{int(cat * 100)}%")
                 spkpct.config(text=f"{int(spk * 100)}%")
                 for w_, on_ in ((pct, skin_v.get() != "Leave"), (lpct, lips_v.get() != "Leave"),
-                                (epct, eyes_v.get() != "Leave"), (arpct, spk > 0)):
+                                (epct, eyes_v.get() != "Leave"), (arpct, spk > 0), (dppct, spk > 0), (smpct, spk > 0)):
                     sc__ = keep.get(f"sc_{id(w_)}")              # a strength with nothing to be strong about
                     if sc__ is not None:
                         sc__.config(state="normal" if on_ else "disabled")   # type: ignore[union-attr]
+                    if not on_:
+                        w_.config(text="-")                      # not 0%, which its own handle contradicts
                 arpct.config(text=f"{spa:.2f}")
+                dppct.config(text=("+" if spd > 0 else "") + f"{int(spd * 100)}%")
+                smpct.config(text=f"{int(spm * 100)}%")
                 blotlab.config(text=(f"{len(blots)} patch(es) marked." if blots else
                                      "Click a cheek to put the speckles there."),
                                foreground="#666")
@@ -5037,11 +5092,13 @@ def run_gui() -> None:
                         src_ = pg.warp_image(src_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                              max(0.03, sln * 0.32))
                     done_ = pg.touch_up(src_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                        spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa,
+                                        spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
                                         glw, gtn, gam, gsz, gsp, grd)
                     im = Image.open(io.BytesIO(pg.ghost_image(done_, fad)))   # type: ignore[attr-defined]
-                    if fast:                                         # back up to size, so nothing jumps about
-                        im = im.resize((small.width, small.height), Image.BILINEAR)
+                    sw_, sh_ = shown()                               # the rough pass is half size: back up to the
+                    if (im.width, im.height) != (sw_, sh_):          # shown size too, so nothing jumps about
+                        im = im.resize((sw_, sh_), Image.BILINEAR if fast else
+                                       Image.NEAREST if zoom_at["k"] >= 3 else Image.LANCZOS)
                 except Exception as e:  # noqa: BLE001 - say so rather than showing an empty box
                     lab.delete("all")
                     lab.create_text(view_w // 2, view_h // 2, width=view_w - 20, fill="#b5452f",
@@ -5055,20 +5112,21 @@ def run_gui() -> None:
                 if keep.get("undo"):
                     keep["undo"].config(state="normal" if hist else "disabled")   # type: ignore[union-attr]
                 if marks_v.get():                                    # where you clicked, and what for
+                    sw_, sh_ = shown()
                     if eyes_v.get() != "Leave":
                         for fx, fy in spots:
-                            x_, y_ = fx * small.width, fy * small.height
-                            rr = max(3.0, esz * small.width)
+                            x_, y_ = fx * sw_, fy * sh_
+                            rr = max(3.0, esz * sw_)
                             lab.create_oval(x_ - rr, y_ - rr * 0.8, x_ + rr, y_ + rr * 0.8, outline="#ffd000", width=1)
                     if spk > 0:
                         for fx, fy in blots:
-                            x_, y_ = fx * small.width, fy * small.height
-                            rr = max(4.0, spa * small.width)
+                            x_, y_ = fx * sw_, fy * sh_
+                            rr = max(4.0, spa * sw_)
                             lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#7ad17a", width=1)
                     if abs(wrp) >= 0.01 or scr > 0 or wnd > 0:
                         for fx, fy in shapes:
-                            x_, y_ = fx * small.width, fy * small.height
-                            rr = max(4.0, wsz * small.width)
+                            x_, y_ = fx * sw_, fy * sh_
+                            rr = max(4.0, wsz * sw_)
                             lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#36a0ff", width=1)
 
             def mark(e: "tk.Event") -> None:
@@ -5077,8 +5135,9 @@ def run_gui() -> None:
                 here = {"color": spots, "shape": shapes}.get(mark_kind.get(), blots)
                 if len(here) >= 8:                               # eight is plenty; the ninth starts over
                     here.clear()
-                here.append((min(1.0, max(0.0, lab.canvasx(e.x) / max(1, small.width))),
-                             min(1.0, max(0.0, lab.canvasy(e.y) / max(1, small.height)))))
+                sw_, sh_ = shown()
+                here.append((min(1.0, max(0.0, lab.canvasx(e.x) / sw_)),
+                             min(1.0, max(0.0, lab.canvasy(e.y) / sh_))))
                 if mark_kind.get() == "skin" and float(speckle.get()) < 0.01:
                     speckle.set(0.6)                             # a patch marked with nothing to put in it
                 elif mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
@@ -5110,6 +5169,14 @@ def run_gui() -> None:
                 out.pack(side="left")
                 keep[f"sc_{id(out)}"] = sc_                      # so a slider can be grayed when it does nothing
                 return out
+            def group(parent: tk.Misc, text: str) -> ttk.Frame:
+                """One thing you can do, with the settings that belong to it under it and nothing else."""
+                ttk.Label(parent, text=text, font=("TkDefaultFont", 8, "bold"),
+                          foreground="#555").pack(anchor="w", pady=(6, 0))
+                box_ = ttk.Frame(parent)
+                box_.pack(fill="x", padx=(10, 0))
+                return box_
+
             nb = ttk.Notebook(side)                              # a tab each, rather than one long column
             nb.pack(fill="both", expand=True)
             t_skin, t_lips, t_spot, t_shape, t_pic = (ttk.Frame(nb, padding=(6, 4)) for _ in range(5))
@@ -5126,18 +5193,30 @@ def run_gui() -> None:
                     if redraw:
                         draw()
             nb.bind("<<NotebookTabChanged>>", tab_marks)
-            sgrid = ttk.Frame(t_skin)
+            t_color = group(t_skin, "Color it")
+            sgrid = ttk.Frame(t_color)
             sgrid.pack(fill="x")
             for i, nm_ in enumerate(["Leave"] + list(skins)):
                 ttk.Radiobutton(sgrid, text=nm_, value=nm_, variable=skin_v,
                                 command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            pct = slider(t_skin, "Strength", amount, 0.1, 1.0)
-            gpct = slider(t_skin, "Darker", light, -1.0, 1.0)
-            spkpct = slider(t_skin, "Speckles", speckle, 0.0, 1.0)
-            arpct = slider(t_skin, "Area", spkarea, 0.04, 0.45)
-            blotlab = ttk.Label(t_skin, text="Click a cheek to put the speckles there.", foreground="#666")
+            pct = slider(t_color, "Strength", amount, 0.1, 1.0)
+            gpct = slider(t_color, "Darker", light, -1.0, 1.0)
+            cpct = slider(t_color, "Catch", catch, 0.1, 1.0)
+            t_speck = group(t_skin, "Speckle it")
+            spkpct = slider(t_speck, "How many", speckle, 0.0, 1.0)
+            smpct = slider(t_speck, "Strength", spkamt, 0.1, 1.0)
+            dppct = slider(t_speck, "Tone", spkdeep, -1.0, 1.0)
+            arpct = slider(t_speck, "Area", spkarea, 0.04, 0.45)
+            tooltip(smpct, "How strongly the speckles are laid on, and nothing else. How many sets the count, "
+                           "Tone sets whether they are lighter or darker than the skin, Area how wide a patch "
+                           "each mark covers.")
+            tooltip(dppct, "How the speckles sit against the skin: to the right darker than it, to the left "
+                           "lighter - pale freckles, old pocks, the bleached flecks on a sea creature. How many "
+                           "says how many; this says how much they show. It is measured against the face's own "
+                           "level, so darkening the skin does not take the markings down with it, and at 0 "
+                           "nothing shows.")
+            blotlab = ttk.Label(t_speck, text="Click a cheek to put the speckles there.", foreground="#666")
             blotlab.pack(anchor="w")
-            cpct = slider(t_skin, "Catch", catch, 0.1, 1.0)
             tooltip(arpct, "How wide a patch each mark speckles. With no marks the speckles go across the bridge "
                            "of the nose and both cheeks, where freckles are; click the picture to put them "
                            "somewhere of your own, and the green ring shows what each click covers.")
@@ -5228,14 +5307,7 @@ def run_gui() -> None:
             shapelab = ttk.Label(t_shape, text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
                                  foreground="#666")
             shapelab.pack(anchor="w")
-            def group(text: str) -> ttk.Frame:
-                """A thing you can do to a mark, with the settings that belong to it under it."""
-                ttk.Label(t_shape, text=text, font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(anchor="w",
-                                                                                                      pady=(6, 0))
-                box_ = ttk.Frame(t_shape)
-                box_.pack(fill="x", padx=(10, 0))
-                return box_
-            push = group("Push it out of shape")
+            push = group(t_shape, "Push it out of shape")
             wpct = slider(push, "Swell", warp, -1.0, 1.0)
             stpct = slider(push, "Stretch", stretch, -1.0, 1.0)
             rch = slider(push, "Spread", warpsize, 0.05, 0.40)
@@ -5317,7 +5389,7 @@ def run_gui() -> None:
             def paint_in() -> None:
                 """Settle this pass into the picture, so the next scar or wound can be set differently."""
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa) = values()
+                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
                 if (not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0 and gri <= 0 and cre <= 0
                         and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
                     gstat.set("Nothing set to paint in yet.")
@@ -5330,7 +5402,7 @@ def run_gui() -> None:
                         cur = pg.warp_image(cur, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                             max(0.03, sln * 0.32))
                     cur = pg.touch_up(cur, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                      spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa,
+                                      spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
                                         glw, gtn, gam, gsz, gsp, grd)
                     cur = pg.ghost_image(cur, fad)                   # type: ignore[attr-defined]
                 except Exception as e:  # noqa: BLE001 - say so rather than losing the picture
@@ -5357,7 +5429,7 @@ def run_gui() -> None:
 
             def apply_() -> None:
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa) = values()
+                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
                 if (not keep.get("baked") and not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0
                         and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
                     win.destroy()
@@ -5380,10 +5452,12 @@ def run_gui() -> None:
                                         "glowround": float(glowround.get()),
                                         "blood": blood_v.get(),
                                         "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
-                                        "spkarea": float(spkarea.get())}
+                                        "spkarea": float(spkarea.get()), "spkdeep": float(spkdeep.get()),
+                                        "spkamt": float(spkamt.get())}
                 try:
-                    new_ = str(q.with_name(q.stem + "_touch.png"))
-                    start_bytes = thumb                          # what is on screen now: any pass painted in
+                    as_bmp = q.suffix.lower() == ".bmp"          # already the shape and size of a game portrait:
+                    new_ = str(q.with_name(q.stem + "_touch" + (".bmp" if as_bmp else ".png")))   # it stays one,
+                    start_bytes = thumb                          # so nothing is cut out of it a second time
                     if flp:
                         start_bytes = pg.flip_image(start_bytes)     # type: ignore[attr-defined]
                     was_ = pg.stretch_image(start_bytes, shapes, stc, wsz)   # type: ignore[attr-defined]
@@ -5392,9 +5466,22 @@ def run_gui() -> None:
                         was_ = pg.warp_image(was_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                              max(0.03, sln * 0.32))
                     out_ = pg.touch_up(was_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                       spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa,
+                                       spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
                                         glw, gtn, gam, gsz, gsp, grd)
-                    Path(new_).write_bytes(pg.ghost_image(out_, fad))   # type: ignore[attr-defined]
+                    done_ = pg.ghost_image(out_, fad)                # type: ignore[attr-defined]
+                    if as_bmp:                                       # back to a 24-bit BMP the game can read
+                        tmp_ = q.with_name(q.stem + "_touch_tmp.png")
+                        tmp_.write_bytes(done_)
+                        try:
+                            to_portrait_bmp(str(tmp_), new_, src.width, src.height, None,
+                                            (0, 0, src.width, src.height))
+                        finally:
+                            try:
+                                tmp_.unlink()
+                            except OSError:
+                                pass
+                    else:
+                        Path(new_).write_bytes(done_)
                     gs["skin_catch"] = cat
                     try:
                         pg.save_patch(gs, {"skin_catch": cat})       # type: ignore[attr-defined]
@@ -5418,7 +5505,9 @@ def run_gui() -> None:
                         ("swollen" if wrp > 0 else "pinched") if abs(wrp) >= 0.01 else "",
                         ("lighter" if lig > 0 else "darker") if abs(lig) >= 0.01 else ""]
                 gstat.set(", ".join(x for x in said if x).capitalize()
-                          + ". Press Plain under it to put the picture back.")
+                          + ". Press Plain under it to put the picture back."
+                          + (" It is already portrait-sized, so Propose under it makes it the one this creature "
+                             "wears - nothing is cut out of it again." if as_bmp and not generic else ""))
             def reset_() -> None:
                 """Every slider back where it started: nothing changed, the color the creature's own words ask for."""
                 remember()
@@ -5435,6 +5524,8 @@ def run_gui() -> None:
                 creases.set(0.0)
                 speckle.set(0.0)
                 spkarea.set(0.16)
+                spkdeep.set(0.6)
+                spkamt.set(0.75)
                 blots.clear()
                 cut_v.set("None")
                 cutamt.set(0.85)
@@ -5955,15 +6046,46 @@ def run_gui() -> None:
         stop_btn.config(command=lambda: engine_job(True))
         engine_state()
 
+        def current_shot() -> None:
+            """The portrait this creature wears in the game now, put in with the candidates so it can be touched up
+            or re-cut like any other picture. It is copied out of the game's files once, then kept."""
+            def area(tag: object) -> int:                        # "210x330" -> 69300, so the bigger of the two
+                m = re.match(r"(\d+)x(\d+)$", str(tag or ""))      # pictures is the one worked on
+                return int(m.group(1)) * int(m.group(2)) if m else 0
+            both = [(str(r.get("large_name") or ""), area(r.get("large_size"))),
+                    (str(r.get("small_name") or ""), area(r.get("small_size")))]
+            nm = max((x for x in both if x[0]), key=lambda x: x[1], default=("", 0))[0]
+            if not nm or not res:
+                return
+            dst = folder / f"{stem}_gnow_{nm.upper()}.bmp"
+            same_ = lambda q: os.path.normcase(os.path.normpath(str(q)))   # noqa: E731
+            if any(same_(c["path"]) == same_(dst) for c in cells):
+                return
+            if not dst.is_file():
+                try:
+                    data = res["game"].get(nm, T_BMP)                # type: ignore[index]
+                except Exception:  # noqa: BLE001 - a half-read install reads no pictures
+                    data = None
+                if not data:
+                    return
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    dst.write_bytes(data)
+                except OSError:
+                    return
+            add_candidate(str(dst))
+
         try:                                                         # candidates made earlier for this creature,
-            pics = ".png .bmp .jpg .jpeg .webp .tga .gif .tif .tiff"  # generated (_c) and brought in (_f) alike
-            found = {q for pat in (f"{stem}_c*", f"{stem}_f*") for q in folder.glob(pat)
-                     if q.is_file() and q.suffix.lower() in pics}
+            pics = ".png .bmp .jpg .jpeg .webp .tga .gif .tif .tiff"  # generated (_c), brought in (_f), or the
+            found = {q for pat in (f"{stem}_c*", f"{stem}_f*", f"{stem}_gnow_*")   # game's own (_gnow_)
+                     for q in folder.glob(pat) if q.is_file() and q.suffix.lower() in pics}
             old = sorted(found, key=lambda q: q.stat().st_mtime)[-12:]
         except OSError:
             old = []
         for q in old:
             add_candidate(str(q))
+        if not generic:
+            current_shot()
 
     def share_portrait(r: dict, parent: object = None, after: object = None) -> None:
         """Give the picture proposed for this creature to other creatures as well - the rest of a decloned bunch,

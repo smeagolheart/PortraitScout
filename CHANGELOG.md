@@ -1,5 +1,30 @@
 # Portrait Scout - what changed
 
+## 1.4b - 20 November 2026
+
+### Features
+
+- **Touch up the portrait a creature already has.** The picture it wears in the game now joins the candidates
+  in Propose, so it can be worked on like a generated one, and Touch up is offered on finished portraits too -
+  including the one you have already proposed.
+  - Touching up a picture that is already portrait-sized gives back one of the same size, so nothing is cut out
+    of it a second time. Propose under it makes it the one the creature wears.
+- **Zoom** in the Touch up window: a 169x266 game portrait opens big enough to work on instead of at stamp
+  size. Clicks and the marks you place scale with it, so a speckle patch or a scar point lands where you see
+  it. Ctrl+wheel zooms, the wheel still scrolls.
+- **Touch up** straight from the full-size view of a candidate, rather than closing it to reach the card.
+- Speckles have their own **How many**, **Strength** and **Tone** - how many dots there are, how strongly they
+  are painted, and whether they sit lighter or darker than the skin.
+
+### Changes
+
+- A slider does one thing. Strength and Darker were moving the skin and the speckles at once, so the Skin tab
+  is now **Color it** and **Speckle it**, each with its own controls.
+- Speckles can be made dark. At a strong Tone they used to collapse back into the skin instead of deepening.
+- **Use this** no longer deletes .bmp files it did not cut out itself. A picture you brought in, or a portrait
+  you touched up, stayed on the window but was taken off the disk.
+- The preview no longer fails on Pillow older than version 12.
+
 ## 1.4a - 20 November 2026
 
 ### Features

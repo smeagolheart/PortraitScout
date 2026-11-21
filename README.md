@@ -97,6 +97,10 @@ Any picture will do - **Create mod...** cuts each one to the portrait's shape, s
 
 **Touch up** on a candidate has a tab each for Skin, Lips, Spots, Shape and Picture, and works on the picture after the engine has painted it, because the engine paints what it recognizes whatever the description says - a commoner comes out as clean and handsome as a prince, and a broken nose comes out straight.
 
+It works on a finished portrait too, not only a generated picture: the portrait a creature wears in the game joins the candidates in Propose, so a stock face can be scarred, speckled or recolored and proposed back. A picture that is already portrait-sized comes back the same size, with nothing cut out of it a second time, so **Propose** under it makes it the creature's portrait as it stands.
+
+The window has its own **zoom**, so a 169x266 game portrait is not worked on at stamp size; the marks you place scale with it. Ctrl+wheel zooms, the wheel scrolls.
+
 Skin, lips and a **spot color** for anything you click - an eye, a gem, a cloak trim - are recolored from what is already there, so a sampled hue is moved rather than painted over. **Creases**, **grime** and a **ghostly** fade apply to the whole face.
 
 A click on the picture lands on the tab you are on. Click to put a **shape point** down, then either push the face out of shape (**Swell**, with **Spread** for how wide an area moves) or cut it: a healed **scar** or a fresh **wound**, with **Length**, **Width**, **Angle**, **Ridge** (how much light the edge catches) and **Edge** (the dark line the shipped portraits draw round every feature). A scar is mixed from the skin's own color where it falls, so it reads on a drow or a dragon as well as on a farmhand; a wound takes a color - blood, or ichor for the things that have none.
