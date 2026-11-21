@@ -44,7 +44,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-VERSION = "1.3d"
+VERSION = "1.4"
 T_BMP, T_WAV, T_BCS, T_IDS, T_CRE, T_DLG, T_2DA = 0x0001, 0x0004, 0x03EF, 0x03F0, 0x03F1, 0x03F3, 0x03F4
 T_ARE, T_WMP = 0x03F2, 0x03F7
 EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg", T_2DA: ".2da",
@@ -435,7 +435,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
         info = {"cre": cn, "long": struct.unpack_from("<i", b, 8)[0], "short": struct.unpack_from("<i", b, 12)[0],
                 "anim": struct.unpack_from("<I", b, 0x28)[0], "small": _r8(b, 0x34), "large": _r8(b, 0x3C),
                 "race": b[0x272], "cls": b[0x273], "sex": b[0x275], "dialog": _r8(b, 0x2CC).upper(),
-                "colours": list(b[0x2C:0x33]),                       # metal, minor, major, skin, leather, armor, hair
+                "colors": list(b[0x2C:0x33]),                       # metal, minor, major, skin, leather, armor, hair
                 "scripts": {_r8(b, o).upper() for o in (0x248, 0x250, 0x258, 0x260, 0x268)} - {""}}
         cre_by_name[cn] = info
         if info["dialog"]:
@@ -523,8 +523,8 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
         return got
 
     race_ids, anim_ids = game.read_ids("RACE"), game.read_ids("ANIMATE")
-    pal = palette_rgb(game)                                          # the game's own colour ramps, for what they wear
-    rsets = random_colour_sets(game)                                 # ... and the sets a high colour byte means
+    pal = palette_rgb(game)                                          # the game's own color ramps, for what they wear
+    rsets = random_color_sets(game)                                 # ... and the sets a high color byte means
 
     def strip_name(strref: int) -> str:
         return _COLOR.sub(r"\1", tlk.text(strref)).strip() if strref >= 0 else ""
@@ -560,7 +560,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
                 r["sex"] = SEX_NAMES.get(c["sex"], "")
                 an = anim_ids.get(c["anim"]) or anim_ids.get(c["anim"] & 0xFF00) or ""
                 r["anim"] = nice(an) or (f"0x{c['anim']:04X}" if c["anim"] else "")
-                r["colours"] = creature_colours(c.get("colours") or [], pal, rsets)
+                r["colors"] = creature_colors(c.get("colors") or [], pal, rsets)
     # one row per NPC: dialogs of the same-named creature are one row when they share a creature file or portrait, or
     # do not differ in race / gender / animation (two different "Guard" creatures stay apart)
     merged: Dict[str, List[dict]] = defaultdict(list)
@@ -1808,7 +1808,7 @@ def add_areas(rows: List[dict], game: Optional["Game"], text: Optional[Callable[
                 + (f" and {len(r['areas']) - 40} more" if len(r["areas"]) > 40 else ""))
 
 
-_COLOUR_SLOTS = ("metal", "minor", "major", "skin", "leather", "armor", "hair")
+_COLOR_SLOTS = ("metal", "minor", "major", "skin", "leather", "armor", "hair")
 
 
 def _hsv(rgb: Tuple[int, int, int]) -> Tuple[float, float, float]:
@@ -1827,15 +1827,15 @@ def _hsv(rgb: Tuple[int, int, int]) -> Tuple[float, float, float]:
 
 
 def _rgb_word(rgb: Tuple[int, int, int], slot: str = "cloth") -> str:
-    """A plain name for a colour, worded for what wears it: hair, skin, metal or cloth."""
+    """A plain name for a color, worded for what wears it: hair, skin, metal or cloth."""
     h, c, v = _hsv(rgb)
     if slot == "skin":                                               # the ramp is a skin tone, not a garment
         if c > 0.18 and not 5 <= h < 50:                             # orcs, goblins, drow: skin that is not flesh
             return _rgb_word(rgb) + " skin"
-        if c < 0.07 and v < 0.55:                                    # a grey, bloodless ramp: drow, duergar, undead
-            return ("deep charcoal-grey skin the colour of wet slate" if v < 0.30 else
-                    "charcoal-grey skin the colour of wet slate" if v < 0.45 else
-                    "ashen grey skin")                               # a bare colour word reads as pallor, so the
+        if c < 0.07 and v < 0.55:                                    # a gray, bloodless ramp: drow, duergar, undead
+            return ("deep charcoal-gray skin the color of wet slate" if v < 0.30 else
+                    "charcoal-gray skin the color of wet slate" if v < 0.45 else
+                    "ashen gray skin")                               # a bare color word reads as pallor, so the
         #                                                              dark end has to say what it looks like
         return ("deep brown skin, nearly black" if v < 0.30 else "dark brown skin" if v < 0.46 else
                 "brown skin" if v < 0.60 else "olive skin" if v < 0.72 and h < 50 else
@@ -1843,8 +1843,8 @@ def _rgb_word(rgb: Tuple[int, int, int], slot: str = "cloth") -> str:
     if slot == "hair":
         if c < 0.12 or (not 0 <= h < 70 and c < 0.45):               # a cool, washed-out ramp is silver or white
             if 150 <= h < 260 and v > 0.45:                          # hair in a sprite, not a dye job
-                return "silver-white hair" if v > 0.52 else "steel grey hair"
-            return "black hair" if v < 0.30 else "grey hair" if v < 0.75 else "white hair"
+                return "silver-white hair" if v > 0.52 else "steel gray hair"
+            return "black hair" if v < 0.30 else "gray hair" if v < 0.75 else "white hair"
         if v < 0.30:
             return "black hair"
         if h < 20:
@@ -1859,7 +1859,7 @@ def _rgb_word(rgb: Tuple[int, int, int], slot: str = "cloth") -> str:
             return "dark iron" if v < 0.40 else "steel" if v < 0.78 else "silver"
         return ("bronze" if v < 0.55 else "gold") if h < 60 else _rgb_word(rgb) + " metal"
     if c < 0.10:                                                     # cloth and leather
-        return "black" if v < 0.18 else "dark grey" if v < 0.40 else "grey" if v < 0.72 else "white"
+        return "black" if v < 0.18 else "dark gray" if v < 0.40 else "gray" if v < 0.72 else "white"
     if 25 <= h < 55:
         base = "brown" if v < 0.55 else "gold"
     else:
@@ -1889,14 +1889,14 @@ def palette_rgb(game: "Game") -> Dict[int, Tuple[int, int, int]]:
             y = rows - 1 - idx if h > 0 else idx                     # bottom-up unless the height is negative
             i = off + y * stride + min(w - 1, 6) * 3                 # a middle shade of the ramp
             if i + 2 < len(b):
-                out[idx] = (b[i + 2], b[i + 1], b[i])                # keep the colour; the slot decides the words
+                out[idx] = (b[i + 2], b[i + 1], b[i])                # keep the color; the slot decides the words
     except (struct.error, IndexError, ValueError):
         return out
     return out
 
 
-def random_colour_sets(game: "Game") -> Dict[int, Tuple[str, List[int]]]:
-    """index -> (name, the palette rows it picks from), out of RANDCOLR.2DA. A colour byte of 200 or more is not
+def random_color_sets(game: "Game") -> Dict[int, Tuple[str, List[int]]]:
+    """index -> (name, the palette rows it picks from), out of RANDCOLR.2DA. A color byte of 200 or more is not
     a palette row at all: it names a set the game picks a row from, and the set says what it is for - DrowSkin,
     HobgoblinSkin, PirateMajor. Read as palette rows they come out as nonsense (DrowSkin reads olive yellow)."""
     out: Dict[int, Tuple[str, List[int]]] = {}
@@ -1923,9 +1923,9 @@ _SET_KIND = {"drow": "drow", "elf": "elf", "kobold": "kobold", "hobgoblin": "hob
              "duegar": "duergar", "duergar": "duergar"}                  # the game spells Duergar without the r
 
 
-def creature_colours(raw: List[int], pal: Dict[int, Tuple[int, int, int]],
+def creature_colors(raw: List[int], pal: Dict[int, Tuple[int, int, int]],
                      rsets: Optional[Dict[int, Tuple[str, List[int]]]] = None) -> Dict[str, str]:
-    """The seven colour bytes of a creature file as words: what it wears, its hair and its skin. The sprite the
+    """The seven color bytes of a creature file as words: what it wears, its hair and its skin. The sprite the
     player sees is painted from these, so a portrait that matches them looks like the same character.
 
     A byte of 200 or more names a set in RANDCOLR.2DA rather than a palette row, so the word is the one most of
@@ -1934,13 +1934,13 @@ def creature_colours(raw: List[int], pal: Dict[int, Tuple[int, int, int]],
     out: Dict[str, str] = {}
     if not pal or len(raw) < 7 or len(set(raw[:7])) <= 1:
         return out                                                   # all the same (usually all zero): not set up
-    for i, slot in enumerate(_COLOUR_SLOTS):
+    for i, slot in enumerate(_COLOR_SLOTS):
         want = slot if slot in ("skin", "hair", "metal") else "cloth"
         named = (rsets or {}).get(raw[i])
         if named:
             name, opts = named
-            rough = [(o, _rgb_word(pal[o])) for o in opts if o in pal]   # vote on the plain colour name, so
-            words = Counter(w for _, w in rough)                 # that shades of one colour do not split it
+            rough = [(o, _rgb_word(pal[o])) for o in opts if o in pal]   # vote on the plain color name, so
+            words = Counter(w for _, w in rough)                 # that shades of one color do not split it
             if words:                                            # the game picks one of these at random, so say
                 word, n = words.most_common(1)[0]                # nothing unless nearly all of them agree
                 if n >= len(rough) * 0.6:
@@ -2764,7 +2764,7 @@ def run_gui() -> None:
     ebar = ttk.Frame(tab_exp, padding=(0, 0, 0, 6))                  # the Proposals tab: what you have chosen so far
     ebar.pack(side="top", fill="x")
     sty.configure("Export.TButton", font=("TkDefaultFont", 9, "bold"))
-    export_btn = ttk.Button(ebar, text="Export proposed changes...", style="Export.TButton")
+    export_btn = ttk.Button(ebar, text="Save to-do list...", style="Export.TButton")
     export_btn.pack(side="left")
     mod_btn = ttk.Button(ebar, text="Create mod...")
     mod_btn.pack(side="left", padx=(6, 0))
@@ -2775,9 +2775,9 @@ def run_gui() -> None:
     folder_btn.pack(side="left", padx=(6, 0))
     hist_btn = ttk.Button(ebar, text="Saved sets...")
     hist_btn.pack(side="left", padx=(6, 0))
-    share_btn = ttk.Button(ebar, text="Share work...")
+    share_btn = ttk.Button(ebar, text="Export work...")
     share_btn.pack(side="left", padx=(6, 0))
-    takein_btn = ttk.Button(ebar, text="Open shared work...")
+    takein_btn = ttk.Button(ebar, text="Import work...")
     takein_btn.pack(side="left", padx=(6, 0))
     ttk.Label(ebar, textvariable=prop_where, foreground="#888").pack(side="left", padx=10)
     ecols = ("creature", "cre", "picture", "size", "areas")
@@ -4587,7 +4587,7 @@ def run_gui() -> None:
                 bw, bh = max(16, int(w_var.get())), max(16, int(h_var.get()))
             except (tk.TclError, ValueError):
                 return
-            show_ = zm > 1.005 or nudge["dx"] or nudge["dy"]       # at zoom 1, centred, the box is the whole picture
+            show_ = zm > 1.005 or nudge["dx"] or nudge["dy"]       # at zoom 1, centered, the box is the whole picture
             cropnote.set("the yellow box is what the game portrait keeps" if show_ else "")
             for mw in move_ws:                                       # nothing to nudge when the box is the picture
                 try:
@@ -4714,9 +4714,9 @@ def run_gui() -> None:
             if hasattr(pg, "touch_up") and not done_bmp:
                 kb = ttk.Button(btns, text="Touch up", width=9, command=lambda: skinned(path))
                 kb.pack(side="left", padx=(4, 0))
-                tooltip(kb, "Work on this one's skin: its colour (green, grey, red), how dark it is, and the "
+                tooltip(kb, "Work on this one's skin: its color (green, gray, red), how dark it is, and the "
                             "lips on their own. Hair, cloth, metal and the background are left alone. The engine "
-                            "paints a person it recognises whatever the description says, so this is done to the "
+                            "paints a person it recognizes whatever the description says, so this is done to the "
                             "picture afterwards.")
             if worked and not done_bmp:
                 gb = ttk.Button(btns, text="Plain", width=6, command=lambda: plain_again(path))
@@ -4765,7 +4765,7 @@ def run_gui() -> None:
                          if x.is_file()), q)
 
         def skinned(path: str) -> None:
-            """Touch up a finished picture: the skin's colour, how dark it is, the lips and the eyes. Opening it
+            """Touch up a finished picture: the skin's color, how dark it is, the lips and the eyes. Opening it
             again on a picture already worked on starts from the plain one, with the sliders where they were -
             so it is the same touch up carried on, not one piled on top of another."""
             q = plain_of(path)
@@ -4867,7 +4867,7 @@ def run_gui() -> None:
             eyesize = tk.DoubleVar(value=float(mem.get("eyesize", 0.035)))
             spots: List[Tuple[float, float]] = list(mem.get("spots", []))
             shapes: List[Tuple[float, float]] = list(mem.get("shapes", []))
-            mark_kind = tk.StringVar(value="colour")
+            mark_kind = tk.StringVar(value="color")
             warp = tk.DoubleVar(value=float(mem.get("warp", 0.0)))
             warpsize = tk.DoubleVar(value=float(mem.get("warpsize", 0.17)))
             ridge = tk.DoubleVar(value=float(mem.get("ridge", 0.5)))
@@ -4931,6 +4931,7 @@ def run_gui() -> None:
                 shapes.extend(d["shapes"])                           # type: ignore[arg-type]
                 prev.clear()
                 prev.update(d)
+                tab_marks(redraw=False)                              # the tab, not the undone step, says where
                 draw()                                               # draw() puts the button right again
 
             def set_base(png: bytes) -> None:
@@ -4983,6 +4984,11 @@ def run_gui() -> None:
                 lpct.config(text=f"{int(lam * 100)}%")
                 cpct.config(text=f"{int(cat * 100)}%")
                 epct.config(text=f"{int(eam * 100)}%")
+                for box_, on_, after_ in ((lit_, glw != "None", lrow), (cut_, cut_v.get() != "None", crow)):
+                    if on_ and not box_.winfo_ismapped():        # a kind's own settings are no use until it is
+                        box_.pack(fill="x", padx=(10, 0), after=after_)     # chosen, and take up half the column
+                    elif not on_ and box_.winfo_ismapped():
+                        box_.pack_forget()
                 glpct.config(text=f"{int(gam * 100)}%")
                 gspct.config(text=f"{gsz:.3f}")
                 gppct.config(text=f"{int(gsp * 100)}%")
@@ -5041,12 +5047,12 @@ def run_gui() -> None:
             def mark(e: "tk.Event") -> None:
                 """Click an eye: two marks, then a third starts over."""
                 remember()
-                here = spots if mark_kind.get() == "colour" else shapes
+                here = spots if mark_kind.get() == "color" else shapes
                 if len(here) >= 8:                               # eight is plenty; the ninth starts over
                     here.clear()
                 here.append((min(1.0, max(0.0, lab.canvasx(e.x) / max(1, small.width))),
                              min(1.0, max(0.0, lab.canvasy(e.y) / max(1, small.height)))))
-                if mark_kind.get() == "colour" and eyes_v.get() == "Leave" and glow_v.get() == "None":
+                if mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
                     eyes_v.set(next((k for k in eyeset if k != "Leave"), "Leave"))
                 elif (mark_kind.get() == "shape" and abs(float(warp.get())) < 0.01
                       and cut_v.get() == "None"):
@@ -5074,69 +5080,64 @@ def run_gui() -> None:
                 sc_.bind("<ButtonPress-1>", lambda e: remember(), add="+")   # one step per drag, not per pixel
                 out.pack(side="left")
                 return out
-            ttk.Label(side, text="Skin", font=("TkDefaultFont", 9, "bold")).pack(anchor="w")
-            sgrid = ttk.Frame(side)
+            nb = ttk.Notebook(side)                              # a tab each, rather than one long column
+            nb.pack(fill="both", expand=True)
+            t_skin, t_lips, t_spot, t_shape, t_pic = (ttk.Frame(nb, padding=(6, 4)) for _ in range(5))
+            for f_, nm_ in ((t_skin, "Skin"), (t_lips, "Lips"), (t_spot, "Spots"), (t_shape, "Shape"),
+                            (t_pic, "Picture")):
+                nb.add(f_, text=nm_)
+
+            def tab_marks(_e: object = None, redraw: bool = True) -> None:
+                """Clicks on the picture land where you are working: spots on Spots, shape points on Shape."""
+                now = nb.index(nb.select())
+                if now in (2, 3) and mark_kind.get() != ("color" if now == 2 else "shape"):
+                    mark_kind.set("color" if now == 2 else "shape")
+                    if redraw:
+                        draw()
+            nb.bind("<<NotebookTabChanged>>", tab_marks)
+            sgrid = ttk.Frame(t_skin)
             sgrid.pack(fill="x")
             for i, nm_ in enumerate(["Leave"] + list(skins)):
                 ttk.Radiobutton(sgrid, text=nm_, value=nm_, variable=skin_v,
                                 command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            pct = slider(side, "Strength", amount, 0.1, 1.0)
-            gpct = slider(side, "Darker", light, -1.0, 1.0)
-            fl_ = ttk.Checkbutton(side, text="Mirror the picture", variable=flip_v,
-                                  command=lambda: (remember(), draw()))
-            fl_.pack(anchor="w", pady=(2, 0))
-            tooltip(fl_, "Turn the picture left to right. The engine favours one three-quarter turn of the head, "
-                         "so a roomful of its portraits all face the same way; mirroring some of them breaks "
-                         "that up. Marks you place go where you see them.")
-            cpct2 = slider(side, "Creases", creases, 0.0, 1.0)
-            gpct2 = slider(side, "Grime", grime, 0.0, 1.0)
-            tooltip(cpct2, "Lines where a face creases: the brow, the corners of the eyes, the folds beside the "
-                           "nose and the jowls. Mark the two eyes as colour spots and the crow's feet go where "
-                           "they belong; otherwise they go where they usually are, since these portraits are all "
-                           "framed alike.")
-            tooltip(gpct2, "Dirt: soft smudges where sweat and soot gather, and a little grain over the whole "
-                           "picture. The engine paints a peasant as clean as a prince whatever the description "
-                           "says, so this is done to the picture afterwards.")
-            ttk.Label(side, text="Lips", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(10, 0))
-            lgrid = ttk.Frame(side)
+            pct = slider(t_skin, "Strength", amount, 0.1, 1.0)
+            gpct = slider(t_skin, "Darker", light, -1.0, 1.0)
+            cpct = slider(t_skin, "Catch", catch, 0.1, 1.0)
+            tooltip(cpct, "How much of the face counts as skin, for Skin and for Lips. Low leaves patches behind; "
+                          "high can start taking the background with it. Hair, cloth and metal are left alone "
+                          "either way.")
+            lgrid = ttk.Frame(t_lips)
             lgrid.pack(fill="x")
             for i, nm_ in enumerate(lipset):
                 ttk.Radiobutton(lgrid, text=nm_, value=nm_, variable=lips_v,
                                 command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            lpct = slider(side, "Strength", lipamt, 0.1, 1.0)
-            def header(text: str, kind: str) -> None:
-                """A section, and the radio that sends clicks on the picture to it."""
-                hrow = ttk.Frame(side)
-                hrow.pack(fill="x", pady=(10, 0))
-                ttk.Label(hrow, text=text, font=("TkDefaultFont", 9, "bold")).pack(side="left")
-                rb = ttk.Radiobutton(hrow, text="clicks mark these", value=kind, variable=mark_kind,
-                                     command=lambda: (remember(), draw()))
-                rb.pack(side="left", padx=(8, 0))
-                tooltip(rb, "Clicking the picture puts a mark here. The other section has its own marks: yellow "
-                            "rings are colour spots, blue rings are shape points.")
-            header("Spot colour", "colour")
-            eyelab = ttk.Label(side, text="Click an eye, a gem, a buckle...", foreground="#666")
+            lpct = slider(t_lips, "Strength", lipamt, 0.1, 1.0)
+            def header(parent: tk.Misc, text: str) -> None:
+                """A section, named."""
+                ttk.Label(parent, text=text, font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(6, 0))
+            header(t_spot, "Spot color")
+            eyelab = ttk.Label(t_spot, text="Click an eye, a gem, a buckle...", foreground="#666")
             eyelab.pack(anchor="w")
-            tooltip(eyelab, "Click anything whose colour you want changed - an eye, a gem, a buckle, a cloak "
-                            "trim - then set the colour and strength. Click again elsewhere and the same "
+            tooltip(eyelab, "Click anything whose color you want changed - an eye, a gem, a buckle, a cloak "
+                            "trim - then set the color and strength. Click again elsewhere and the same "
                             "settings are used there. What is under each click is sampled and only what matches "
                             "it inside the ring is moved, so the ring can be loose without taking everything "
                             "around it. Eight at a time; right-click the picture to clear them.")
-            egrid = ttk.Frame(side)
+            egrid = ttk.Frame(t_spot)
             egrid.pack(fill="x")
             for i, nm_ in enumerate(eyeset):
                 ttk.Radiobutton(egrid, text=nm_, value=nm_, variable=eyes_v,
                                 command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            epct = slider(side, "Strength", eyeamt, 0.1, 1.0)
-            slider(side, "Size", eyesize, 0.015, 0.08)
+            epct = slider(t_spot, "Strength", eyeamt, 0.1, 1.0)
+            slider(t_spot, "Size", eyesize, 0.015, 0.08)
 
-            lrow = ttk.Frame(side)                               # the same marks, lit instead of recoloured
+            lrow = ttk.Frame(t_spot)                               # the same marks, lit instead of recolored
             lrow.pack(fill="x", pady=(6, 0))
             ttk.Label(lrow, text="Light it", font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(side="left")
             for nm_ in ("None", "Glow", "Flame"):
                 ttk.Radiobutton(lrow, text=nm_, value=nm_, variable=glow_v,
                                 command=lambda: (remember(), draw())).pack(side="left", padx=(8, 0))
-            lit_ = ttk.Frame(side)
+            lit_ = ttk.Frame(t_spot)
             lit_.pack(fill="x", padx=(10, 0))
             ggrid = ttk.Frame(lit_)
             ggrid.pack(fill="x")
@@ -5154,7 +5155,7 @@ def run_gui() -> None:
             tooltip(lrow, "Light coming off the marks above - eyes, a gem, a brazier, the head of a staff. Glow "
                           "is a steady light, Flame is tongues of it rising and flickering. The engine will not "
                           "paint a lit eye however it is asked, so the light is put on here.")
-            tooltip(ggrid, "The colour of the light. Shadow is the other way round - the marks become pits of "
+            tooltip(ggrid, "The color of the light. Shadow is the other way round - the marks become pits of "
                            "dark instead, which is what an undead thing has where its eyes were.")
             tooltip(gspct, "How big the hot middle is. An eye is about six pixels across in a portrait this "
                            "size, so small is usually right; the light around it does the work.")
@@ -5172,36 +5173,36 @@ def run_gui() -> None:
                 draw()
             erow_ = ttk.Frame(side)
             erow_.pack(fill="x", pady=(2, 0))
-            clr_ = ttk.Button(erow_, text="Clear spots", width=11, command=clear_eyes, state="disabled")
+            clr_ = ttk.Button(erow_, text="Clear marks", width=11, command=clear_eyes, state="disabled")
             clr_.pack(side="left")
-            tooltip(clr_, "Forget the marked spots and put their colour back to Leave, so they are as they were "
+            tooltip(clr_, "Forget every mark and put what they did back to nothing, so the picture is as it was "
                           "painted. Right-clicking the picture does the same.")
+            ttk.Label(erow_, text="Clicks land on the tab you are on.", foreground="#888").pack(side="right")
             mk_ = ttk.Checkbutton(erow_, text="Show marks", variable=marks_v, command=draw)
             mk_.pack(side="left", padx=(8, 0))
             tooltip(mk_, "The yellow rings are only there to show where you clicked. Turn them off to see the "
-                         "picture as it will be - the colour stays either way.")
-            header("Shape", "shape")
-            shapelab = ttk.Label(side, text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
+                         "picture as it will be - the color stays either way.")
+            shapelab = ttk.Label(t_shape, text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
                                  foreground="#666")
             shapelab.pack(anchor="w")
             def group(text: str) -> ttk.Frame:
                 """A thing you can do to a mark, with the settings that belong to it under it."""
-                ttk.Label(side, text=text, font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(anchor="w",
+                ttk.Label(t_shape, text=text, font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(anchor="w",
                                                                                                       pady=(6, 0))
-                box_ = ttk.Frame(side)
+                box_ = ttk.Frame(t_shape)
                 box_.pack(fill="x", padx=(10, 0))
                 return box_
             push = group("Push it out of shape")
             wpct = slider(push, "Swell", warp, -1.0, 1.0)
             rch = slider(push, "Spread", warpsize, 0.05, 0.40)
             tooltip(rch, "How wide an area Swell pushes. Small moves a nostril, large reshapes a whole jaw.")
-            crow = ttk.Frame(side)                               # the kind of cut, then the settings it takes
+            crow = ttk.Frame(t_shape)                               # the kind of cut, then the settings it takes
             crow.pack(fill="x", pady=(6, 0))
             ttk.Label(crow, text="Cut it", font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(side="left")
             for nm_ in ("None", "Scar", "Wound"):
                 ttk.Radiobutton(crow, text=nm_, value=nm_, variable=cut_v,
                                 command=lambda: (remember(), draw())).pack(side="left", padx=(8, 0))
-            cut_ = ttk.Frame(side)
+            cut_ = ttk.Frame(t_shape)
             cut_.pack(fill="x", padx=(10, 0))
             cpct3 = slider(cut_, "Strength", cutamt, 0.1, 1.0)
             lgpct = slider(cut_, "Length", scarlen, 0.05, 0.40)
@@ -5221,7 +5222,7 @@ def run_gui() -> None:
                            "how heavy it is - a razor cut at the low end, a sword's work at the high.")
             bgrid = ttk.Frame(cut_)
             bgrid.pack(fill="x", pady=(2, 0))
-            bbtn: List[ttk.Radiobutton] = []                     # only a wound bleeds, so these grey out for a scar
+            bbtn: List[ttk.Radiobutton] = []                     # only a wound bleeds, so these gray out for a scar
             for i, nm_ in enumerate(bloods):
                 rb_ = ttk.Radiobutton(bgrid, text=nm_, value=nm_, variable=blood_v,
                                       command=lambda: (remember(), draw()))
@@ -5233,7 +5234,7 @@ def run_gui() -> None:
             tooltip(rdpct, "How much light the edge catches, so a scar reads as a raised ridge rather than a "
                            "smudge, and a wound looks wet. At 0 the scar is only a groove.")
             tooltip(crow, "What a shape point is: nothing, a healed scar or a fresh wound. A scar is mixed from "
-                          "the skin's own colour where it falls - a groove, a healed ridge beside it and the "
+                          "the skin's own color where it falls - a groove, a healed ridge beside it and the "
                           "light it catches. A wound is raw and bleeding, with the skin around it bruised. Both "
                           "sit on a little swell of their own; the settings below belong to whichever is chosen.")
             tooltip(cpct3, "How deep the cut is. Low is an old nick, high is a wound that has only just closed.")
@@ -5241,19 +5242,28 @@ def run_gui() -> None:
                           "mark, to the left pinches it. A bigger, broader, crooked nose; a heavier jaw; smaller "
                           "eyes. The engine paints everybody good-looking whatever the description says - a "
                           "broken nose comes out straight - so the shape is changed here instead.")
-            ttk.Label(side, text="Ghostly", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(10, 0))
-            fs_ = ttk.Frame(side)
+            fs_ = ttk.Frame(t_pic)
             fs_.pack(fill="x")
-            fpct = slider(fs_, "Fade", fade, 0.0, 1.5)
-            tooltip(fs_, "Fade the picture into its own background: solid at the brow, gone by the bottom, with "
-                         "the eyes left burning. Past 100% the dissolve starts higher up the face and the mist "
-                         "thickens. The engine will not paint a see-through person however the description is "
-                         "worded, so it is done here. Spectres and ghosts arrive faded already.")
-            ttk.Label(side, text="Both", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(10, 0))
-            cpct = slider(side, "Catch", catch, 0.1, 1.0)
-            ttk.Label(side, text="How much of the face counts as skin. Low leaves patches behind;\nhigh can start "
-                                 "taking the background with it. Hair, cloth and metal\nare left alone either way.",
-                      foreground="#666", justify="left").pack(anchor="w", pady=(4, 0))
+            fpct = slider(fs_, "Ghostly", fade, 0.0, 1.5)
+            cpct2 = slider(fs_, "Creases", creases, 0.0, 1.0)
+            gpct2 = slider(fs_, "Grime", grime, 0.0, 1.0)
+            fl_ = ttk.Checkbutton(fs_, text="Mirror the picture", variable=flip_v,
+                                  command=lambda: (remember(), draw()))
+            fl_.pack(anchor="w", pady=(2, 0))
+            tooltip(fpct, "Fade the picture into its own background: solid at the brow, gone by the bottom, with "
+                          "the eyes left burning. Past 100% the dissolve starts higher up the face and the mist "
+                          "thickens. The engine will not paint a see-through person however the description is "
+                          "worded, so it is done here. Spectres and ghosts arrive faded already.")
+            tooltip(cpct2, "Lines where a face creases: the brow, the corners of the eyes, the folds beside the "
+                           "nose and the jowls. Mark the two eyes as color spots and the crow's feet go where "
+                           "they belong; otherwise they go where they usually are, since these portraits are all "
+                           "framed alike.")
+            tooltip(gpct2, "Dirt: soft smudges where sweat and soot gather, and a little grain over the whole "
+                           "picture. The engine paints a peasant as clean as a prince whatever the description "
+                           "says, so this is done to the picture afterwards.")
+            tooltip(fl_, "Turn the picture left to right. The engine favors one three-quarter turn of the head, "
+                         "so a roomful of its portraits all face the same way; mirroring some of them breaks "
+                         "that up. Marks you place go where you see them.")
 
             def paint_in() -> None:
                 """Settle this pass into the picture, so the next scar or wound can be set differently."""
@@ -5291,7 +5301,7 @@ def run_gui() -> None:
                 shapes.clear()
                 prev.clear()
                 draw()
-                gstat.set("Painted in. Mark the next one - it can have its own width, colour and angle.")
+                gstat.set("Painted in. Mark the next one - it can have its own width, color and angle.")
 
             def apply_() -> None:
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
@@ -5354,7 +5364,7 @@ def run_gui() -> None:
                 gstat.set(", ".join(x for x in said if x).capitalize()
                           + ". Press Plain under it to put the picture back.")
             def reset_() -> None:
-                """Every slider back where it started: nothing changed, the colour the creature's own words ask for."""
+                """Every slider back where it started: nothing changed, the color the creature's own words ask for."""
                 remember()
                 skin_v.set(start_ if start_ in skins else "Leave")
                 lips_v.set("Leave")
@@ -5399,9 +5409,9 @@ def run_gui() -> None:
             bake_b.pack(side="left", padx=(6, 0))
             tooltip(bake_b, "Paint what is set now into the picture and start again on top of it, with the marks "
                             "cleared. One scar at a time: set a long thin one, paint it in, then mark another and "
-                            "give it a width, a colour and an angle of its own. Undo takes a pass back off.")
+                            "give it a width, a color and an angle of its own. Undo takes a pass back off.")
             keep["undo"] = undo_b
-            tooltip(undo_b, "Take back the last thing you did here - a slider moved, a colour chosen, a mark "
+            tooltip(undo_b, "Take back the last thing you did here - a slider moved, a color chosen, a mark "
                             "placed. Ctrl+Z does the same. Reset puts everything back at once.")
             win.bind("<Control-z>", lambda e: undo())
             scan.bind("<MouseWheel>", side_wheel)
@@ -5491,7 +5501,7 @@ def run_gui() -> None:
                 busy["spin"] = False
             gbar_.pack_forget()
             gen_btn.config(state="normal", text="Generate", bg="#2e9e4f", activebackground="#25803f", command=run)
-            stopped = bool(getattr(get_engine(), "cancelled", None) and get_engine().cancelled.is_set())   # type: ignore[union-attr]
+            stopped = bool(getattr(get_engine(), "canceled", None) and get_engine().canceled.is_set())   # type: ignore[union-attr]
             gstat.set(err if err else "Stopped. The ones already made are here; press Generate for more."
                       if stopped else "Done. Press \"Use this\" under the one you want, or Generate for more.")
             engine_state()
@@ -6069,7 +6079,7 @@ def run_gui() -> None:
         row = ttk.Frame(w, padding=10)
         row.pack(fill="x")
 
-        def centre() -> None:
+        def center() -> None:
             ch2 = min(shown_h, shown_w * ph / pw)
             box[0], box[1], box[2], box[3] = (shown_w - ch2 * pw / ph) / 2, (shown_h - ch2) / 2, ch2 * pw / ph, ch2
             draw()
@@ -6111,7 +6121,7 @@ def run_gui() -> None:
             w.destroy()
         ttk.Button(row, text="Use this framing", command=keep).pack(side="left")
         ttk.Button(row, text="Whole picture", command=lambda: (box.__setitem__(2, float(shown_w)), draw())).pack(side="left", padx=6)
-        ttk.Button(row, text="Middle", command=centre).pack(side="left")
+        ttk.Button(row, text="Middle", command=center).pack(side="left")
         ttk.Button(row, text="Forget my framing", command=forget).pack(side="left", padx=6)
         ttk.Button(row, text="Cancel", command=w.destroy).pack(side="right")
         draw()
@@ -6748,8 +6758,8 @@ def run_gui() -> None:
             else:
                 lb.config(image="", text="no portrait" if not pp else "(no preview)", width=14, height=6, bg="#d4d7dc")
                 lb.image = None
-            colour = "#2e9e4f" if pp else win.cget("bg")
-            lb.config(highlightbackground=colour, highlightcolor=colour)
+            color = "#2e9e4f" if pp else win.cget("bg")
+            lb.config(highlightbackground=color, highlightcolor=color)
 
         info = ttk.Frame(head)
         info.pack(side="left", fill="x", expand=True)
@@ -6872,7 +6882,7 @@ def run_gui() -> None:
                 else:
                     ob.pack_forget()
 
-            # a few notes: open, as that is usually all there is to say. A long list (a well-travelled NPC) starts
+            # a few notes: open, as that is usually all there is to say. A long list (a well-traveled NPC) starts
             # closed so it does not push the lines off the window. Each kind remembers what you last chose.
             okey = "origin_open" if n_notes <= 4 else "origin_open_long"
 
@@ -7174,7 +7184,7 @@ def run_gui() -> None:
     takein_btn.config(command=open_work)
     tooltip(share_btn, "Put everything another person needs to carry on into one .zip: the pictures you have "
                        "chosen, which creature each one is for, the creatures you have set aside, and what each "
-                       "picture was asked for. Their copy of Portrait Scout opens it with 'Open shared work...'.")
+                       "picture was asked for. Their copy of Portrait Scout reads it with 'Import work...'.")
     tooltip(takein_btn, "Take in work shared from another copy of Portrait Scout. The pictures are copied into "
                         "this one's generated folder and matched to the creatures here - which works even when "
                         "their mod is grouped differently from yours. You are asked before anything you have "

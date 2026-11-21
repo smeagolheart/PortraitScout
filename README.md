@@ -71,7 +71,7 @@ Download [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-dif
 - **Age** and **Look** shade that face. Flux paints clean young skin unless told otherwise, so *Weathered* and *Blotchy and freckled* might help if aiming for something different.
 - **Background** is what is behind the creature in the image. `{random}` picks one of the muted earth schemes in `background_palettes` for generating a generic Baldur's Gate style background.
 - **LoRA** off drops the `<lora:...>` part - worth it for creatures with features of their own, like horns or green skin, that a LoRA might paint away.
-- **Select image...** takes a picture you already have. With no generator set up, **Generate** is greyed and a notice offers **Set it up...**; choosing a file still works. **Hide generator settings** folds away the description, the pickers, the background and that notice, for when you are only working from files.
+- **Select image...** takes a picture you already have. With no generator set up, **Generate** is grayed and a notice offers **Set it up...**; choosing a file still works. **Hide generator settings** folds away the description, the pickers, the background and that notice, for when you are only working from files.
 - **Engine** holds the generator's own settings such as: keep it running after Portrait Scout closes, give it a window, show its log, open its page, edit `settings.json`.
 - **Prompt** and **Generator settings** hold the words sent and the model, size, steps, sampler and CFG, **Revert to baseline** restores a built-in style.
 - **Full size**, off, shows every candidate at one size for comparing; right-click an image to save a copy.
@@ -91,23 +91,23 @@ Pictures that come from baseline game installed files aren't included.  Hand-pic
 
 Any picture will do - **Create mod...** cuts each one to the portrait's shape, shrinks it to the selected size and saves it as a 24-bit BMP named after the creature file, so a square photo is cropped rather than squeezed. BMP and PNG work on their own; `pip install pillow` adds JPG and the rest.
 
-**Export proposed changes...** writes a to-do list, one line per creature file, without creating a WeiDU mod.
+**Save to-do list...** writes one, one line per creature file, without creating a WeiDU mod.
 
 ### Touching a portrait up
 
-**Touch up** on a candidate works on the picture after the engine has painted it, because the engine paints what it recognises whatever the description says - a commoner comes out as clean and handsome as a prince, and a broken nose comes out straight.
+**Touch up** on a candidate has a tab each for Skin, Lips, Spots, Shape and Picture, and works on the picture after the engine has painted it, because the engine paints what it recognizes whatever the description says - a commoner comes out as clean and handsome as a prince, and a broken nose comes out straight.
 
-Skin, lips and a **spot colour** for anything you click - an eye, a gem, a cloak trim - are recoloured from what is already there, so a sampled hue is moved rather than painted over. **Creases**, **grime** and a **ghostly** fade apply to the whole face.
+Skin, lips and a **spot color** for anything you click - an eye, a gem, a cloak trim - are recolored from what is already there, so a sampled hue is moved rather than painted over. **Creases**, **grime** and a **ghostly** fade apply to the whole face.
 
-Click to put a **shape point** down, then either push the face out of shape (**Swell**, with **Spread** for how wide an area moves) or cut it: a healed **scar** or a fresh **wound**, with **Length**, **Width**, **Angle**, **Ridge** (how much light the edge catches) and **Edge** (the dark line the shipped portraits draw round every feature). A scar is mixed from the skin's own colour where it falls, so it reads on a drow or a dragon as well as on a farmhand; a wound takes a colour - blood, or ichor for the things that have none.
+A click on the picture lands on the tab you are on. Click to put a **shape point** down, then either push the face out of shape (**Swell**, with **Spread** for how wide an area moves) or cut it: a healed **scar** or a fresh **wound**, with **Length**, **Width**, **Angle**, **Ridge** (how much light the edge catches) and **Edge** (the dark line the shipped portraits draw round every feature). A scar is mixed from the skin's own color where it falls, so it reads on a drow or a dragon as well as on a farmhand; a wound takes a color - blood, or ichor for the things that have none.
 
 **Light it** uses the same marks: a **glow** or a **flame** in the shape of an eye rather than a disc, with **Spill** for how far the light falls on the brow and the cheekbone, and **Shadow** for the pits an undead thing has where its eyes were.
 
-**Paint these in** settles the pass into the picture and clears the marks, so the next scar can have a width, colour and angle of its own. **Undo** takes back a step, a pass included.
+**Paint these in** settles the pass into the picture and clears the marks, so the next scar can have a width, color and angle of its own. **Undo** takes back a step, a pass included.
 
-### Sharing work
+### Handing work to someone else
 
-**Share work...** on the Proposals tab writes one `.zip` holding the pictures you have chosen, which creature each one is for, the creatures you have set aside, which bunches you had decloned, and what each picture was asked for - plus a readable `how-these-were-made.txt`. **Open shared work...** takes one in: the pictures are copied into this copy's generated folder, the paths are rewritten and the creatures are matched to the ones here, which works even when the two of you read the mod differently. Anything you have already chosen is kept unless you say otherwise.
+**Export work...** on the Proposals tab writes one `.zip` holding the pictures you have chosen, which creature each one is for, the creatures you have set aside, which bunches you had decloned, and what each picture was asked for - plus a readable `how-these-were-made.txt`. **Import work...** takes one in: the pictures are copied into this copy's generated folder, the paths are rewritten and the creatures are matched to the ones here, which works even when the two of you read the mod differently. Anything you have already chosen is kept unless you say otherwise.
 
 ### Create mod
 
@@ -141,6 +141,15 @@ mod/
 - **CRE file(s)**: creature files sharing the dialog. **Bold** (`[brackets]` in the table) means the mod ships or names that file.
 - **Proposed portrait**: your proposal (table only).
 
+
+## Command line
+
+```
+python portrait_scout.py --cli "C:\Games\BG2EE" "C:\Games\BG2EE\MyMod" --out creatures.txt --csv creatures.csv
+python portrait_scout.py --source "C:\Games\BG2EE\MyMod" --game "C:\Games\BG2EE" --out speakers.txt
+```
+
+`--cli` analyzes as the window does (`--merge-names` merges same-named creatures); `--source` reads the mod's own files.
 
 ## Notes
 
