@@ -1,5 +1,30 @@
 # Portrait Scout - what changed
 
+## 1.4a - 20 November 2026
+
+### Features
+
+- **Stretch**, on the Shape tab: pull a marked spot away from the middle of the face with a taper - a human ear
+  drawn out to an elven point, a jaw lengthened, a horn pulled up. Minus pulls it back in.
+- **Speckles**, on the Skin tab: freckles, a gith's markings, a pox-scarred face. Mixed from the skin's own
+  color a few shades down. Click a cheek to put them somewhere of your own; **Area** sets how wide each patch is.
+- **Match skin**, in the Spot color list: takes the face's own color instead of a named one, for an ear or a
+  gem the engine painted a color that fights the face.
+- Descriptions are shorter. Made-up faces, noses and marks are off by default (`face_detail` in
+  `generator/settings.json`), and "adult" is said only when the age is not the default.
+- Race terms lead with words the model holds: angelic human, devil-blooded human, shark-headed man, gaunt
+  yellow-skinned humanoid.
+- **bare_races** in `generator/settings.json`: creatures whose sprite wears nothing a portrait would show keep
+  their race term and lose the class and clothing a creature file only borrowed.
+
+### Changes
+
+- Darker now darkens. It was lightening, which is not what the slider is called.
+- Skin, Lips, Darker and Speckles no longer skip a strongly colored face. The mask asked whether a pixel was
+  too colorful to be skin against a fixed ceiling, which a drow, a gith or a sirine passes straight over.
+- A strength slider with no color chosen is grayed, rather than sitting there doing nothing.
+- Ear phrases are gone from elf, half-elf and drow. The model paints its own ears whatever it is told.
+
 ## 1.4 - 20 November 2026
 
 ### Features

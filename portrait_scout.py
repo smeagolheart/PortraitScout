@@ -44,7 +44,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-VERSION = "1.4"
+VERSION = "1.4a"
 T_BMP, T_WAV, T_BCS, T_IDS, T_CRE, T_DLG, T_2DA = 0x0001, 0x0004, 0x03EF, 0x03F0, 0x03F1, 0x03F3, 0x03F4
 T_ARE, T_WMP = 0x03F2, 0x03F7
 EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg", T_2DA: ".2da",
@@ -4857,6 +4857,7 @@ def run_gui() -> None:
             fade = tk.DoubleVar(value=float(mem.get("fade", 0.0)))
             grime = tk.DoubleVar(value=float(mem.get("grime", 0.0)))
             creases = tk.DoubleVar(value=float(mem.get("creases", 0.0)))
+            speckle = tk.DoubleVar(value=float(mem.get("speckles", 0.0)))
             was_sc, was_wn = float(mem.get("scars", 0.0)), float(mem.get("wounds", 0.0))
             cut_v = tk.StringVar(value=mem.get("cut", "Wound" if was_wn > 0 else "Scar" if was_sc > 0 else "None"))
             cutamt = tk.DoubleVar(value=float(mem.get("cutamt", max(was_sc, was_wn) or 0.85)))
@@ -4867,11 +4868,14 @@ def run_gui() -> None:
             eyesize = tk.DoubleVar(value=float(mem.get("eyesize", 0.035)))
             spots: List[Tuple[float, float]] = list(mem.get("spots", []))
             shapes: List[Tuple[float, float]] = list(mem.get("shapes", []))
+            blots: List[Tuple[float, float]] = list(mem.get("blots", []))
+            spkarea = tk.DoubleVar(value=float(mem.get("spkarea", 0.16)))
             mark_kind = tk.StringVar(value="color")
             warp = tk.DoubleVar(value=float(mem.get("warp", 0.0)))
             warpsize = tk.DoubleVar(value=float(mem.get("warpsize", 0.17)))
             ridge = tk.DoubleVar(value=float(mem.get("ridge", 0.5)))
             linew = tk.DoubleVar(value=float(mem.get("line", 1.0)))
+            stretch = tk.DoubleVar(value=float(mem.get("stretch", 0.0)))
             scarlen = tk.DoubleVar(value=float(mem.get("scarlen", 0.17)))
             glow_v = tk.StringVar(value=mem.get("glow", "None"))
             glowclr = tk.StringVar(value=mem.get("glowtint", next(iter(glows), "Fire")))
@@ -4890,13 +4894,15 @@ def run_gui() -> None:
                 return {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(), "kind": mark_kind.get(), "flip": flip_v.get(),
                         "amount": amount.get(), "lipamt": lipamt.get(), "eyeamt": eyeamt.get(),
                         "eyesize": eyesize.get(), "light": light.get(), "catch": catch.get(), "fade": fade.get(),
-                        "grime": grime.get(), "creases": creases.get(), "cut": cut_v.get(),
+                        "grime": grime.get(), "creases": creases.get(), "speckles": speckle.get(), "cut": cut_v.get(),
                         "cutamt": cutamt.get(), "flip": flip_v.get(), "warp": warp.get(),
                         "warpsize": warpsize.get(), "ridge": ridge.get(), "line": linew.get(), "scarlen": scarlen.get(), "angle": angle_v.get(),
+                        "stretch": stretch.get(),
                         "edge": edge_v.get(), "blood": blood_v.get(), "glow": glow_v.get(),
                         "glowtint": glowclr.get(), "glowamt": glowamt.get(), "glowsize": glowsize.get(),
                         "glowspill": glowspill.get(), "glowround": glowround.get(),
-                        "spots": list(spots), "shapes": list(shapes)}
+                        "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
+                        "spkarea": spkarea.get()}
 
             def remember() -> None:
                 """Put the state as it was before this change on the pile."""
@@ -4915,9 +4921,9 @@ def run_gui() -> None:
                 flip_v.set(bool(d.get("flip", False)))
                 for var, key in ((amount, "amount"), (lipamt, "lipamt"), (eyeamt, "eyeamt"), (eyesize, "eyesize"),
                                  (light, "light"), (catch, "catch"), (fade, "fade"), (grime, "grime"),
-                                 (creases, "creases"), (cutamt, "cutamt"),
+                                 (creases, "creases"), (speckle, "speckles"), (cutamt, "cutamt"),
                                  (warp, "warp"), (warpsize, "warpsize"), (ridge, "ridge"), (linew, "line"),
-                                 (angle_v, "angle"), (edge_v, "edge"), (scarlen, "scarlen"),
+                                 (angle_v, "angle"), (edge_v, "edge"), (scarlen, "scarlen"), (stretch, "stretch"),
                                  (glowamt, "glowamt"), (glowsize, "glowsize"), (glowspill, "glowspill"),
                                  (glowround, "glowround")):
                     var.set(float(d[key]))                           # type: ignore[arg-type]
@@ -4929,6 +4935,9 @@ def run_gui() -> None:
                 spots.extend(d["spots"])                             # type: ignore[arg-type]
                 shapes.clear()
                 shapes.extend(d["shapes"])                           # type: ignore[arg-type]
+                blots.clear()
+                blots.extend(d.get("blots") or [])                   # type: ignore[arg-type]
+                spkarea.set(float(d.get("spkarea", spkarea.get())))
                 prev.clear()
                 prev.update(d)
                 tab_marks(redraw=False)                              # the tab, not the undone step, says where
@@ -4961,12 +4970,13 @@ def run_gui() -> None:
                         round(float(scarlen.get()), 3), glow_v.get(), glowclr.get(),
                         0.0 if glow_v.get() == "None" or not spots else round(float(glowamt.get()), 2),
                         round(float(glowsize.get()), 3), round(float(glowspill.get()), 2),
-                        round(float(glowround.get()), 2))
+                        round(float(glowround.get()), 2), round(float(stretch.get()), 2),
+                        round(float(speckle.get()), 2), round(float(spkarea.get()), 3))
 
             def draw(fast: bool = False) -> None:
                 keep.pop("job", None)
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd) = values()
+                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa) = values()
                 gpct2.config(text=f"{int(gri * 100)}%")
                 cpct3.config(text=f"{int(max(scr, wnd) * 100)}%")
                 for rb__ in bbtn:
@@ -4976,6 +4986,7 @@ def run_gui() -> None:
                 agpct.config(text=f"{int(agl)}\N{DEGREE SIGN}")
                 lgpct.config(text=f"{sln:.2f}")
                 rch.config(text=f"{wsz:.2f}")
+                stpct.config(text=("+" if stc > 0 else "") + f"{int(stc * 100)}%")
                 edpct.config(text=f"{int(edg * 100)}%")
                 cpct2.config(text=f"{int(cre * 100)}%")
                 wpct.config(text=("+" if wrp > 0 else "") + f"{int(wrp * 100)}%")
@@ -4983,6 +4994,16 @@ def run_gui() -> None:
                 pct.config(text=f"{int(amt * 100)}%")
                 lpct.config(text=f"{int(lam * 100)}%")
                 cpct.config(text=f"{int(cat * 100)}%")
+                spkpct.config(text=f"{int(spk * 100)}%")
+                for w_, on_ in ((pct, skin_v.get() != "Leave"), (lpct, lips_v.get() != "Leave"),
+                                (epct, eyes_v.get() != "Leave"), (arpct, spk > 0)):
+                    sc__ = keep.get(f"sc_{id(w_)}")              # a strength with nothing to be strong about
+                    if sc__ is not None:
+                        sc__.config(state="normal" if on_ else "disabled")   # type: ignore[union-attr]
+                arpct.config(text=f"{spa:.2f}")
+                blotlab.config(text=(f"{len(blots)} patch(es) marked." if blots else
+                                     "Click a cheek to put the speckles there."),
+                               foreground="#666")
                 epct.config(text=f"{int(eam * 100)}%")
                 for box_, on_, after_ in ((lit_, glw != "None", lrow), (cut_, cut_v.get() != "None", crow)):
                     if on_ and not box_.winfo_ismapped():        # a kind's own settings are no use until it is
@@ -5010,12 +5031,13 @@ def run_gui() -> None:
                     src_ = thumb_rough if fast else thumb
                     if flp:                                          # mirrored first, so the marks you place
                         src_ = pg.flip_image(src_)                   # land where you see them
+                    src_ = pg.stretch_image(src_, shapes, stc, wsz)   # type: ignore[attr-defined]
                     src_ = pg.warp_image(src_, shapes, wrp, wsz)     # type: ignore[attr-defined]
                     if (scr > 0 or wnd > 0) and shapes:              # a scar sits on a little swell of its own
                         src_ = pg.warp_image(src_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                              max(0.03, sln * 0.32))
                     done_ = pg.touch_up(src_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                        spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg,
+                                        spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa,
                                         glw, gtn, gam, gsz, gsp, grd)
                     im = Image.open(io.BytesIO(pg.ghost_image(done_, fad)))   # type: ignore[attr-defined]
                     if fast:                                         # back up to size, so nothing jumps about
@@ -5038,6 +5060,11 @@ def run_gui() -> None:
                             x_, y_ = fx * small.width, fy * small.height
                             rr = max(3.0, esz * small.width)
                             lab.create_oval(x_ - rr, y_ - rr * 0.8, x_ + rr, y_ + rr * 0.8, outline="#ffd000", width=1)
+                    if spk > 0:
+                        for fx, fy in blots:
+                            x_, y_ = fx * small.width, fy * small.height
+                            rr = max(4.0, spa * small.width)
+                            lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#7ad17a", width=1)
                     if abs(wrp) >= 0.01 or scr > 0 or wnd > 0:
                         for fx, fy in shapes:
                             x_, y_ = fx * small.width, fy * small.height
@@ -5047,15 +5074,17 @@ def run_gui() -> None:
             def mark(e: "tk.Event") -> None:
                 """Click an eye: two marks, then a third starts over."""
                 remember()
-                here = spots if mark_kind.get() == "color" else shapes
+                here = {"color": spots, "shape": shapes}.get(mark_kind.get(), blots)
                 if len(here) >= 8:                               # eight is plenty; the ninth starts over
                     here.clear()
                 here.append((min(1.0, max(0.0, lab.canvasx(e.x) / max(1, small.width))),
                              min(1.0, max(0.0, lab.canvasy(e.y) / max(1, small.height)))))
-                if mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
+                if mark_kind.get() == "skin" and float(speckle.get()) < 0.01:
+                    speckle.set(0.6)                             # a patch marked with nothing to put in it
+                elif mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
                     eyes_v.set(next((k for k in eyeset if k != "Leave"), "Leave"))
                 elif (mark_kind.get() == "shape" and abs(float(warp.get())) < 0.01
-                      and cut_v.get() == "None"):
+                      and abs(float(stretch.get())) < 0.01 and cut_v.get() == "None"):
                     warp.set(0.35)
                 draw()
             lab.bind("<Button-1>", mark)
@@ -5079,6 +5108,7 @@ def run_gui() -> None:
                 sc_.pack(side="left", fill="x", expand=True, padx=6)
                 sc_.bind("<ButtonPress-1>", lambda e: remember(), add="+")   # one step per drag, not per pixel
                 out.pack(side="left")
+                keep[f"sc_{id(out)}"] = sc_                      # so a slider can be grayed when it does nothing
                 return out
             nb = ttk.Notebook(side)                              # a tab each, rather than one long column
             nb.pack(fill="both", expand=True)
@@ -5090,8 +5120,9 @@ def run_gui() -> None:
             def tab_marks(_e: object = None, redraw: bool = True) -> None:
                 """Clicks on the picture land where you are working: spots on Spots, shape points on Shape."""
                 now = nb.index(nb.select())
-                if now in (2, 3) and mark_kind.get() != ("color" if now == 2 else "shape"):
-                    mark_kind.set("color" if now == 2 else "shape")
+                want = {0: "skin", 2: "color", 3: "shape"}.get(now)
+                if want and mark_kind.get() != want:
+                    mark_kind.set(want)
                     if redraw:
                         draw()
             nb.bind("<<NotebookTabChanged>>", tab_marks)
@@ -5102,7 +5133,18 @@ def run_gui() -> None:
                                 command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
             pct = slider(t_skin, "Strength", amount, 0.1, 1.0)
             gpct = slider(t_skin, "Darker", light, -1.0, 1.0)
+            spkpct = slider(t_skin, "Speckles", speckle, 0.0, 1.0)
+            arpct = slider(t_skin, "Area", spkarea, 0.04, 0.45)
+            blotlab = ttk.Label(t_skin, text="Click a cheek to put the speckles there.", foreground="#666")
+            blotlab.pack(anchor="w")
             cpct = slider(t_skin, "Catch", catch, 0.1, 1.0)
+            tooltip(arpct, "How wide a patch each mark speckles. With no marks the speckles go across the bridge "
+                           "of the nose and both cheeks, where freckles are; click the picture to put them "
+                           "somewhere of your own, and the green ring shows what each click covers.")
+            tooltip(spkpct, "Freckles, a gith's markings, the spatter on a pox-scarred face. Mixed from the "
+                            "skin's own color a few shades down and scattered over the bridge of the nose and "
+                            "both cheeks - or around your shape marks, if you have placed any. The engine will "
+                            "not paint these: at portrait size a freckle is two pixels and it paints over them.")
             tooltip(cpct, "How much of the face counts as skin, for Skin and for Lips. Low leaves patches behind; "
                           "high can start taking the background with it. Hair, cloth and metal are left alone "
                           "either way.")
@@ -5167,6 +5209,7 @@ def run_gui() -> None:
                 remember()
                 spots.clear()
                 shapes.clear()
+                blots.clear()
                 eyes_v.set("Leave")
                 glow_v.set("None")
                 warp.set(0.0)
@@ -5194,7 +5237,13 @@ def run_gui() -> None:
                 return box_
             push = group("Push it out of shape")
             wpct = slider(push, "Swell", warp, -1.0, 1.0)
+            stpct = slider(push, "Stretch", stretch, -1.0, 1.0)
             rch = slider(push, "Spread", warpsize, 0.05, 0.40)
+            tooltip(stpct, "Pull what you marked away from the middle of the face, with a taper: a human ear "
+                           "drawn out to an elven point, a jaw lengthened, a horn pulled up. To the left pulls "
+                           "it back in, which rounds off an ear that came out too elven. The two ears of a face "
+                           "go opposite ways from the one setting; Spread sets how much of the ear comes with "
+                           "the tip.")
             tooltip(rch, "How wide an area Swell pushes. Small moves a nostril, large reshapes a whole jaw.")
             crow = ttk.Frame(t_shape)                               # the kind of cut, then the settings it takes
             crow.pack(fill="x", pady=(6, 0))
@@ -5268,19 +5317,20 @@ def run_gui() -> None:
             def paint_in() -> None:
                 """Settle this pass into the picture, so the next scar or wound can be set differently."""
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd) = values()
+                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa) = values()
                 if (not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0 and gri <= 0 and cre <= 0
-                        and scr <= 0 and wnd <= 0 and gam <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01):
+                        and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
                     gstat.set("Nothing set to paint in yet.")
                     return
                 try:
                     cur = pg.flip_image(thumb) if flp else thumb     # type: ignore[attr-defined]
+                    cur = pg.stretch_image(cur, shapes, stc, wsz)    # type: ignore[attr-defined]
                     cur = pg.warp_image(cur, shapes, wrp, wsz)       # type: ignore[attr-defined]
                     if (scr > 0 or wnd > 0) and shapes:
                         cur = pg.warp_image(cur, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                             max(0.03, sln * 0.32))
                     cur = pg.touch_up(cur, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                      spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg,
+                                      spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa,
                                         glw, gtn, gam, gsz, gsp, grd)
                     cur = pg.ghost_image(cur, fad)                   # type: ignore[attr-defined]
                 except Exception as e:  # noqa: BLE001 - say so rather than losing the picture
@@ -5294,20 +5344,22 @@ def run_gui() -> None:
                 skin_v.set("Leave"), lips_v.set("Leave"), eyes_v.set("Leave")
                 cut_v.set("None")
                 glow_v.set("None")
-                for v_, z_ in ((warp, 0.0), (fade, 0.0), (grime, 0.0), (creases, 0.0), (light, 0.0)):
+                for v_, z_ in ((warp, 0.0), (stretch, 0.0), (fade, 0.0), (grime, 0.0), (creases, 0.0),
+                               (light, 0.0)):
                     v_.set(z_)
                 flip_v.set(False)
                 spots.clear()
                 shapes.clear()
+                blots.clear()
                 prev.clear()
                 draw()
                 gstat.set("Painted in. Mark the next one - it can have its own width, color and angle.")
 
             def apply_() -> None:
                 (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd) = values()
+                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa) = values()
                 if (not keep.get("baked") and not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0
-                        and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01):
+                        and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
                     win.destroy()
                     return
                 touch_memory[str(q)] = {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(),
@@ -5316,27 +5368,31 @@ def run_gui() -> None:
                                         "light": float(light.get()), "catch": float(catch.get()),
                                         "fade": float(fade.get()), "grime": float(grime.get()),
                                         "warp": float(warp.get()), "warpsize": float(warpsize.get()),
-                                        "creases": float(creases.get()), "cut": cut_v.get(),
+                                        "creases": float(creases.get()), "speckles": float(speckle.get()),
+                                        "cut": cut_v.get(),
                                         "cutamt": float(cutamt.get()), "flip": bool(flip_v.get()),
                                         "ridge": float(ridge.get()), "line": float(linew.get()),
                                         "angle": float(angle_v.get()), "edge": float(edge_v.get()),
-                                        "scarlen": float(scarlen.get()), "glow": glow_v.get(),
+                                        "scarlen": float(scarlen.get()), "stretch": float(stretch.get()),
+                                        "glow": glow_v.get(),
                                         "glowtint": glowclr.get(), "glowamt": float(glowamt.get()),
                                         "glowsize": float(glowsize.get()), "glowspill": float(glowspill.get()),
                                         "glowround": float(glowround.get()),
                                         "blood": blood_v.get(),
-                                        "spots": list(spots), "shapes": list(shapes)}
+                                        "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
+                                        "spkarea": float(spkarea.get())}
                 try:
                     new_ = str(q.with_name(q.stem + "_touch.png"))
                     start_bytes = thumb                          # what is on screen now: any pass painted in
                     if flp:
                         start_bytes = pg.flip_image(start_bytes)     # type: ignore[attr-defined]
-                    was_ = pg.warp_image(start_bytes, shapes, wrp, wsz)   # type: ignore[attr-defined]
+                    was_ = pg.stretch_image(start_bytes, shapes, stc, wsz)   # type: ignore[attr-defined]
+                    was_ = pg.warp_image(was_, shapes, wrp, wsz)      # type: ignore[attr-defined]
                     if (scr > 0 or wnd > 0) and shapes:
                         was_ = pg.warp_image(was_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                              max(0.03, sln * 0.32))
                     out_ = pg.touch_up(was_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                       spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg,
+                                       spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa,
                                         glw, gtn, gam, gsz, gsp, grd)
                     Path(new_).write_bytes(pg.ghost_image(out_, fad))   # type: ignore[attr-defined]
                     gs["skin_catch"] = cat
@@ -5377,6 +5433,9 @@ def run_gui() -> None:
                 fade.set(0.0)
                 grime.set(0.0)
                 creases.set(0.0)
+                speckle.set(0.0)
+                spkarea.set(0.16)
+                blots.clear()
                 cut_v.set("None")
                 cutamt.set(0.85)
                 flip_v.set(False)
@@ -5387,6 +5446,7 @@ def run_gui() -> None:
                 angle_v.set(-55.0)
                 edge_v.set(0.5)
                 scarlen.set(0.17)
+                stretch.set(0.0)
                 glow_v.set("None")
                 glowamt.set(0.85)
                 glowsize.set(0.028)
