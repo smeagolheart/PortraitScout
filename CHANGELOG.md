@@ -28,11 +28,12 @@
 - Creature colors are rolled when the creature is spawned, not stored in its file. They are read as the sets
   they are, so a drow is no longer described with yellow skin.
 - Improved creature detection scripts.
-- A creature's race is worked out from the best evidence there is, rather than a field that is often just
-  "human". Half-elves are no longer elves, half-orcs are no longer monsters, and the Shadow Thieves are no
-  longer living shadows.
-- Undead and other non-humans get descriptions of their own, and skip the colors they have no skin or hair for.
-- Hobgoblins, ogres and half-ogres wear the helms their sprites never take off.
+  - A creature's race is worked out from the best evidence there is, rather than a field that is often just
+    "human". Half-elves are no longer elves, half-orcs are no longer monsters, and the Shadow Thieves are no
+    longer living shadows.
+  - Undead and other non-humans get descriptions of their own, and skip the colors they have no skin or hair
+    for.
+  - Hobgoblins, ogres and half-ogres wear the helms their sprites never take off.
 - Colors go in right behind the race: at the end of a long description the model ignores them.
 - Washed-out ramps read as silver or white hair rather than dyed blue.
 - New face re-rolls for non-human creatures too, and Generate carries on past the seeds already used instead of
@@ -41,10 +42,7 @@
   Mod Files no longer empties the gallery.
 - A creature with several dialogs says which dialog each line came from, and creature files and dialog files
   are listed apart.
-- Use this read the original file off disk rather than the picture on screen, which would have thrown away a
-  painted-in pass.
 - Imported pictures show up again when the Propose tab is reopened.
-- The touch-up settings scroll, so nothing falls off a short screen.
 
 ## 1.3d - 18 November 2026
 
