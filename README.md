@@ -36,7 +36,7 @@ It only **reads** your game folder. Nothing there is installed, changed or delet
 
 **Double-click** a creature for its lines: play the voiced ones, search them, and see "Where this comes from" when a speaker had to be worked out. Click a creature or CRE name to copy it for NearInfinity; right-click a portrait to save it.
 
-Creatures merged only because they share a name and look alike - a mod's 27 "Commoner" - can be **listed one by one** (decloned), so each gets its own portrait from a button on the gallery card, in the lines window and in the portrait's right-click menu; remembered per creature. Creatures sharing a single creature file are never split. Needs the installed-game reading.
+Creatures merged only because they share a name and look alike - a mod's 27 "Commoner" - can be **listed one by one** (decloned), so each gets its own portrait from a button on the gallery card, in the lines window and in the portrait's right-click menu; remembered per creature. Creatures sharing a single creature file are never split. It works both ways round now: reading the mod's own files, a bunch the mod can only name (the game's own commoners) splits one creature per dialog.
 
 Two creatures **of the same name** become one row when they share a creature file or the same portrait file, or do not differ in race, gender and animation - so two different "Guard" creatures stay apart. Creatures with different names are never merged, however alike they look.
 **Merge same names** forces it by name alone - leave it off when different creatures share a name.
@@ -92,6 +92,22 @@ Pictures that come from baseline game installed files aren't included.  Hand-pic
 Any picture will do - **Create mod...** cuts each one to the portrait's shape, shrinks it to the selected size and saves it as a 24-bit BMP named after the creature file, so a square photo is cropped rather than squeezed. BMP and PNG work on their own; `pip install pillow` adds JPG and the rest.
 
 **Export proposed changes...** writes a to-do list, one line per creature file, without creating a WeiDU mod.
+
+### Touching a portrait up
+
+**Touch up** on a candidate works on the picture after the engine has painted it, because the engine paints what it recognises whatever the description says - a commoner comes out as clean and handsome as a prince, and a broken nose comes out straight.
+
+Skin, lips and a **spot colour** for anything you click - an eye, a gem, a cloak trim - are recoloured from what is already there, so a sampled hue is moved rather than painted over. **Creases**, **grime** and a **ghostly** fade apply to the whole face.
+
+Click to put a **shape point** down, then either push the face out of shape (**Swell**, with **Spread** for how wide an area moves) or cut it: a healed **scar** or a fresh **wound**, with **Length**, **Width**, **Angle**, **Ridge** (how much light the edge catches) and **Edge** (the dark line the shipped portraits draw round every feature). A scar is mixed from the skin's own colour where it falls, so it reads on a drow or a dragon as well as on a farmhand; a wound takes a colour - blood, or ichor for the things that have none.
+
+**Light it** uses the same marks: a **glow** or a **flame** in the shape of an eye rather than a disc, with **Spill** for how far the light falls on the brow and the cheekbone, and **Shadow** for the pits an undead thing has where its eyes were.
+
+**Paint these in** settles the pass into the picture and clears the marks, so the next scar can have a width, colour and angle of its own. **Undo** takes back a step, a pass included.
+
+### Sharing work
+
+**Share work...** on the Proposals tab writes one `.zip` holding the pictures you have chosen, which creature each one is for, the creatures you have set aside, which bunches you had decloned, and what each picture was asked for - plus a readable `how-these-were-made.txt`. **Open shared work...** takes one in: the pictures are copied into this copy's generated folder, the paths are rewritten and the creatures are matched to the ones here, which works even when the two of you read the mod differently. Anything you have already chosen is kept unless you say otherwise.
 
 ### Create mod
 

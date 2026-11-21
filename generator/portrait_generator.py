@@ -375,12 +375,13 @@ DEFAULTS: dict = {
         "mummy": "mummy, dried blackened skin wrapped in filthy bandages, sunken sockets",
         "orc": "orc, green skin, a heavy jutting brow and small eyes, a broad flat nose, jutting lower tusks, pointed ears, coarse black hair",
         "goblin": "goblin, sickly green skin, huge pointed ears, a long hooked nose, small yellow eyes, sharp teeth",
-        "hobgoblin": "hobgoblin, orange-red skin, a flat broad face with a heavy jutting brow, dark beady eyes, a "
+        "hobgoblin": "goblin, orange-red skin, a flat broad face with a heavy jutting brow, dark beady eyes, a "
                      "blue-grey flattened nose, pointed ears, yellowed teeth, wearing a battered "
                      "horned rusty steel helmet",
         "kobold": "kobold, small reptilian head, rust-red scaled skin, a short snout, horns, beady red eyes",
         "gnoll": "gnoll, hyena head, coarse spotted fur, a long muzzle with bared teeth, dark eyes",
-        "ogre": "ogre, huge lumpen head, dull yellow-brown skin, a heavy jaw and small eyes, tusks",
+        "ogre": "ogre, huge lumpen head, dull yellow-brown skin, a heavy jaw and small eyes, tusks, wearing a "
+                "battered horned iron helmet",
         "troll": "troll, long rubbery green head, a hooked nose, sunken eyes, lank hair",
         "lizard man": "lizard man, green scaled head, a blunt snout, slit yellow eyes, a crest of spines",
         "sahuagin": "sahuagin, green-black fish head, round black eyes, gill slits, needle teeth, a finned crest",
@@ -389,7 +390,8 @@ DEFAULTS: dict = {
         "tiefling": "tiefling, small horns",
         "drow": "drow elf, dark grey skin, white hair, pointed ears",
         "aasimar": "aasimar, fair luminous skin, pale golden eyes",
-        "half ogre": "half-ogre, broad coarse face, dull ruddy skin, a heavy jaw, small tusks",
+        "half ogre": "half-ogre, broad coarse face, dull ruddy skin, a heavy jaw, small tusks, wearing a "
+                     "battered horned iron helmet",
         "lycanthrope": "werewolf, a wolf's head on a man's shoulders, coarse grey fur, yellow eyes, bared fangs",
     },
     "animation_terms": {
@@ -750,6 +752,7 @@ class Engine:
         # progress(fraction or None, text): fraction 0..1 of the whole job, None while it cannot be measured
         self.progress: Callable[[Optional[float], str], None] = lambda frac, text: None
         self.proc: Optional[subprocess.Popen] = None
+        self.cancelled = threading.Event()                           # set by cancel(): stop after the current picture
         self.keep = False                                            # True: leave the engine running when the program exits
         atexit.register(lambda: None if self.keep else self.stop())
 
@@ -848,17 +851,31 @@ class Engine:
         except OSError:
             pass
 
+    def cancel(self) -> None:
+        """Stop generating without stopping the engine: tell it to drop the picture it is painting, and make the
+        loop stop before the next one. Whatever is already finished is kept."""
+        self.cancelled.set()
+        for path in ("/sdapi/v1/interrupt", "/sdapi/v1/skip"):       # Forge drops the picture in hand
+            try:
+                self._call(path, {}, timeout=5)
+            except Exception:  # noqa: BLE001 - it may not be listening; the loop stops either way
+                pass
+
     def generate(self, prompt: str, negative: str, count: int,
                  on_image: Callable[[int, bytes], None] = lambda i, b: None,
                  seed: Optional[int] = None) -> List[bytes]:
         """`count` candidate images (PNG bytes), one request each so they can be shown as they arrive."""
         self.start()
+        self.cancelled.clear()
         payload = {k: v for k, v in self.s.get("payload", {}).items() if not k.startswith("_")}
         payload.update(prompt=prompt, negative_prompt=negative, n_iter=1)
         base = int(seed) if seed is not None else -1                 # the creature's own seed, so a re-run matches
         out: List[bytes] = []
         count = max(1, int(count))
         for i in range(count):
+            if self.cancelled.is_set():                              # Stop was pressed: the ones already made stay
+                self.log(f"Stopped after {len(out)} of {count}.")
+                break
             if base >= 0:
                 payload["seed"] = (base + i) % 2147483647
             self.log(f"Generating candidate {i + 1} of {count}...")
@@ -987,16 +1004,108 @@ SPOT_TINTS = {                           # name: (hue in degrees, how colourful 
     "Black": (0, 0, 35), "White": (0, 0, 235),
 }
 EYE_TINTS = SPOT_TINTS                   # it began as an eye colour; it works on anything you click
+GLOW_TINTS = {                           # name: (the hot middle, the light it throws)
+    "Fire": ((255, 236, 186), (255, 132, 28)),
+    "Hellfire": ((255, 196, 150), (218, 34, 18)),
+    "Witchlight": ((214, 255, 212), (58, 224, 92)),
+    "Ghost blue": ((214, 246, 255), (64, 170, 255)),
+    "Gold": ((255, 246, 198), (236, 176, 36)),
+    "Violet": ((238, 212, 255), (158, 70, 240)),
+    "Cold white": ((255, 255, 255), (198, 220, 236)),
+    "Shadow": ((8, 6, 10), (26, 20, 30)),                        # the other way: eye sockets as pits
+}
+BLOOD_TINTS = {                          # name: (deep in the cut, raw at its edge, the bruise around it)
+    "Blood": ((104, 18, 16), (178, 52, 40), (96, 44, 74)),
+    "Dark blood": ((62, 12, 12), (120, 30, 26), (70, 34, 58)),
+    "Fresh blood": ((150, 22, 20), (214, 70, 54), (112, 50, 80)),
+    "Black ichor": ((22, 18, 24), (58, 50, 62), (40, 36, 52)),
+    "Green ichor": ((26, 84, 40), (74, 158, 86), (44, 78, 62)),
+    "Blue ichor": ((24, 54, 112), (64, 110, 186), (46, 50, 96)),
+    "Gold ichor": ((132, 96, 18), (206, 166, 58), (96, 74, 40)),
+}
+
+
+def _shade(rgb: Tuple[int, int, int], val: float, sat: float, lift: int = 0) -> Tuple[int, int, int]:
+    """The same colour darker or lighter, and less of it: for a scar cut out of the skin it lies in."""
+    import colorsys
+    h_, s_, v_ = colorsys.rgb_to_hsv(*(max(0, min(255, c)) / 255 for c in rgb))
+    v_ = max(0.0, min(1.0, v_ * val + lift / 255))
+    s_ = max(0.0, min(1.0, s_ * sat))
+    r_, g_, b_ = colorsys.hsv_to_rgb(h_, s_, v_)
+    return int(r_ * 255), int(g_ * 255), int(b_ * 255)
 LIP_TINTS = {                                                    # name: (hue in degrees, how much colour)
     "Leave": (0, 0.0), "Red": (6, 1.70), "Dark red": (2, 1.35), "Berry": (340, 1.45), "Pink": (352, 1.25),
     "Pale": (20, 0.55), "Grey": (210, 0.45), "Green": (110, 1.30), "Black": (0, 0.20),
 }
 
 
+def flip_image(data: bytes) -> bytes:
+    """The picture mirrored left to right. The engine favours one three-quarter turn of the head, so a crowd of
+    them all face the same way; flipping some of them breaks that up."""
+    try:
+        import io
+        from PIL import Image, ImageOps
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+        buf = io.BytesIO()
+        ImageOps.mirror(im).save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001 - no Pillow, or a picture it will not open
+        return data
+
+
+def warp_image(data: bytes, points: Optional[List[Tuple[float, float]]] = None, amount: float = 0.0,
+               size: float = 0.17, cells: int = 30) -> bytes:
+    """Push a face out of shape where it was clicked: + swells, - pinches. The engine paints everybody
+    good-looking and no wording moves it - a broken nose comes out straight - so the shape is changed in the
+    picture afterwards. Done by bending a grid over the picture, which keeps the paint intact."""
+    if not points or abs(amount) < 0.01:
+        return data
+    try:
+        import io
+        import math
+        from PIL import Image
+    except ImportError:
+        return data
+    try:
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+        w, h = im.size
+        gx = max(8, int(cells))
+        gy = max(8, int(cells * h / max(1, w)))
+        pts = [(fx * w, fy * h, max(8.0, size * w), max(-1.0, min(1.0, amount))) for fx, fy in points[:8]]
+
+        def moved(x: float, y: float) -> Tuple[float, float]:
+            for cx, cy, r, s in pts:
+                dx, dy = x - cx, y - cy
+                d = math.hypot(dx, dy)
+                if 0.001 < d < r:
+                    f = (1.0 - d / r) ** 2 * s                   # strongest under the click, nothing at the edge
+                    x, y = x - dx * f, y - dy * f                # taking paint from nearer the middle swells it
+            return x, y
+        mesh = []
+        for j in range(gy):
+            for i in range(gx):
+                x0, y0 = i * w / gx, j * h / gy
+                x1, y1 = (i + 1) * w / gx, (j + 1) * h / gy
+                nw, sw, se, ne = moved(x0, y0), moved(x0, y1), moved(x1, y1), moved(x1, y0)
+                mesh.append(((int(x0), int(y0), int(x1), int(y1)),
+                             (nw[0], nw[1], sw[0], sw[1], se[0], se[1], ne[0], ne[1])))
+        buf = io.BytesIO()
+        im.transform(im.size, Image.MESH, mesh, Image.BICUBIC).save(buf, "PNG")
+        return buf.getvalue()
+    except (OSError, ValueError):
+        return data
+
+
 def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.3, catch: float = 0.6,
              light: float = 0.0, lip_hue: float = 6, lip_amount: float = 0.0, lip_sat: float = 1.7,
              spots: Optional[List[Tuple[float, float]]] = None, eye_hue: float = 35, eye_amount: float = 0.0,
-             eye_sat: float = 185, eye_size: float = 0.035, eye_val: float = -1) -> bytes:
+             eye_sat: float = 185, eye_size: float = 0.035, eye_val: float = -1, grime: float = 0.0,
+             creases: float = 0.0, scars: float = 0.0,
+             scar_points: Optional[List[Tuple[float, float]]] = None, wounds: float = 0.0,
+             reach: float = 0.17, ridge: float = 0.5, blood: str = "Blood", line: float = 1.0,
+             angle: Optional[float] = None, edge: float = 0.5,
+             glow: str = "None", glow_tint: str = "Fire", glow_amount: float = 0.0,
+             glow_size: float = 0.035, glow_spill: float = 0.5, glow_round: float = 0.42) -> bytes:
     """Work on the skin of a finished picture: its colour, how dark it is, and the lips on their own.
 
     The engine paints a person it recognises whatever the description says, so this is done afterwards. Skin is
@@ -1006,11 +1115,14 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
     along with the warm band that lips, nose and ears sit in. catch widens both. light makes the skin darker or
     lighter, from -1 to 1. The lips are the warm, coloured part of that, and can be given a colour of their own.
     """
-    if amount <= 0 and lip_amount <= 0 and abs(light) < 0.01 and not (spots and eye_amount > 0):
+    lights = spots if (glow in ("Glow", "Flame") and glow_amount > 0) else None
+    if (amount <= 0 and lip_amount <= 0 and abs(light) < 0.01 and grime <= 0 and creases <= 0
+            and not (scar_points and (scars > 0 or wounds > 0)) and not (spots and eye_amount > 0)
+            and not lights):
         return data
     try:
         import io
-        from PIL import Image, ImageChops, ImageDraw, ImageFilter
+        from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
     except ImportError:
         return data
     try:
@@ -1092,8 +1204,227 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
                     floor = 70 + a_e * 55                        # lift it enough for the colour to be seen
                     vc2 = Image.composite(vc.point(lambda x: int(x + (floor - x) * a_e * 0.75) if x < floor else x),
                                           vc2, iris)
+        out = Image.merge("HSV", (hc2, sc2, vc2)).convert("RGB")
+        if creases > 0:
+            # Lines where a face creases. The engine paints an unlined face whatever the description says, and
+            # these portraits are framed alike - head filling the frame, chin level - so the brow, the folds
+            # beside the nose and the jowls are where they always are. The eyes are taken from the marks when
+            # two were placed, for the creases at their outer corners.
+            import math
+            import random
+            a_c = min(1.0, creases)
+            lay = Image.new("L", im.size, 0)
+            dr = ImageDraw.Draw(lay)
+            rnd = random.Random(w * 7919 + h)
+            lw = max(1, int(w / 260))
+            for i in range(3 + int(4 * a_c)):                    # the brow, each line its own length and none
+                inset = 0.33 + rnd.uniform(0, 0.06) + i * 0.012  # of them reaching the sides of the face
+                y = h * (0.205 + 0.034 * i) + rnd.uniform(-3, 3)
+                dr.arc([w * inset, y - h * 0.04, w * (1 - inset), y + h * 0.04], 205, 335, fill=255, width=lw)
+            for ex, ey in (spots[:2] if spots and len(spots) == 2 else ((0.37, 0.40), (0.63, 0.40))):
+                for _k in range(2 + int(3 * a_c)):               # the corners of the eyes
+                    ang = math.radians(rnd.uniform(-30, 30))
+                    x0 = w * ex + (w * 0.05 if ex > 0.5 else -w * 0.05)
+                    y0 = h * ey + rnd.uniform(-5, 5)
+                    ln = w * rnd.uniform(0.03, 0.06)
+                    dr.line([x0, y0, x0 + ln * math.cos(ang) * (1 if ex > 0.5 else -1), y0 + ln * math.sin(ang)],
+                            fill=220, width=lw)
+            for side in (-1, 1):                                 # the folds beside the nose
+                dr.arc([w * (0.5 + side * 0.16) - w * 0.085, h * 0.49,
+                        w * (0.5 + side * 0.16) + w * 0.085, h * 0.71],
+                       (250 if side < 0 else 290), (290 if side < 0 else 330), fill=255, width=lw + 1)
+            lay = lay.filter(ImageFilter.GaussianBlur(max(1, int(w / 700))))
+            out = Image.composite(out.point(lambda x: int(x * 0.40)), out, lay.point(lambda x: min(255, int(x * a_c))))
+        if scars > 0 and scar_points:
+            # A scar is painted, not shaded: darkening what is already there only shows on pale skin, and
+            # these portraits are drow, dragons and green hags as often as farmhands. So the skin's own colour
+            # is read where the scar goes, and the groove, the healed ridge and the light it catches are mixed
+            # from it. The swell under the scar comes from warp_image, called before this.
+            import math as _m
+            import random as _r
+            a_s = min(1.0, scars)
+            rs = _r.Random(w * 104729 + h)
+            far = min(0.40, max(0.05, reach))
+            lw_s = max(1, round(w / 200 * (0.6 + far * 2.4) * max(0.4, line)))   # a longer scar is heavier too
+            b_g, b_p = max(1, int(w / 900)), max(1, int(w / 700))
+            lit, rim_s = max(0.0, min(1.0, ridge)), max(0.0, min(1.0, edge))
+            grow = 5 if lw_s > 1 else 3                          # how far the dark line reaches outside the groove
+            for fx, fy in scar_points[:8]:
+                cx, cy = fx * w, fy * h
+                ang = _m.radians(angle + rs.uniform(-8, 8) if angle is not None else   # a set angle, give or take
+                                 (rs.uniform(-80, -35) if rs.random() < 0.7 else rs.uniform(35, 80)))
+                half = w * far * rs.uniform(0.30, 0.50)          # Reach is how long it runs
+                dx, dy = _m.cos(ang) * half, _m.sin(ang) * half
+                near = max(2, lw_s * 2)                          # the skin right where it was clicked, not the
+                x0, y0 = int(max(0, min(cx - near, w - 2))), int(max(0, min(cy - near, h - 2)))   # whole sweep of
+                x1, y1 = int(min(w, max(x0 + 1, cx + near))), int(min(h, max(y0 + 1, cy + near)))  # the line, which
+                skin = out.crop((x0, y0, x1, y1)).resize((1, 1), Image.BOX).getpixel((0, 0))       # can run off a face
+                groove, heal = _shade(skin, 0.42, 0.75), _shade(skin, 1.14, 0.55, 18)
+                shine = _shade(skin, 1.45, 0.30, 46)
+                ink, pale, lip = (Image.new("L", im.size, 0) for _ in range(3))
+                di, dp, dl = ImageDraw.Draw(ink), ImageDraw.Draw(pale), ImageDraw.Draw(lip)
+                di.line([cx - dx, cy - dy, cx + dx, cy + dy], fill=255, width=lw_s + 1)
+                dp.line([cx - dx + lw_s, cy - dy, cx + dx + lw_s, cy + dy], fill=255, width=lw_s)
+                dl.line([cx - dx - lw_s * 0.8, cy - dy - lw_s * 0.6,  # the lit edge, on the far side of the groove
+                         cx + dx - lw_s * 0.8, cy + dy - lw_s * 0.6], fill=255, width=max(1, lw_s - 1))
+                ink = ink.filter(ImageFilter.GaussianBlur(b_g))
+                pale = pale.filter(ImageFilter.GaussianBlur(b_p))
+                lip = lip.filter(ImageFilter.GaussianBlur(max(1, int(w / 1400))))
+                out = Image.composite(Image.new("RGB", im.size, groove), out, ink.point(lambda x: int(x * a_s)))
+                out = Image.composite(Image.new("RGB", im.size, heal), out, pale.point(lambda x: int(x * a_s * 0.8)))
+                if rim_s > 0:                                    # the dark line the shipped portraits draw round
+                    ring = ImageChops.subtract(ink.filter(ImageFilter.MaxFilter(grow)), ink).filter(
+                        ImageFilter.GaussianBlur(1))             # a feature, so it sits in the face, not on it
+                    out = Image.composite(Image.new("RGB", im.size, _shade(skin, 0.22, 0.55)), out,
+                                          ring.point(lambda x: int(x * a_s * rim_s * 0.55)))
+                if lit > 0:
+                    out = Image.composite(Image.new("RGB", im.size, shine), out,
+                                          lip.point(lambda x: int(x * a_s * lit)))
+        if wounds > 0 and scar_points:
+            # A wound is not a scar: raw and red rather than pale and healed, with the skin around it bruised.
+            import math as _mw
+            import random as _rw
+            a_w = min(1.0, wounds)
+            rw = _rw.Random(w * 15485863 + h)
+            bruise, cut, wet = (Image.new("L", im.size, 0) for _ in range(3))
+            db, dc, dw = (ImageDraw.Draw(x) for x in (bruise, cut, wet))
+            far = min(0.40, max(0.05, reach))                    # Reach is how long the cut runs
+            lw_w = max(1, round(w / 170 * (0.6 + far * 2.4) * max(0.4, line)))
+            for fx, fy in scar_points[:8]:
+                cx, cy = fx * w, fy * h
+                rr = w * far * 0.5
+                db.ellipse([cx - rr, cy - rr * 0.8, cx + rr, cy + rr * 0.8], fill=255)
+                ang = _mw.radians(angle + rw.uniform(-8, 8) if angle is not None else
+                                  (rw.uniform(-75, -30) if rw.random() < 0.6 else rw.uniform(30, 75)))
+                half = w * far * rw.uniform(0.24, 0.44)
+                dx, dy = _mw.cos(ang) * half, _mw.sin(ang) * half
+                dc.line([cx - dx, cy - dy, cx + dx, cy + dy], fill=255, width=lw_w + 1)
+                dw.line([cx - dx * 0.8, cy - dy * 0.8 + lw_w, cx + dx * 0.8, cy + dy * 0.8 + lw_w],
+                        fill=255, width=max(1, lw_w - 1))
+                for _d in range(1 + int(3 * a_w)):               # a little of it has run
+                    sx = cx + rw.uniform(-half * 0.7, half * 0.7)
+                    sy = cy + rw.uniform(-half * 0.3, half * 0.3)
+                    dc.line([sx, sy, sx + rw.uniform(-2, 2), sy + w * far * rw.uniform(0.12, 0.32)],
+                            fill=200, width=max(1, lw_w - 1))
+            rim = ImageChops.subtract(cut.filter(ImageFilter.MaxFilter(5 if lw_w > 1 else 3)), cut)   # just outside
+            rim = ImageChops.lighter(rim, ImageChops.subtract(wet.filter(ImageFilter.MaxFilter(3)), wet))
+            bruise = bruise.filter(ImageFilter.GaussianBlur(max(2, int(w / 60))))
+            cut = cut.filter(ImageFilter.GaussianBlur(max(1, int(w / 900))))
+            wet = wet.filter(ImageFilter.GaussianBlur(max(1, int(w / 700))))
+            deep, raw, bruised = BLOOD_TINTS.get(blood) or BLOOD_TINTS["Blood"]
+            out = Image.composite(Image.new("RGB", im.size, bruised), out,           # the bruise around it
+                                  bruise.point(lambda x: int(x * a_w * 0.55)))
+            out = Image.composite(Image.new("RGB", im.size, deep), out,              # the cut itself
+                                  cut.point(lambda x: int(x * a_w)))
+            out = Image.composite(Image.new("RGB", im.size, raw), out,               # raw at its edge
+                                  wet.point(lambda x: int(x * a_w * 0.75)))
+            if edge > 0:                                                             # drawn round, like the shipped
+                rim_w = max(0.0, min(1.0, edge))                                     # portraits draw every feature
+                rim = rim.filter(ImageFilter.GaussianBlur(1))
+                out = Image.composite(Image.new("RGB", im.size, _shade(deep, 0.26, 0.70)), out,
+                                      rim.point(lambda x: int(x * a_w * rim_w * 0.95)))
+            if ridge > 0:                                                            # wet, so it catches the light
+                lit_w = max(0.0, min(1.0, ridge))
+                out = Image.composite(Image.new("RGB", im.size, _shade(raw, 1.5, 0.35, 60)), out,
+                                      wet.point(lambda x: int(x * a_w * lit_w * 0.45)))
+        if grime > 0:
+            # The engine washes everybody: a peasant comes out as clean as a prince, and no wording stops it.
+            # Dirt is a thing done to a picture - soft smudges where sweat and soot gather, and a little grain
+            # over the whole of it to break up skin the engine has airbrushed.
+            a_g = min(1.0, grime)
+            big = Image.effect_noise((max(8, w // 14), max(8, h // 14)), 90).resize((w, h), Image.BICUBIC)
+            mid = Image.effect_noise((max(8, w // 5), max(8, h // 5)), 70).resize((w, h), Image.BICUBIC)
+            blot = ImageChops.multiply(big, mid).filter(ImageFilter.GaussianBlur(max(1, w // 120)))
+            smear = blot.point(lambda x: max(0, min(255, int((x - 96) * 2.4 * a_g))))
+            out = Image.composite(Image.new("RGB", im.size, (74, 58, 40)), out, smear)
+            grain = Image.effect_noise(im.size, 13 * a_g)
+            out = Image.blend(out, ImageChops.overlay(out, Image.merge("RGB", (grain, grain, grain))), 0.28 * a_g)
+        if lights:
+            # Light, last of all, because light falls on whatever is already there. A glow that is only a bright
+            # disc looks stuck on; what sells it is the spill - a wide, faint wash of the same colour over the
+            # brow and the cheekbone - and a little darkness just outside it to push against.
+            import math as _ml
+            import random as _rl
+            a_l = min(1.0, glow_amount)
+            hot, thrown = GLOW_TINTS.get(glow_tint) or GLOW_TINTS["Fire"]
+            dim = glow_tint == "Shadow"                          # the same shapes, taken away instead of added
+            r0 = max(1.5, w * max(0.005, glow_size))
+            far = r0 * (3.0 + 9.0 * max(0.0, min(1.0, glow_spill)))
+            seed = _rl.Random(w * 32452843 + h)
+            fall = ImageOps.invert(Image.radial_gradient("L"))   # white in the middle, black at the rim
+
+            squash = max(0.15, min(1.0, glow_round))             # 1 is a circle; less is an eye - wide and pointed
+            wide_r = r0 / max(0.45, squash) ** 0.5               # a squashed light keeps about the same area
+
+            def _blob(rad: float, gamma: float, eye: bool = True, soft: float = 0.16) -> Image.Image:
+                dw_ = max(2, int(rad * 2))
+                dh_ = max(2, int(rad * 2 * (squash if eye else 1.0)))
+                g = fall.resize((dw_, dh_), Image.BILINEAR)
+                if gamma != 1.0:
+                    g = g.point(lambda x: int(255 * (x / 255.0) ** gamma))
+                if eye and squash < 0.95:                        # an almond, pointed at the corners like an eye
+                    cut_m = Image.new("L", (dw_, dh_), 0)
+                    a_, b_ = dw_ / 2.0, dh_ / 2.0
+                    up, dn = [], []
+                    for i in range(25):
+                        t = -1.0 + i / 12.0
+                        bulge = b_ * (1.0 - t * t) ** 0.65
+                        up.append((a_ + t * a_, b_ - bulge))
+                        dn.append((a_ + t * a_, b_ + bulge))
+                    ImageDraw.Draw(cut_m).polygon(up + dn[::-1], fill=255)
+                    g = ImageChops.multiply(g, cut_m.filter(ImageFilter.GaussianBlur(max(1, dh_ * 0.10))))
+                m = Image.new("L", im.size, 0)
+                for fx, fy in lights[:8]:
+                    one = Image.new("L", im.size, 0)
+                    one.paste(g, (int(fx * w - dw_ / 2), int(fy * h - dh_ / 2)))
+                    m = ImageChops.lighter(m, one)
+                return m.filter(ImageFilter.GaussianBlur(max(0.8, rad * soft)))
+
+            def _tongues() -> Image.Image:
+                m = Image.new("L", im.size, 0)
+                dd = ImageDraw.Draw(m)
+                for fx, fy in lights[:8]:
+                    cx, cy = fx * w, fy * h
+                    for _k in range(5):
+                        tall = r0 * seed.uniform(2.2, 4.8)
+                        lean = _ml.radians(seed.uniform(-26, 26))
+                        wide = r0 * seed.uniform(0.40, 0.85)
+                        off = wide_r * seed.uniform(-1.0, 1.0)   # along the whole eye, not from one spot
+                        bx, by = cx + off, cy + r0 * 0.35
+                        tx, ty = bx + _ml.sin(lean) * tall, by - _ml.cos(lean) * tall
+                        mx, my = (bx + tx) / 2, (by + ty) / 2    # a leaf, not a triangle: it bellies out
+                        dd.polygon([(bx - wide * 0.7, by), (mx - wide, my), (tx, ty),
+                                    (mx + wide, my), (bx + wide * 0.7, by)], fill=255)
+                m = m.filter(ImageFilter.GaussianBlur(max(1.2, r0 * 0.55)))
+                flick = Image.effect_noise((w, h), 42).filter(ImageFilter.GaussianBlur(max(2, int(r0 * 1.2))))
+                return ImageChops.multiply(m, flick.point(lambda x: min(255, 128 + x)))
+
+            core = _blob(wide_r, 0.45, soft=0.06)                # the eye aperture itself: small, hot, and sharp
+            lamp = _blob(wide_r * 1.6, 1.6, soft=0.14)           # the light just around it, falling off fast
+            halo = ImageChops.lighter(lamp, _tongues()) if glow == "Flame" else lamp
+            spill = _blob(far, 2.4, eye=False, soft=0.22)        # light falls on the face every way at once
+            if not dim:                                          # a rim of shadow, so the light has something to
+                edge_l = ImageChops.subtract(_blob(far * 0.5, 2.0, eye=False, soft=0.2), halo)   # push against
+                out = Image.composite(Image.new("RGB", im.size, (24, 20, 26)), out,
+                                      edge_l.point(lambda x: int(x * a_l * 0.30)))
+            if not dim:                                      # an eye keeps its dark middle, or it is only a bead
+                pupil = im.convert("L").point(lambda x: 255 if x < 55 else 0)   # (a shadow wants that middle dark,
+                core = ImageChops.subtract(core, pupil.filter(ImageFilter.GaussianBlur(1)).point(
+                    lambda x: int(x * 0.55)))                    # so it keeps its core, but a hot eye burns through)
+            if dim:
+                for shape, col, k in ((spill, thrown, 0.35), (halo, thrown, 0.80), (core, hot, 0.95)):
+                    out = Image.composite(Image.new("RGB", im.size, col), out,
+                                          shape.point(lambda x: int(x * a_l * k)))
+            else:
+                black = Image.new("RGB", im.size, (0, 0, 0))
+                for shape, col, k in ((spill, thrown, 0.30), (halo, thrown, 0.80)):
+                    lay = Image.composite(Image.new("RGB", im.size, col), black,
+                                          shape.point(lambda x: int(x * a_l * k)))
+                    out = ImageChops.screen(out, lay)
+                out = Image.composite(Image.new("RGB", im.size, hot), out,   # the aperture is painted, not screened:
+                                      core.point(lambda x: int(x * a_l)))    # screening warm on warm only yellows it
         buf = io.BytesIO()
-        Image.merge("HSV", (hc2, sc2, vc2)).convert("RGB").save(buf, "PNG")
+        out.save(buf, "PNG")
         return buf.getvalue()
     except (OSError, ValueError):
         return data
