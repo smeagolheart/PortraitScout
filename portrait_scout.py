@@ -55,6 +55,25 @@ SEX_NAMES = {1: "Male", 2: "Female", 3: "Other", 4: "Neither"}
 RACE_FALLBACK = {1: "Human", 2: "Elf", 3: "Half-Elf", 4: "Dwarf", 5: "Halfling", 6: "Gnome", 7: "Half-Orc", 183: "Tiefling"}
 Progress = Callable[[str], None]
 
+# ---- .CRE (creature) file layout -------------------------------------------------------------
+# Infinity Engine "CRE " V1.0 / "V1  " files are CRE_SIZE bytes. analyze() and read_mod_cre() both
+# read the same struct, so the offsets are named here rather than written out twice as numbers.
+# The color, portrait and script groups are the same fields in classic BG2 and in the EE
+# re-encoding this tool reads.
+CRE_SIZE = 0x2D4
+CRE_NAME_LONG = 8          # strref (dialog.tlk) of the long name
+CRE_NAME_SHORT = 12        # strref of the short name
+CRE_ANIM = 0x28            # dword: sprite / animation id
+CRE_COLOR_RGB = 0x2C       # 7 color bytes: metal, minor, major, skin, leather, armor, hair
+CRE_PORTRAIT_SMALL = 0x34  # resref, small portrait
+CRE_PORTRAIT_LARGE = 0x3C  # resref, large portrait
+CRE_SCRIPTS = (0x248, 0x250, 0x258, 0x260, 0x268)  # default, override, ai, ambush, store
+CRE_DV = 0x280             # "dv" name (0x280..0x29F)
+CRE_RACE = 0x272
+CRE_CLASS = 0x273
+CRE_SEX = 0x275
+CRE_DIALOG = 0x2CC         # resref, default dialog
+
 
 # --------------------------------------------------------------------------------------------- game files
 class Game:
@@ -429,14 +448,14 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
     for k, cn in enumerate(cres):
         if k % 1000 == 0:
             progress(f"Reading creatures... {k}/{len(cres)}")
-        b = game.get(cn, T_CRE, 0x2D4)
-        if not b or len(b) < 0x2D4 or b[:4] != b"CRE " or b[4:8] not in (b"V1.0", b"V1  "):
+        b = game.get(cn, T_CRE, CRE_SIZE)
+        if not b or len(b) < CRE_SIZE or b[:4] != b"CRE " or b[4:8] not in (b"V1.0", b"V1  "):
             continue
-        info = {"cre": cn, "long": struct.unpack_from("<i", b, 8)[0], "short": struct.unpack_from("<i", b, 12)[0],
-                "anim": struct.unpack_from("<I", b, 0x28)[0], "small": _r8(b, 0x34), "large": _r8(b, 0x3C),
-                "race": b[0x272], "cls": b[0x273], "sex": b[0x275], "dialog": _r8(b, 0x2CC).upper(),
-                "colors": list(b[0x2C:0x33]),                       # metal, minor, major, skin, leather, armor, hair
-                "scripts": {_r8(b, o).upper() for o in (0x248, 0x250, 0x258, 0x260, 0x268)} - {""}}
+        info = {"cre": cn, "long": struct.unpack_from("<i", b, CRE_NAME_LONG)[0], "short": struct.unpack_from("<i", b, CRE_NAME_SHORT)[0],
+                "anim": struct.unpack_from("<I", b, CRE_ANIM)[0], "small": _r8(b, CRE_PORTRAIT_SMALL), "large": _r8(b, CRE_PORTRAIT_LARGE),
+                "race": b[CRE_RACE], "cls": b[CRE_CLASS], "sex": b[CRE_SEX], "dialog": _r8(b, CRE_DIALOG).upper(),
+                "colors": list(b[CRE_COLOR_RGB:CRE_COLOR_RGB + 7]),                       # metal, minor, major, skin, leather, armor, hair
+                "scripts": {_r8(b, o).upper() for o in CRE_SCRIPTS} - {""}}
         cre_by_name[cn] = info
         if info["dialog"]:
             cre_by_dlg.setdefault(info["dialog"], []).append(info)
@@ -924,16 +943,16 @@ _VAR_RE = re.compile(r"%([A-Za-z0-9_#!\-]+)%")
 def read_mod_cre(path: str) -> Optional[dict]:
     try:
         with open(path, "rb") as f:
-            b = f.read(0x2D4)
+            b = f.read(CRE_SIZE)
     except OSError:
         return None
-    if len(b) < 0x2D4 or b[:4] != b"CRE " or b[4:8] not in (b"V1.0", b"V1  "):
+    if len(b) < CRE_SIZE or b[:4] != b"CRE " or b[4:8] not in (b"V1.0", b"V1  "):
         return None
-    return {"cre": os.path.splitext(os.path.basename(path))[0].upper(), "name": "", "anim": struct.unpack_from("<I", b, 0x28)[0],
-            "small": _r8(b, 0x34), "large": _r8(b, 0x3C), "race": b[0x272], "sex": b[0x275],
-            "scripts": {_r8(b, o).upper() for o in (0x248, 0x250, 0x258, 0x260, 0x268)} - {"", "NONE"},
-            "dv": b[0x280:0x2A0].split(b"\0", 1)[0].decode("latin1").strip().upper(), "dialog": _r8(b, 0x2CC).upper(),
-            "long": struct.unpack_from("<i", b, 8)[0], "file": path}
+    return {"cre": os.path.splitext(os.path.basename(path))[0].upper(), "name": "", "anim": struct.unpack_from("<I", b, CRE_ANIM)[0],
+            "small": _r8(b, CRE_PORTRAIT_SMALL), "large": _r8(b, CRE_PORTRAIT_LARGE), "race": b[CRE_RACE], "sex": b[CRE_SEX],
+            "scripts": {_r8(b, o).upper() for o in CRE_SCRIPTS} - {"", "NONE"},
+            "dv": b[CRE_DV:CRE_DV + 0x20].split(b"\0", 1)[0].decode("latin1").strip().upper(), "dialog": _r8(b, CRE_DIALOG).upper(),
+            "long": struct.unpack_from("<i", b, CRE_NAME_LONG)[0], "file": path}
 
 
 def detect_eet(game_dir: str) -> bool:
@@ -1992,27 +2011,6 @@ _TP2_FUNC = """ALWAYS
   END
 END
 """
-
-
-def _safe_name(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_#!-]+", "_", s).strip("_") or "set"
-
-
-def _read_set(listp: Path) -> Tuple[str, int, List[List[str]]]:
-    title, comp, rows = listp.parent.name, -1, []
-    for ln in listp.read_text(encoding="utf-8", errors="replace").splitlines():
-        if ln.startswith("# set:"):
-            title = ln[6:].strip() or title
-        elif ln.startswith("# component:"):
-            try:
-                comp = int(ln[12:].strip())
-            except ValueError:
-                pass
-        elif ln.strip() and not ln.startswith("#"):
-            f = ln.split("\t")
-            if len(f) >= 2 and f[0].strip() and f[1].strip():
-                rows.append([x.strip() for x in f] + [""] * (4 - len(f)))
-    return title, comp, rows
 
 
 def _is_weidu(path: str) -> bool:

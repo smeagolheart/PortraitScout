@@ -155,6 +155,16 @@ python portrait_scout.py --source "C:\Games\BG2EE\MyMod" --game "C:\Games\BG2EE"
 
 `--cli` analyzes as the window does (`--merge-names` merges same-named creatures); `--source` reads the mod's own files.
 
+## Tests
+
+```
+python test_portrait_scout.py
+```
+
+Covers the parts that run without a game folder, a window or an image engine: the .CRE struct offsets and the
+two readers that use them, the WeiDU `.d` parser, text normalizing, the color words a creature's palette turns
+into, the mod-export helpers, and cutting any picture down to a game portrait.
+
 ## Notes
 
 - It reads `chitin.key`, the archives, override and `dialog.tlk` directly. Only uncompressed archives, as in the Enhanced Editions.
