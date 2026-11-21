@@ -40,6 +40,9 @@
 - **Declone** now works when reading the mod's own files, not only an installed game.
 - **bare_races** in `generator/settings.json`: creatures whose sprite wears nothing a portrait would show keep
   their race term and lose the class and clothing a creature file only borrowed.
+- `test_portrait_scout.py`: 17 tests over the parts that run without a game folder, a window or an image
+  engine - the .CRE struct offsets and both readers, the WeiDU `.d` parser, text normalizing, the color words
+  a palette turns into, the mod-export helpers, and cutting a picture down to a game portrait.
 
 ### Changes
 
