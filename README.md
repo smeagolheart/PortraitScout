@@ -111,6 +111,10 @@ A click on the picture lands on the tab you are on. Click to put a **shape point
 
 ### Handing work to someone else
 
+If a proposed picture is deleted - re-cropping replaces the crop it was made from - a red
+**Missing picture(s)...** button appears on the Proposals tab. It points each one at another crop of the same
+picture where there is one, and names any it cannot place.
+
 **Export work...** on the Proposals tab writes one `.zip` holding the pictures you have chosen, which creature each one is for, the creatures you have set aside, which bunches you had decloned, and what each picture was asked for - plus a readable `how-these-were-made.txt`. **Import work...** takes one in: the pictures are copied into this copy's generated folder, the paths are rewritten and the creatures are matched to the ones here, which works even when the two of you read the mod differently. Anything you have already chosen is kept unless you say otherwise.
 
 ### Create mod
@@ -131,6 +135,23 @@ mod/
 - Each picture is named after its creature file and written into both portrait slots. 
 - Each set - one per analyzed mod - is its own choice in the installer, offered twice: give the portraits to every creature listed, or only to those with none.  
 - Creatures not present in your installed game will be skipped.
+
+### Creatures a mod copies
+
+A quest mod often builds a creature by copying one of the game's own - CotSC makes its Bassilus with
+`COPY_EXISTING ~BASSIL.CRE~ ~override/QRBSLUS.CRE~`. The copy keeps whatever the original had, portrait
+included, so the same face turns up on both. Install the mod before whatever gave that original its portrait
+and the copy gets nothing at all, which is why a creature can lose its face when you reinstall.
+
+Analyze reads the mod's installer for those copies. A creature that wears a face only because it was copied
+is marked **borrowed** on its card, the Portrait column reads `(none) <- FARM`, and the creature's window
+names the file it came from. A dozen creatures wearing the same borrowed face is the clearest sign of where
+a portrait of its own is wanted.
+
+**Create mod...** writes those creatures in, so the copy keeps looking like the original whatever order the
+mods were installed in. **Everything I see** does the lot; untick it to decide separately whether copies of a
+stock farmer or merchant are included (that picture is whatever each install puts there), and whether the
+pictures are carried in the mod or only named.
 
 - You can manually edit `portraits/<set>/portraits.txt` and create the mod again to change what installs. Same name updates that mod; another name starts a new one.
 

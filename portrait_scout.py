@@ -44,7 +44,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-VERSION = "1.4"
+VERSION = "1.5"
 T_BMP, T_WAV, T_BCS, T_IDS, T_CRE, T_DLG, T_2DA = 0x0001, 0x0004, 0x03EF, 0x03F0, 0x03F1, 0x03F3, 0x03F4
 T_ARE, T_WMP = 0x03F2, 0x03F7
 EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg", T_2DA: ".2da",
@@ -625,6 +625,10 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
             return f"{abs(w)}x{abs(h)}"
         return ""
 
+    copies = clone_sources(mod_dir)                                  # creatures this mod builds by copying
+    reuse: Dict[str, int] = {}                                       # a template used for many is a stock type,
+    for _n, _t in copies.items():                                    # not a character the copy can be said to be
+        reuse[_t] = reuse.get(_t, 0) + 1
     for r in [x for r_ in out for x in ([r_] + (r_.get("parts") or []))]:
         r["large_name"] = r["large"].split("/")[0] if r["large"] else ""
         r["small_name"] = r["small"].split("/")[0] if r["small"] else ""
@@ -643,6 +647,23 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
         r["portrait_ok"] = (game.has(first, T_BMP) if first else False)
         if shown and not r["portrait_ok"]:
             r["portrait"] = shown + "  (file missing)"
+        for c_ in r["cre_list"]:                                     # built by copying one of the game's own?
+            was = copies.get(str(c_).upper())                         # then it wears, or would wear, that face
+            port, ref_ = cre_portrait(game, was) if was else ("", -1)
+            if port:
+                # the same creature under another name keeps its face; a copy of a stock farmer or
+                # merchant does not, because that picture is whatever each install happens to put there
+                named = strip_name(ref_).casefold() == str(r["name"]).casefold() if ref_ >= 0 else False
+                r["copy_of"], r["copy_port"] = was, port
+                r["copy_named"] = bool(named) or reuse[was] == 1
+                # worn: the copy kept the face. Not worn: the copy was made before the face was given, so
+                # it shows nothing - the same borrowed face either way, visible only in the second case
+                r["copy_worn"] = bool(first) and first.upper() == port.upper()
+                if not shown:
+                    r["portrait"] = f"(none) <- {port}"
+                elif r["copy_worn"]:
+                    r["portrait"] = f"{shown} <- {was}"
+                break
     # where do the unknown / guessed speakers come from?
     need = {dn for r in out for dn, how in r["how"] if how in ("", "guess", "related")}
     progress("Looking up where the unknown speakers come from...")
@@ -1988,7 +2009,8 @@ MOD_MARK = "// Made by Portrait Scout"
 MOD_VERSION = "1.0"
 _TP2_FUNC = """ALWAYS
   // Gives one creature file a portrait. replace = 0: only if the creature has no portrait picture now.
-  DEFINE_ACTION_FUNCTION ps_portrait INT_VAR replace = 1 STR_VAR cre = ~~ bmp = ~~ set = ~~ BEGIN
+  // ship = 0: the picture is not in this mod, so only point the creature at it, and only where it exists.
+  DEFINE_ACTION_FUNCTION ps_portrait INT_VAR replace = 1 ship = 1 STR_VAR cre = ~~ bmp = ~~ set = ~~ BEGIN
     ACTION_IF FILE_EXISTS_IN_GAME ~%cre%.cre~ BEGIN
       OUTER_SET ps_go = 1
       ACTION_IF !replace BEGIN
@@ -2001,11 +2023,21 @@ _TP2_FUNC = """ALWAYS
         BUT_ONLY
       END
       ACTION_IF ps_go BEGIN
-        COPY ~%MOD_FOLDER%/portraits/%set%/%bmp%.bmp~ ~override~
-        COPY_EXISTING ~%cre%.cre~ ~override~
-          WRITE_ASCIIE 0x34 ~%bmp%~ #8
-          WRITE_ASCIIE 0x3c ~%bmp%~ #8
-        BUT_ONLY
+        ACTION_IF ship BEGIN
+          COPY ~%MOD_FOLDER%/portraits/%set%/%bmp%.bmp~ ~override~
+        END
+        ACTION_IF ship = 0 BEGIN
+          // not ours to install: the picture has to be in the game already, or the creature is left alone
+          ACTION_IF !FILE_EXISTS_IN_GAME ~%bmp%.bmp~ BEGIN
+            OUTER_SET ps_go = 0
+          END
+        END
+        ACTION_IF ps_go BEGIN
+          COPY_EXISTING ~%cre%.cre~ ~override~
+            WRITE_ASCIIE 0x34 ~%bmp%~ #8
+            WRITE_ASCIIE 0x3c ~%bmp%~ #8
+          BUT_ONLY
+        END
       END
     END
   END
@@ -2065,9 +2097,10 @@ def write_mod_tp2(folder: str) -> int:
                                               ("Only creatures that have no portrait now", 0))):
             out += [f"BEGIN ~{label}~ DESIGNATED {comp + k} SUBCOMPONENT ~{group}~",
                     f"LABEL ~{_safe_name(root.name)}-{sdir}-{'all' if replace else 'missing'}~"]
-            for cre, bmp, name, _areas in rows:
-                out.append(f"  LAF ps_portrait INT_VAR replace = {replace} STR_VAR cre = ~{cre}~ bmp = ~{bmp}~ "
-                           f"set = ~{sdir}~ END" + (f"   // {q(name)}" if name else ""))
+            for cre, bmp, name, _areas, ship in rows:
+                out.append(f"  LAF ps_portrait INT_VAR replace = {replace} ship = {0 if ship == '0' else 1} "
+                           f"STR_VAR cre = ~{cre}~ bmp = ~{bmp}~ set = ~{sdir}~ END"
+                           + (f"   // {q(name)}" + (" (inherited)" if ship == "0" else "") if name else ""))
             out.append("")
     (root / f"setup-{root.name}.tp2").write_text("\n".join(out), encoding="utf-8", newline="\n")
     old = root / (root.name + ".tp2")                                # earlier exports used this name
@@ -2093,6 +2126,17 @@ def _write_notes(root: Path, sets: List[Tuple[int, str, str, List[List[str]]]]) 
            "two portrait slots (small and large), the way the HPS Portraits Project does it.",
            "Creature files that are not in your game are skipped, so a set is safe to install",
            "even if you do not have every mod it was made for.", "",
+           "Some of these creatures are copies the mod makes of one of the game's own - a second",
+           "Bassilus is still Bassilus - and they are listed with the face that creature wears, so",
+           "the copy keeps looking like it whatever order the mods were installed in.", ""]
+    lent = sorted({r[1].upper() for _c, _sd, _t, rows_ in sets for r in rows_ if len(r) > 4 and r[4] == "0"})
+    if lent:
+        txt += ["Faces this mod does not carry", "-----------------------------",
+                f"{len(lent)} of the portraits named here are already in the game and are not copied in:",
+                "   " + ", ".join(lent[:16]) + (" ..." if len(lent) > 16 else ""),
+                "They belong to whoever put them there - often another portrait mod - and the creatures",
+                "that want them are left alone on a game that does not have them.", ""]
+    txt += [
            "How to install", "--------------",
            f"1. Copy the folder '{root.name}' and 'setup-{root.name}.exe' into your game folder",
            "   (the one with chitin.key).",
@@ -2145,7 +2189,7 @@ def _read_set(listp: Path) -> Tuple[str, int, List[List[str]]]:
         elif ln.strip() and not ln.startswith("#"):
             f = ln.split("\t")
             if len(f) >= 2 and f[0].strip() and f[1].strip():
-                rows.append([x.strip() for x in f] + [""] * (4 - len(f)))
+                rows.append(([x.strip() for x in f] + [""] * 5)[:5])   # cre, picture, name, areas, ship
     return title, comp, rows
 
 
@@ -2180,6 +2224,10 @@ def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optiona
         if bmp in files:
             skipped.append(f"{e['name']}: {bmp}.CRE already has a portrait in this export")
             continue
+        if e.get("point_at"):                                        # a face it already wears in the game: the
+            for c in cres:                                           # creature is pointed at it, nothing is copied
+                rows.append([c, str(e["point_at"]).upper(), e["name"], str(e.get("areas", "")), "0"])
+            continue
         dst = sdir / (bmp.lower() + ".bmp")
         try:
             if convert:
@@ -2194,7 +2242,7 @@ def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optiona
             continue
         files.add(bmp)
         for c in cres:
-            rows.append([c, bmp, e["name"], str(e.get("areas", ""))])
+            rows.append([c, bmp, e["name"], str(e.get("areas", "")), "1"])
     for old in sdir.glob("*.bmp"):                                   # pictures of an earlier export, no longer proposed
         if old.stem.upper() not in files:
             try:
@@ -2202,7 +2250,8 @@ def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optiona
             except OSError:
                 pass
     listp.write_text("\n".join([f"# set: {set_name}", f"# component: {comp}",
-                                "# creature file<TAB>picture<TAB>creature<TAB>areas it appears in"]
+                                "# creature file<TAB>picture<TAB>creature<TAB>areas it appears in<TAB>"
+                               "1 = the picture is in this mod, 0 = it is already in the game"]
                                + ["\t".join(r) for r in rows]) + "\n", encoding="utf-8")
     nsets = write_mod_tp2(str(root))
     exe = root.parent / f"setup-{root.name}.exe"
@@ -2212,7 +2261,8 @@ def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optiona
             shutil.copyfile(src_exe, exe)
         except OSError:
             src_exe = ""
-    return {"portraits": len(files), "creatures": len(rows), "skipped": skipped, "sets": nsets,
+    return {"portraits": len({r[1].upper() for r in rows}), "carried": len(files),
+            "creatures": len(rows), "skipped": skipped, "sets": nsets,
             "tp2": str(root / f"setup-{root.name}.tp2"), "component": comp, "exe": str(exe) if exe.is_file() else ""}
 
 
@@ -2501,6 +2551,912 @@ def save_settings(d: dict) -> None:
         pass
 
 
+def plain_of(path: str) -> Path:
+    """The picture as it came out of the engine, whatever has been done to it since."""
+    q = Path(path)
+    if not q.stem.endswith(("_ghost", "_skin", "_touch")):
+        return q
+    cut = next(len(x) for x in ("_ghost", "_touch", "_skin") if q.stem.endswith(x))
+    return next((x for x in (q.with_name(q.stem[:-cut] + e) for e in
+                             (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tga", ".gif", ".tif"))
+                 if x.is_file()), q)
+
+
+def tooltip(widget: object, text: str) -> None:
+    """Show `text` in a small box while the mouse rests on the widget."""
+    import tkinter as tk
+    tip: Dict[str, object] = {"win": None, "job": None}
+
+    def show() -> None:
+        tip["job"] = None
+        w = tk.Toplevel(widget.winfo_toplevel())   # type: ignore[attr-defined]
+        w.wm_overrideredirect(True)
+        w.wm_geometry(f"+{widget.winfo_rootx() + 12}+{widget.winfo_rooty() + widget.winfo_height() + 4}")   # type: ignore[attr-defined]
+        tk.Label(w, text=text, justify="left", wraplength=420, bg="#ffffe0", relief="solid", bd=1,
+                 padx=6, pady=4).pack()
+        tip["win"] = w
+
+    def enter(_e: object) -> None:
+        leave(_e)
+        tip["job"] = widget.after(450, show)   # type: ignore[attr-defined]
+
+    def leave(_e: object) -> None:
+        if tip["job"]:
+            widget.after_cancel(tip["job"])                      # type: ignore[attr-defined,arg-type]
+            tip["job"] = None
+        if tip["win"]:
+            tip["win"].destroy()                                 # type: ignore[attr-defined]
+            tip["win"] = None
+    widget.bind("<Enter>", enter, add="+")                       # type: ignore[attr-defined]
+    widget.bind("<Leave>", leave, add="+")                       # type: ignore[attr-defined]
+    widget.bind("<ButtonPress>", leave, add="+")                 # type: ignore[attr-defined]
+
+CLONE_RE = re.compile(r"COPY_EXISTING\s+[~\"%]\s*([A-Za-z0-9_#!.-]+)\.CRE\s*[~\"%]\s*"
+                      r"[~\"%]\s*(?:override[/\\\\])?([A-Za-z0-9_#!.-]+)\.CRE\s*[~\"%]", re.I)
+
+
+def clone_sources(mod_dir: str) -> Dict[str, str]:
+    """Creatures a mod makes by copying one of the game's own: the new name -> the one it was copied from.
+
+    A copy keeps whatever the original had, portrait included, so a creature can end up wearing a face that
+    belongs to somebody else - or none at all, when the mod was installed before whatever gave the original
+    its portrait. Nothing of that link is kept in the creature file, so it is read from the mod's installer."""
+    out: Dict[str, str] = {}
+    if not mod_dir or not os.path.isdir(mod_dir):
+        return out
+    for root_, dirs, names in os.walk(mod_dir):
+        dirs[:] = [d for d in dirs if d.lower() not in ("backup", "tutu", "bgt")]
+        for n in names:
+            if os.path.splitext(n)[1].lower() not in (".tp2", ".tph", ".tpa", ".tpp"):
+                continue
+            try:
+                text = Path(root_, n).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for from_, to_ in CLONE_RE.findall(text):
+                if from_.upper() != to_.upper():                     # X -> X is a patch, not a copy
+                    out.setdefault(to_.upper(), from_.upper())
+    return out
+
+
+def cre_portrait(game: object, name: str) -> Tuple[str, int]:
+    """(the portrait a creature file names, large first, its name's strref). ("", -1) when it names none."""
+    try:
+        b = game.get(name, T_CRE, 0x2D4)                             # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - a half-read install reads no creatures
+        return "", -1
+    if not b or len(b) < 0x44 or b[:4] != b"CRE ":
+        return "", -1
+    ref = struct.unpack_from("<i", b, 8)[0]
+    for off in (0x3C, 0x34):
+        v = b[off:off + 8].split(b"\0", 1)[0].decode("latin1").strip()
+        if v and v.upper() not in NO_PORTRAIT:
+            return v, ref
+    return "", ref
+
+
+CUT_MARK = re.compile(r"_\d+x\d+_z\d+(_m-?\d+_-?\d+)?\.bmp$", re.I)   # what "Use this" adds to a crop
+
+
+def lost_proposals(props: Dict[str, str]) -> Dict[str, str]:
+    """Proposals whose picture is no longer on the disk -> another crop of the same picture, where there is
+    one. A re-crop deletes the cut-out it replaces, so the name in the proposal can be left pointing at it."""
+    out: Dict[str, str] = {}
+    for k, v in props.items():
+        if not v or os.path.isfile(v):
+            continue
+        q = Path(v)
+        base = CUT_MARK.sub("", q.name)
+        sibs: List[Path] = []
+        if base != q.name:                                   # it was a crop, so look for the newer one
+            try:
+                sibs = [x for x in q.parent.glob(base + "_*x*.bmp") if x.is_file()]
+            except OSError:
+                sibs = []
+        out[k] = os.path.normpath(str(max(sibs, key=lambda x: x.stat().st_mtime))) if sibs else ""
+    return out
+
+
+TOUCH_MEMORY: Dict[str, dict] = {}        # what was last done to each picture, for as long as the program runs
+
+
+def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, desc: str,
+                    say: Callable[[str], None], on_done: Callable[..., None],
+                    touch_memory: Dict[str, dict], generic: bool = False) -> None:
+    """Touch up a finished picture: the skin's color, how dark it is, the lips and the eyes. Opening it
+    again on a picture already worked on starts from the plain one, with the sliders where they were -
+    so it is the same touch up carried on, not one piled on top of another."""
+    import tkinter as tk
+    from tkinter import ttk
+    q = plain_of(path)
+    mem = touch_memory.get(str(q), {})
+    try:
+        from PIL import Image, ImageTk
+        src = Image.open(q).convert("RGB")
+    except Exception:  # noqa: BLE001 - no Pillow, or a picture it will not open
+        say("Pillow is needed to touch a picture up, and it is not installed.")
+        return
+    skins = dict(getattr(pg, "SKIN_TINTS", {}) or {})
+    lipset = dict(getattr(pg, "LIP_TINTS", {}) or {})
+    eyeset = dict(getattr(pg, "SPOT_TINTS", None) or getattr(pg, "EYE_TINTS", {}) or {})
+    bloods = dict(getattr(pg, "BLOOD_TINTS", {}) or {"Blood": ()})
+    glows = dict(getattr(pg, "GLOW_TINTS", {}) or {"Fire": ()})
+    if not skins or not lipset:
+        return
+    win = tk.Toplevel(dlg)
+    win.title(f"Touch up - {r['name']}")
+    win.transient(dlg)
+    # the picture at its own size, with scrollbars when the screen has no room for it
+    room_w = max(260, int(win.winfo_screenwidth() * 0.46))
+    room_h = max(320, int(win.winfo_screenheight() * 0.78))
+    small = src
+    sbuf = io.BytesIO()
+    small.save(sbuf, "PNG")
+    thumb = sbuf.getvalue()
+    rough = src.resize((max(1, src.width // 2), max(1, src.height // 2)), Image.BILINEAR)
+    rbuf = io.BytesIO()                                      # half size, for while a slider is moving:
+    rough.save(rbuf, "PNG")                                  # a full pass is too slow to follow a drag
+    thumb_rough = rbuf.getvalue()
+    body = ttk.Frame(win)
+    body.pack(fill="both", expand=True, padx=10, pady=10)
+    hold = ttk.Frame(body)
+    hold.grid(row=0, column=0, rowspan=2, padx=(0, 12), sticky="n")
+    pane = ttk.Frame(hold)                                   # the picture and its scrollbars
+    pane.pack(side="top")
+    zrow = ttk.Frame(hold)                                   # how big it is shown
+    zrow.pack(side="top", fill="x", pady=(5, 0))
+    fit_k = min(room_w / max(1, small.width), room_h * 0.8 / max(1, small.height), 3.0)
+    zoom_at = {"k": round(fit_k, 2) if fit_k >= 1.5 else 1.0}   # a game portrait opens big enough to work on
+    view_w, view_h = min(small.width, room_w), min(small.height, room_h)
+    lab = tk.Canvas(pane, width=view_w, height=view_h, highlightthickness=0, cursor="tcross",
+                    scrollregion=(0, 0, small.width, small.height))
+    pv = ttk.Scrollbar(pane, orient="vertical", command=lab.yview)
+    ph = ttk.Scrollbar(pane, orient="horizontal", command=lab.xview)
+    lab.configure(yscrollcommand=pv.set, xscrollcommand=ph.set)
+    zcap = tk.StringVar(value="")
+
+    def shown() -> Tuple[int, int]:
+        """The picture's size on screen. The touch up itself is always done at the picture's own size."""
+        k = zoom_at["k"]
+        return max(1, int(small.width * k)), max(1, int(small.height * k))
+
+    def fit_view() -> None:
+        """The canvas, its scrollbars and the caption, for whatever zoom is set now."""
+        nonlocal view_w, view_h
+        sw_, sh_ = shown()
+        view_w, view_h = min(sw_, room_w), min(sh_, room_h)
+        lab.configure(width=view_w, height=view_h, scrollregion=(0, 0, sw_, sh_))
+        for w__ in (pv, ph, lab):                            # packed in this order, so the bar under the
+            w__.pack_forget()                                # picture does not run under the side one
+        if sh_ > view_h:
+            pv.pack(side="right", fill="y")
+        if sw_ > view_w:
+            ph.pack(side="bottom", fill="x")
+        lab.pack(side="left")
+        zcap.set(f"{small.width}x{small.height} at {int(zoom_at['k'] * 100)}%")
+
+    def zoom_to(k: float) -> None:
+        zoom_at["k"] = max(0.25, min(8.0, round(k, 2)))
+        fit_view()
+        draw()
+    ttk.Label(zrow, text="Zoom:").pack(side="left")
+    ttk.Button(zrow, text="-", width=3, command=lambda: zoom_to(zoom_at["k"] / 1.25)).pack(side="left", padx=(4, 0))
+    ttk.Button(zrow, text="+", width=3, command=lambda: zoom_to(zoom_at["k"] * 1.25)).pack(side="left", padx=(4, 0))
+    ttk.Button(zrow, text="1:1", width=4, command=lambda: zoom_to(1.0)).pack(side="left", padx=(4, 0))
+    ttk.Button(zrow, text="Fit", width=4, command=lambda: zoom_to(fit_k)).pack(side="left", padx=(4, 8))
+    ttk.Label(zrow, textvariable=zcap, foreground="#888").pack(side="left")
+    fit_view()
+    lab.bind("<MouseWheel>", lambda e: lab.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+    lab.bind("<Control-MouseWheel>", lambda e: zoom_to(zoom_at["k"] * (1.25 if e.delta > 0 else 1 / 1.25)))
+    sidebox = ttk.Frame(body)                            # the settings scroll: there are more of them
+    sidebox.grid(row=0, column=1, sticky="nsew")         # than a short screen has room for
+    scan = tk.Canvas(sidebox, highlightthickness=0, borderwidth=0, width=1, height=min(room_h, 820))
+    sbar = ttk.Scrollbar(sidebox, orient="vertical", command=scan.yview)
+    scan.configure(yscrollcommand=sbar.set)
+    sbar.pack(side="right", fill="y")
+    scan.pack(side="left", fill="both", expand=True)
+    side = ttk.Frame(scan)
+    scan.create_window((0, 0), window=side, anchor="nw")
+
+    def side_fits(_e: object = None) -> None:
+        scan.configure(scrollregion=scan.bbox("all"))
+        need, tall = side.winfo_reqwidth(), side.winfo_reqheight()
+        if need > 1 and scan.winfo_width() != need:
+            scan.configure(width=need)
+        room = min(tall, room_h)                         # as tall as it needs, up to what the screen has
+        if room > 1 and scan.winfo_height() != room:
+            scan.configure(height=room)
+        if tall <= room_h:                               # it all fits: no bar in the way
+            sbar.pack_forget()
+        elif not sbar.winfo_ismapped():
+            sbar.pack(side="right", fill="y", before=scan)
+    side.bind("<Configure>", side_fits)
+
+    def side_wheel(e: object) -> None:
+        scan.yview_scroll(-1 if getattr(e, "delta", 0) > 0 else 1, "units")
+
+    def wheel_on(wid: tk.Misc) -> None:
+        """Every setting answers the wheel, not only the gaps between them."""
+        wid.bind("<MouseWheel>", side_wheel)
+        for ch in wid.winfo_children():
+            wheel_on(ch)
+    keep: Dict[str, object] = {}
+    start_ = pg.suggest_tint(desc) if hasattr(pg, "suggest_tint") else ""   # type: ignore[attr-defined]
+    skin_v = tk.StringVar(value=mem.get("skin", start_ if start_ in skins else "Leave"))
+    lips_v = tk.StringVar(value=mem.get("lips", "Leave"))
+    amount = tk.DoubleVar(value=float(mem.get("amount", 0.9)))
+    lipamt = tk.DoubleVar(value=float(mem.get("lipamt", 0.85)))
+    light = tk.DoubleVar(value=float(mem.get("light", 0.0)))
+    catch = tk.DoubleVar(value=float(mem.get("catch", gs.get("skin_catch", 0.6))))
+    fade = tk.DoubleVar(value=float(mem.get("fade", 0.0)))
+    grime = tk.DoubleVar(value=float(mem.get("grime", 0.0)))
+    creases = tk.DoubleVar(value=float(mem.get("creases", 0.0)))
+    speckle = tk.DoubleVar(value=float(mem.get("speckles", 0.0)))
+    was_sc, was_wn = float(mem.get("scars", 0.0)), float(mem.get("wounds", 0.0))
+    cut_v = tk.StringVar(value=mem.get("cut", "Wound" if was_wn > 0 else "Scar" if was_sc > 0 else "None"))
+    cutamt = tk.DoubleVar(value=float(mem.get("cutamt", max(was_sc, was_wn) or 0.85)))
+    flip_v = tk.BooleanVar(value=bool(mem.get("flip", False)))
+    eyes_v = tk.StringVar(value=mem.get("eyes", "Leave"))
+    marks_v = tk.BooleanVar(value=True)
+    eyeamt = tk.DoubleVar(value=float(mem.get("eyeamt", 0.95)))
+    eyesize = tk.DoubleVar(value=float(mem.get("eyesize", 0.035)))
+    spots: List[Tuple[float, float]] = list(mem.get("spots", []))
+    shapes: List[Tuple[float, float]] = list(mem.get("shapes", []))
+    blots: List[Tuple[float, float]] = list(mem.get("blots", []))
+    spkarea = tk.DoubleVar(value=float(mem.get("spkarea", 0.16)))
+    spkdeep = tk.DoubleVar(value=float(mem.get("spkdeep", 0.6)))
+    spkamt = tk.DoubleVar(value=float(mem.get("spkamt", 0.75)))
+    mark_kind = tk.StringVar(value="color")
+    warp = tk.DoubleVar(value=float(mem.get("warp", 0.0)))
+    warpsize = tk.DoubleVar(value=float(mem.get("warpsize", 0.17)))
+    ridge = tk.DoubleVar(value=float(mem.get("ridge", 0.5)))
+    linew = tk.DoubleVar(value=float(mem.get("line", 1.0)))
+    stretch = tk.DoubleVar(value=float(mem.get("stretch", 0.0)))
+    scarlen = tk.DoubleVar(value=float(mem.get("scarlen", 0.17)))
+    glow_v = tk.StringVar(value=mem.get("glow", "None"))
+    glowclr = tk.StringVar(value=mem.get("glowtint", next(iter(glows), "Fire")))
+    glowamt = tk.DoubleVar(value=float(mem.get("glowamt", 0.85)))
+    glowsize = tk.DoubleVar(value=float(mem.get("glowsize", 0.028)))
+    glowspill = tk.DoubleVar(value=float(mem.get("glowspill", 0.6)))
+    glowround = tk.DoubleVar(value=float(mem.get("glowround", 0.40)))
+    angle_v = tk.DoubleVar(value=float(mem.get("angle", -55.0)))
+    edge_v = tk.DoubleVar(value=float(mem.get("edge", 0.5)))
+    blood_v = tk.StringVar(value=mem.get("blood", next(iter(bloods), "Blood")))
+
+    hist: List[dict] = []                                # one entry per step taken
+    prev: Dict[str, object] = {}                         # how things stood after the last redraw
+
+    def snapshot() -> dict:
+        return {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(), "kind": mark_kind.get(), "flip": flip_v.get(),
+                "amount": amount.get(), "lipamt": lipamt.get(), "eyeamt": eyeamt.get(),
+                "eyesize": eyesize.get(), "light": light.get(), "catch": catch.get(), "fade": fade.get(),
+                "grime": grime.get(), "creases": creases.get(), "speckles": speckle.get(), "cut": cut_v.get(),
+                "cutamt": cutamt.get(), "flip": flip_v.get(), "warp": warp.get(),
+                "warpsize": warpsize.get(), "ridge": ridge.get(), "line": linew.get(), "scarlen": scarlen.get(), "angle": angle_v.get(),
+                "stretch": stretch.get(),
+                "edge": edge_v.get(), "blood": blood_v.get(), "glow": glow_v.get(),
+                "glowtint": glowclr.get(), "glowamt": glowamt.get(), "glowsize": glowsize.get(),
+                "glowspill": glowspill.get(), "glowround": glowround.get(),
+                "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
+                "spkarea": spkarea.get(), "spkdeep": spkdeep.get(), "spkamt": spkamt.get()}
+
+    def remember() -> None:
+        """Put the state as it was before this change on the pile."""
+        if prev:
+            hist.append(dict(prev))
+            del hist[:-40]
+
+    def undo() -> None:
+        if not hist:
+            say("Nothing to undo.")
+            return
+        d = hist.pop()
+        if d.get("base"):                                    # a pass that was painted in: take it off again
+            set_base(d["base"])                              # type: ignore[arg-type]
+        skin_v.set(d["skin"]), lips_v.set(d["lips"]), eyes_v.set(d["eyes"]), mark_kind.set(d["kind"])
+        flip_v.set(bool(d.get("flip", False)))
+        for var, key in ((amount, "amount"), (lipamt, "lipamt"), (eyeamt, "eyeamt"), (eyesize, "eyesize"),
+                         (light, "light"), (catch, "catch"), (fade, "fade"), (grime, "grime"),
+                         (creases, "creases"), (speckle, "speckles"), (cutamt, "cutamt"),
+                         (warp, "warp"), (warpsize, "warpsize"), (ridge, "ridge"), (linew, "line"),
+                         (angle_v, "angle"), (edge_v, "edge"), (scarlen, "scarlen"), (stretch, "stretch"),
+                         (glowamt, "glowamt"), (glowsize, "glowsize"), (glowspill, "glowspill"),
+                         (glowround, "glowround")):
+            var.set(float(d[key]))                           # type: ignore[arg-type]
+        blood_v.set(str(d.get("blood", blood_v.get())))
+        cut_v.set(str(d.get("cut", cut_v.get())))
+        glow_v.set(str(d.get("glow", glow_v.get())))
+        glowclr.set(str(d.get("glowtint", glowclr.get())))
+        spots.clear()
+        spots.extend(d["spots"])                             # type: ignore[arg-type]
+        shapes.clear()
+        shapes.extend(d["shapes"])                           # type: ignore[arg-type]
+        blots.clear()
+        blots.extend(d.get("blots") or [])                   # type: ignore[arg-type]
+        spkarea.set(float(d.get("spkarea", spkarea.get())))
+        spkdeep.set(float(d.get("spkdeep", spkdeep.get())))
+        spkamt.set(float(d.get("spkamt", spkamt.get())))
+        prev.clear()
+        prev.update(d)
+        tab_marks(redraw=False)                              # the tab, not the undone step, says where
+        draw()                                               # draw() puts the button right again
+
+    def set_base(png: bytes) -> None:
+        """Make this the picture everything is worked out from (a pass painted in, or an undo of one)."""
+        nonlocal thumb, thumb_rough, small
+        thumb = png
+        small = Image.open(io.BytesIO(png)).convert("RGB")
+        rb = io.BytesIO()
+        small.resize((max(1, small.width // 2), max(1, small.height // 2)), Image.BILINEAR).save(rb, "PNG")
+        thumb_rough = rb.getvalue()
+        fit_view()                                           # in case the painted-in pass is another size
+
+    def values() -> Tuple[object, ...]:
+        hue, sat = skins.get(skin_v.get(), (110, 1.3))
+        lh, ls = lipset.get(lips_v.get(), (6, 1.7))
+        eh, es, ev = eyeset.get(eyes_v.get(), (35, 185, -1))
+        amt = 0.0 if skin_v.get() == "Leave" else round(float(amount.get()), 2)
+        lam = 0.0 if lips_v.get() == "Leave" else round(float(lipamt.get()), 2)
+        eam = 0.0 if eyes_v.get() == "Leave" or not spots else round(float(eyeamt.get()), 2)
+        return (hue, amt, sat, round(float(catch.get()), 2), round(float(light.get()), 2), lh, lam, ls,
+                eh, eam, es, round(float(eyesize.get()), 3), ev, round(float(fade.get()), 2),
+                round(float(grime.get()), 2), round(float(warp.get()), 2), round(float(warpsize.get()), 3),
+                round(float(creases.get()), 2),
+                round(float(cutamt.get()), 2) if cut_v.get() == "Scar" else 0.0,
+                round(float(cutamt.get()), 2) if cut_v.get() == "Wound" else 0.0, bool(flip_v.get()),
+                round(float(ridge.get()), 2), blood_v.get(), round(float(linew.get()), 2),
+                round(float(angle_v.get()), 1), round(float(edge_v.get()), 2),
+                round(float(scarlen.get()), 3), glow_v.get(), glowclr.get(),
+                0.0 if glow_v.get() == "None" or not spots else round(float(glowamt.get()), 2),
+                round(float(glowsize.get()), 3), round(float(glowspill.get()), 2),
+                round(float(glowround.get()), 2), round(float(stretch.get()), 2),
+                round(float(speckle.get()), 2), round(float(spkarea.get()), 3),
+                round(float(spkdeep.get()), 2), round(float(spkamt.get()), 2))
+
+    def draw(fast: bool = False) -> None:
+        keep.pop("job", None)
+        (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
+         cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
+        gpct2.config(text=f"{int(gri * 100)}%")
+        cpct3.config(text=f"{int(max(scr, wnd) * 100)}%")
+        for rb__ in bbtn:
+            rb__.config(state="normal" if wnd > 0 else "disabled")
+        rdpct.config(text=f"{int(rdg * 100)}%")
+        lnpct.config(text=f"{lnw:.1f}x")
+        agpct.config(text=f"{int(agl)}\N{DEGREE SIGN}")
+        lgpct.config(text=f"{sln:.2f}")
+        rch.config(text=f"{wsz:.2f}")
+        stpct.config(text=("+" if stc > 0 else "") + f"{int(stc * 100)}%")
+        edpct.config(text=f"{int(edg * 100)}%")
+        cpct2.config(text=f"{int(cre * 100)}%")
+        wpct.config(text=("+" if wrp > 0 else "") + f"{int(wrp * 100)}%")
+        fpct.config(text=f"{int(fad * 100)}%")
+        pct.config(text=f"{int(amt * 100)}%")
+        lpct.config(text=f"{int(lam * 100)}%")
+        cpct.config(text=f"{int(cat * 100)}%")
+        spkpct.config(text=f"{int(spk * 100)}%")
+        for w_, on_ in ((pct, skin_v.get() != "Leave"), (lpct, lips_v.get() != "Leave"),
+                        (epct, eyes_v.get() != "Leave"), (arpct, spk > 0), (dppct, spk > 0), (smpct, spk > 0)):
+            sc__ = keep.get(f"sc_{id(w_)}")              # a strength with nothing to be strong about
+            if sc__ is not None:
+                sc__.config(state="normal" if on_ else "disabled")   # type: ignore[union-attr]
+            if not on_:
+                w_.config(text="-")                      # not 0%, which its own handle contradicts
+        arpct.config(text=f"{spa:.2f}")
+        dppct.config(text=("+" if spd > 0 else "") + f"{int(spd * 100)}%")
+        smpct.config(text=f"{int(spm * 100)}%")
+        blotlab.config(text=(f"{len(blots)} patch(es) marked." if blots else
+                             "Click a cheek to put the speckles there."),
+                       foreground="#666")
+        epct.config(text=f"{int(eam * 100)}%")
+        for box_, on_, after_ in ((lit_, glw != "None", lrow), (cut_, cut_v.get() != "None", crow)):
+            if on_ and not box_.winfo_ismapped():        # a kind's own settings are no use until it is
+                box_.pack(fill="x", padx=(10, 0), after=after_)     # chosen, and take up half the column
+            elif not on_ and box_.winfo_ismapped():
+                box_.pack_forget()
+        glpct.config(text=f"{int(gam * 100)}%")
+        gspct.config(text=f"{gsz:.3f}")
+        gppct.config(text=f"{int(gsp * 100)}%")
+        grpct.config(text=f"{grd:.2f}")
+        gpct.config(text=("+" if lig > 0 else "") + f"{int(lig * 100)}%")
+        if shapes:
+            shapelab.config(text=f"{len(shapes)} shape point(s) marked.", foreground="#666")
+        elif abs(wrp) >= 0.01 or scr > 0 or wnd > 0:
+            shapelab.config(text="Nothing marked yet - tick 'clicks mark these' above, then click "
+                                 "the face.", foreground="#b5452f")
+        else:
+            shapelab.config(text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
+                            foreground="#666")
+        eyelab.config(text="Click an eye, a gem, a buckle..." if not spots else
+                      f"{len(spots)} marked. Click more; the 9th starts over."
+                      if len(spots) < 8 else "Eight marked - clicking again starts over.")
+        clr_.config(state="normal" if spots else "disabled")
+        try:  # noqa: SIM105
+            src_ = thumb_rough if fast else thumb
+            if flp:                                          # mirrored first, so the marks you place
+                src_ = pg.flip_image(src_)                   # land where you see them
+            src_ = pg.stretch_image(src_, shapes, stc, wsz)   # type: ignore[attr-defined]
+            src_ = pg.warp_image(src_, shapes, wrp, wsz)     # type: ignore[attr-defined]
+            if (scr > 0 or wnd > 0) and shapes:              # a scar sits on a little swell of its own
+                src_ = pg.warp_image(src_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
+                                     max(0.03, sln * 0.32))
+            done_ = pg.touch_up(src_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
+                                spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
+                                glw, gtn, gam, gsz, gsp, grd)
+            im = Image.open(io.BytesIO(pg.ghost_image(done_, fad)))   # type: ignore[attr-defined]
+            sw_, sh_ = shown()                               # the rough pass is half size: back up to the
+            if (im.width, im.height) != (sw_, sh_):          # shown size too, so nothing jumps about
+                im = im.resize((sw_, sh_), Image.BILINEAR if fast else
+                               Image.NEAREST if zoom_at["k"] >= 3 else Image.LANCZOS)
+        except Exception as e:  # noqa: BLE001 - say so rather than showing an empty box
+            lab.delete("all")
+            lab.create_text(view_w // 2, view_h // 2, width=view_w - 20, fill="#b5452f",
+                            text=f"Could not draw the preview:\n{e}")
+            return
+        keep["img"] = ImageTk.PhotoImage(im)
+        lab.delete("all")
+        lab.create_image(0, 0, image=keep["img"], anchor="nw")
+        prev.clear()
+        prev.update(snapshot())
+        if keep.get("undo"):
+            keep["undo"].config(state="normal" if hist else "disabled")   # type: ignore[union-attr]
+        if marks_v.get():                                    # where you clicked, and what for
+            sw_, sh_ = shown()
+            if eyes_v.get() != "Leave":
+                for fx, fy in spots:
+                    x_, y_ = fx * sw_, fy * sh_
+                    rr = max(3.0, esz * sw_)
+                    lab.create_oval(x_ - rr, y_ - rr * 0.8, x_ + rr, y_ + rr * 0.8, outline="#ffd000", width=1)
+            if spk > 0:
+                for fx, fy in blots:
+                    x_, y_ = fx * sw_, fy * sh_
+                    rr = max(4.0, spa * sw_)
+                    lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#7ad17a", width=1)
+            if abs(wrp) >= 0.01 or scr > 0 or wnd > 0:
+                for fx, fy in shapes:
+                    x_, y_ = fx * sw_, fy * sh_
+                    rr = max(4.0, wsz * sw_)
+                    lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#36a0ff", width=1)
+
+    def mark(e: "tk.Event") -> None:
+        """Click an eye: two marks, then a third starts over."""
+        remember()
+        here = {"color": spots, "shape": shapes}.get(mark_kind.get(), blots)
+        if len(here) >= 8:                               # eight is plenty; the ninth starts over
+            here.clear()
+        sw_, sh_ = shown()
+        here.append((min(1.0, max(0.0, lab.canvasx(e.x) / sw_)),
+                     min(1.0, max(0.0, lab.canvasy(e.y) / sh_))))
+        if mark_kind.get() == "skin" and float(speckle.get()) < 0.01:
+            speckle.set(0.6)                             # a patch marked with nothing to put in it
+        elif mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
+            eyes_v.set(next((k for k in eyeset if k != "Leave"), "Leave"))
+        elif (mark_kind.get() == "shape" and abs(float(warp.get())) < 0.01
+              and abs(float(stretch.get())) < 0.01 and cut_v.get() == "None"):
+            warp.set(0.35)
+        draw()
+    lab.bind("<Button-1>", mark)
+    lab.bind("<Button-3>", lambda e: clear_eyes())
+
+    def later(*_a: object) -> None:
+        """Rough while the slider is moving, proper once it stops."""
+        for k in ("job", "slow"):
+            if keep.get(k):
+                win.after_cancel(keep[k])                    # type: ignore[arg-type]
+                keep.pop(k, None)
+        keep["job"] = win.after(35, lambda: draw(True))
+        keep["slow"] = win.after(260, draw)
+
+    def slider(parent: tk.Misc, text: str, var: tk.DoubleVar, lo: float, hi: float) -> ttk.Label:
+        row_ = ttk.Frame(parent)
+        row_.pack(fill="x", pady=(2, 0))
+        ttk.Label(row_, text=text, width=10).pack(side="left")   # "How many" needs the tenth
+        out = ttk.Label(row_, width=5)
+        sc_ = ttk.Scale(row_, from_=lo, to=hi, variable=var, command=later)
+        sc_.pack(side="left", fill="x", expand=True, padx=6)
+        sc_.bind("<ButtonPress-1>", lambda e: remember(), add="+")   # one step per drag, not per pixel
+        out.pack(side="left")
+        keep[f"sc_{id(out)}"] = sc_                      # so a slider can be grayed when it does nothing
+        return out
+    def group(parent: tk.Misc, text: str) -> ttk.Frame:
+        """One thing you can do, with the settings that belong to it under it and nothing else."""
+        ttk.Label(parent, text=text, font=("TkDefaultFont", 8, "bold"),
+                  foreground="#555").pack(anchor="w", pady=(6, 0))
+        box_ = ttk.Frame(parent)
+        box_.pack(fill="x", padx=(10, 0))
+        return box_
+
+    nb = ttk.Notebook(side)                              # a tab each, rather than one long column
+    nb.pack(fill="both", expand=True)
+    t_skin, t_lips, t_spot, t_shape, t_pic = (ttk.Frame(nb, padding=(6, 4)) for _ in range(5))
+    for f_, nm_ in ((t_skin, "Skin"), (t_lips, "Lips"), (t_spot, "Spots"), (t_shape, "Shape"),
+                    (t_pic, "Picture")):
+        nb.add(f_, text=nm_)
+
+    def tab_marks(_e: object = None, redraw: bool = True) -> None:
+        """Clicks on the picture land where you are working: spots on Spots, shape points on Shape."""
+        now = nb.index(nb.select())
+        want = {0: "skin", 2: "color", 3: "shape"}.get(now)
+        if want and mark_kind.get() != want:
+            mark_kind.set(want)
+            if redraw:
+                draw()
+    nb.bind("<<NotebookTabChanged>>", tab_marks)
+    t_color = group(t_skin, "Color it")
+    sgrid = ttk.Frame(t_color)
+    sgrid.pack(fill="x")
+    for i, nm_ in enumerate(["Leave"] + list(skins)):
+        ttk.Radiobutton(sgrid, text=nm_, value=nm_, variable=skin_v,
+                        command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
+    pct = slider(t_color, "Strength", amount, 0.1, 1.0)
+    gpct = slider(t_color, "Darker", light, -1.0, 1.0)
+    cpct = slider(t_color, "Catch", catch, 0.1, 1.0)
+    t_speck = group(t_skin, "Speckle it")
+    spkpct = slider(t_speck, "How many", speckle, 0.0, 1.0)
+    smpct = slider(t_speck, "Strength", spkamt, 0.1, 1.0)
+    dppct = slider(t_speck, "Tone", spkdeep, -1.0, 1.0)
+    arpct = slider(t_speck, "Area", spkarea, 0.04, 0.45)
+    tooltip(smpct, "How strongly the speckles are laid on, and nothing else. How many sets the count, "
+                   "Tone sets whether they are lighter or darker than the skin, Area how wide a patch "
+                   "each mark covers.")
+    tooltip(dppct, "Darker than the skin to the right, lighter to the left - pale freckles, old pocks. Measured against the "
+            "face's own level, so darkening the skin keeps them. At 0 nothing shows.")
+    blotlab = ttk.Label(t_speck, text="Click a cheek to put the speckles there.", foreground="#666")
+    blotlab.pack(anchor="w")
+    tooltip(arpct, "How wide a patch each mark speckles. With no marks the speckles go across the bridge "
+                   "of the nose and both cheeks, where freckles are; click the picture to put them "
+                   "somewhere of your own, and the green ring shows what each click covers.")
+    tooltip(spkpct, "Freckles, a gith's markings, a pox-scarred face. Mixed from the skin's own color a few shades down, "
+            "across the nose and cheeks, or around your marks. The engine will not paint these: at portrait size a "
+            "freckle is two pixels.")
+    tooltip(cpct, "How much of the face counts as skin, for Skin and for Lips. Low leaves patches behind; "
+                  "high can start taking the background with it. Hair, cloth and metal are left alone "
+                  "either way.")
+    lgrid = ttk.Frame(t_lips)
+    lgrid.pack(fill="x")
+    for i, nm_ in enumerate(lipset):
+        ttk.Radiobutton(lgrid, text=nm_, value=nm_, variable=lips_v,
+                        command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
+    lpct = slider(t_lips, "Strength", lipamt, 0.1, 1.0)
+    def header(parent: tk.Misc, text: str) -> None:
+        """A section, named."""
+        ttk.Label(parent, text=text, font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(6, 0))
+    header(t_spot, "Spot color")
+    eyelab = ttk.Label(t_spot, text="Click an eye, a gem, a buckle...", foreground="#666")
+    eyelab.pack(anchor="w")
+    tooltip(eyelab, "Click an eye, a gem, a buckle, then set the color. Only what matches the sampled spot moves, so the ring"
+            " can be loose. Eight at a time; right-click to clear.")
+    egrid = ttk.Frame(t_spot)
+    egrid.pack(fill="x")
+    for i, nm_ in enumerate(eyeset):
+        ttk.Radiobutton(egrid, text=nm_, value=nm_, variable=eyes_v,
+                        command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
+    epct = slider(t_spot, "Strength", eyeamt, 0.1, 1.0)
+    slider(t_spot, "Size", eyesize, 0.015, 0.08)
+
+    lrow = ttk.Frame(t_spot)                               # the same marks, lit instead of recolored
+    lrow.pack(fill="x", pady=(6, 0))
+    ttk.Label(lrow, text="Light it", font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(side="left")
+    for nm_ in ("None", "Glow", "Flame"):
+        ttk.Radiobutton(lrow, text=nm_, value=nm_, variable=glow_v,
+                        command=lambda: (remember(), draw())).pack(side="left", padx=(8, 0))
+    lit_ = ttk.Frame(t_spot)
+    lit_.pack(fill="x", padx=(10, 0))
+    ggrid = ttk.Frame(lit_)
+    ggrid.pack(fill="x")
+    for i, nm_ in enumerate(glows):
+        ttk.Radiobutton(ggrid, text=nm_, value=nm_, variable=glowclr,
+                        command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w",
+                                                                   padx=(0, 8))
+    glpct = slider(lit_, "Strength", glowamt, 0.1, 1.0)
+    gspct = slider(lit_, "Size", glowsize, 0.01, 0.09)
+    grpct = slider(lit_, "Round", glowround, 0.15, 1.0)
+    gppct = slider(lit_, "Spill", glowspill, 0.0, 1.0)
+    tooltip(grpct, "The shape of the light. 1.00 is a circle; lower makes it an eye - a wide almond, "
+                   "pointed at the corners - which is what a burning eye looks like and what a round "
+                   "glow never does. Drop it further for a slit.")
+    tooltip(lrow, "Light coming off the marks above - eyes, a gem, a brazier, the head of a staff. Glow "
+                  "is a steady light, Flame is tongues of it rising and flickering. The engine will not "
+                  "paint a lit eye however it is asked, so the light is put on here.")
+    tooltip(ggrid, "The color of the light. Shadow is the other way round - the marks become pits of "
+                   "dark instead, which is what an undead thing has where its eyes were.")
+    tooltip(gspct, "How big the hot middle is. An eye is about six pixels across in a portrait this "
+                   "size, so small is usually right; the light around it does the work.")
+    tooltip(gppct, "How far the light falls on everything else - the brow, the cheekbone, the bridge of "
+                   "the nose. This is what makes a glow look lit rather than stuck on. At 0 it lights "
+                   "nothing but itself.")
+
+    def clear_eyes() -> None:
+        remember()
+        spots.clear()
+        shapes.clear()
+        blots.clear()
+        eyes_v.set("Leave")
+        glow_v.set("None")
+        warp.set(0.0)
+        draw()
+    erow_ = ttk.Frame(side)
+    erow_.pack(fill="x", pady=(2, 0))
+    clr_ = ttk.Button(erow_, text="Clear marks", width=11, command=clear_eyes, state="disabled")
+    clr_.pack(side="left")
+    tooltip(clr_, "Forget every mark and put what they did back to nothing, so the picture is as it was "
+                  "painted. Right-clicking the picture does the same.")
+    ttk.Label(erow_, text="Clicks land on the tab you are on.", foreground="#888").pack(side="right")
+    mk_ = ttk.Checkbutton(erow_, text="Show marks", variable=marks_v, command=draw)
+    mk_.pack(side="left", padx=(8, 0))
+    tooltip(mk_, "The yellow rings are only there to show where you clicked. Turn them off to see the "
+                 "picture as it will be - the color stays either way.")
+    shapelab = ttk.Label(t_shape, text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
+                         foreground="#666")
+    shapelab.pack(anchor="w")
+    push = group(t_shape, "Push it out of shape")
+    wpct = slider(push, "Swell", warp, -1.0, 1.0)
+    stpct = slider(push, "Stretch", stretch, -1.0, 1.0)
+    rch = slider(push, "Spread", warpsize, 0.05, 0.40)
+    tooltip(stpct, "Pull a marked spot away from the middle, tapered: an ear drawn to an elven point, a horn pulled up. Left"
+            " pulls it back in. Both ears go opposite ways from one setting.")
+    tooltip(rch, "How wide an area Swell pushes. Small moves a nostril, large reshapes a whole jaw.")
+    crow = ttk.Frame(t_shape)                               # the kind of cut, then the settings it takes
+    crow.pack(fill="x", pady=(6, 0))
+    ttk.Label(crow, text="Cut it", font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(side="left")
+    for nm_ in ("None", "Scar", "Wound"):
+        ttk.Radiobutton(crow, text=nm_, value=nm_, variable=cut_v,
+                        command=lambda: (remember(), draw())).pack(side="left", padx=(8, 0))
+    cut_ = ttk.Frame(t_shape)
+    cut_.pack(fill="x", padx=(10, 0))
+    cpct3 = slider(cut_, "Strength", cutamt, 0.1, 1.0)
+    lgpct = slider(cut_, "Length", scarlen, 0.05, 0.40)
+    lnpct = slider(cut_, "Width", linew, 0.4, 2.5)
+    agpct = slider(cut_, "Angle", angle_v, -90.0, 90.0)
+    rdpct = slider(cut_, "Ridge", ridge, 0.0, 1.0)
+    edpct = slider(cut_, "Edge", edge_v, 0.0, 1.0)
+    tooltip(lgpct, "How far the cut runs across the face: a nick beside the eye at the low end, brow "
+                   "to jaw at the high.")
+    tooltip(agpct, "Which way the line runs: 0 is straight across the face, negative tilts the near end "
+                   "down, and either edge of the slider stands it upright. Marks in one pass vary by a "
+                   "few degrees so they are not stamped out; paint one in before setting the next.")
+    tooltip(edpct, "A dark line drawn round the outside of a scar or a wound, the way the shipped "
+                   "portraits draw round every feature. It is what makes a wound sit in the face "
+                   "instead of on top of it.")
+    tooltip(lnpct, "How thick the line of a scar or a wound is. Length sets how far it runs; this sets "
+                   "how heavy it is - a razor cut at the low end, a sword's work at the high.")
+    bgrid = ttk.Frame(cut_)
+    bgrid.pack(fill="x", pady=(2, 0))
+    bbtn: List[ttk.Radiobutton] = []                     # only a wound bleeds, so these gray out for a scar
+    for i, nm_ in enumerate(bloods):
+        rb_ = ttk.Radiobutton(bgrid, text=nm_, value=nm_, variable=blood_v,
+                              command=lambda: (remember(), draw()))
+        rb_.grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
+        bbtn.append(rb_)
+    tooltip(bgrid, "What runs out of a wound. Blood for anything that has it; ichor for the things that "
+                   "do not - a golem, a spectre, a mind flayer. It sets the cut, its raw edge and the "
+                   "bruise around it together.")
+    tooltip(rdpct, "How much light the edge catches, so a scar reads as a raised ridge rather than a "
+                   "smudge, and a wound looks wet. At 0 the scar is only a groove.")
+    tooltip(crow, "What a marked spot becomes. A scar is mixed from the skin's own color: a groove, a ridge, the light it "
+            "catches. A wound is raw and bleeding, the skin around it bruised.")
+    tooltip(cpct3, "How deep the cut is. Low is an old nick, high is a wound that has only just closed.")
+    tooltip(wpct, "Swell what is under the mark to the right, pinch it to the left: a broader nose, a heavier jaw, smaller "
+            "eyes. The engine paints everybody good-looking whatever it is told, so the shape is changed here "
+            "instead.")
+    fs_ = ttk.Frame(t_pic)
+    fs_.pack(fill="x")
+    fpct = slider(fs_, "Ghostly", fade, 0.0, 1.5)
+    cpct2 = slider(fs_, "Creases", creases, 0.0, 1.0)
+    gpct2 = slider(fs_, "Grime", grime, 0.0, 1.0)
+    fl_ = ttk.Checkbutton(fs_, text="Mirror the picture", variable=flip_v,
+                          command=lambda: (remember(), draw()))
+    fl_.pack(anchor="w", pady=(2, 0))
+    tooltip(fpct, "Fade the picture into its background: solid at the brow, gone by the bottom, the eyes left burning. Past"
+            " 100% the dissolve starts higher. The engine will not paint a see-through person, so it is done here.")
+    tooltip(cpct2, "Lines where a face creases: the brow, the corners of the eyes, the folds beside the "
+                   "nose and the jowls. Mark the two eyes as color spots and the crow's feet go where "
+                   "they belong; otherwise they go where they usually are, since these portraits are all "
+                   "framed alike.")
+    tooltip(gpct2, "Dirt: soft smudges where sweat and soot gather, and a little grain over the whole "
+                   "picture. The engine paints a peasant as clean as a prince whatever the description "
+                   "says, so this is done to the picture afterwards.")
+    tooltip(fl_, "Turn the picture left to right. The engine favors one three-quarter turn of the head, "
+                 "so a roomful of its portraits all face the same way; mirroring some of them breaks "
+                 "that up. Marks you place go where you see them.")
+
+    def paint_in() -> None:
+        """Settle this pass into the picture, so the next scar or wound can be set differently."""
+        (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
+         cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
+        if (not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0 and gri <= 0 and cre <= 0
+                and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
+            say("Nothing set to paint in yet.")
+            return
+        try:
+            cur = pg.flip_image(thumb) if flp else thumb     # type: ignore[attr-defined]
+            cur = pg.stretch_image(cur, shapes, stc, wsz)    # type: ignore[attr-defined]
+            cur = pg.warp_image(cur, shapes, wrp, wsz)       # type: ignore[attr-defined]
+            if (scr > 0 or wnd > 0) and shapes:
+                cur = pg.warp_image(cur, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
+                                    max(0.03, sln * 0.32))
+            cur = pg.touch_up(cur, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
+                              spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
+                                glw, gtn, gam, gsz, gsp, grd)
+            cur = pg.ghost_image(cur, fad)                   # type: ignore[attr-defined]
+        except Exception as e:  # noqa: BLE001 - say so rather than losing the picture
+            say(f"Could not paint that in ({e}).")
+            return
+        hist.append(dict(prev or snapshot()))                # one undo step, and it holds the picture too
+        hist[-1]["base"] = thumb
+        del hist[:-40]
+        set_base(cur)
+        keep["baked"] = True
+        skin_v.set("Leave"), lips_v.set("Leave"), eyes_v.set("Leave")
+        cut_v.set("None")
+        glow_v.set("None")
+        for v_, z_ in ((warp, 0.0), (stretch, 0.0), (fade, 0.0), (grime, 0.0), (creases, 0.0),
+                       (light, 0.0)):
+            v_.set(z_)
+        flip_v.set(False)
+        spots.clear()
+        shapes.clear()
+        blots.clear()
+        prev.clear()
+        draw()
+        say("Painted in. Mark the next one - it can have its own width, color and angle.")
+
+    def apply_() -> None:
+        (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
+         cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
+        if (not keep.get("baked") and not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0
+                and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
+            win.destroy()
+            return
+        touch_memory[str(q)] = {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(),
+                                "amount": float(amount.get()), "lipamt": float(lipamt.get()),
+                                "eyeamt": float(eyeamt.get()), "eyesize": float(eyesize.get()),
+                                "light": float(light.get()), "catch": float(catch.get()),
+                                "fade": float(fade.get()), "grime": float(grime.get()),
+                                "warp": float(warp.get()), "warpsize": float(warpsize.get()),
+                                "creases": float(creases.get()), "speckles": float(speckle.get()),
+                                "cut": cut_v.get(),
+                                "cutamt": float(cutamt.get()), "flip": bool(flip_v.get()),
+                                "ridge": float(ridge.get()), "line": float(linew.get()),
+                                "angle": float(angle_v.get()), "edge": float(edge_v.get()),
+                                "scarlen": float(scarlen.get()), "stretch": float(stretch.get()),
+                                "glow": glow_v.get(),
+                                "glowtint": glowclr.get(), "glowamt": float(glowamt.get()),
+                                "glowsize": float(glowsize.get()), "glowspill": float(glowspill.get()),
+                                "glowround": float(glowround.get()),
+                                "blood": blood_v.get(),
+                                "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
+                                "spkarea": float(spkarea.get()), "spkdeep": float(spkdeep.get()),
+                                "spkamt": float(spkamt.get())}
+        try:
+            as_bmp = q.suffix.lower() == ".bmp"          # already the shape and size of a game portrait:
+            new_ = str(q.with_name(q.stem + "_touch" + (".bmp" if as_bmp else ".png")))   # it stays one,
+            start_bytes = thumb                          # so nothing is cut out of it a second time
+            if flp:
+                start_bytes = pg.flip_image(start_bytes)     # type: ignore[attr-defined]
+            was_ = pg.stretch_image(start_bytes, shapes, stc, wsz)   # type: ignore[attr-defined]
+            was_ = pg.warp_image(was_, shapes, wrp, wsz)      # type: ignore[attr-defined]
+            if (scr > 0 or wnd > 0) and shapes:
+                was_ = pg.warp_image(was_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
+                                     max(0.03, sln * 0.32))
+            out_ = pg.touch_up(was_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
+                               spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
+                                glw, gtn, gam, gsz, gsp, grd)
+            done_ = pg.ghost_image(out_, fad)                # type: ignore[attr-defined]
+            if as_bmp:                                       # back to a 24-bit BMP the game can read
+                tmp_ = q.with_name(q.stem + "_touch_tmp.png")
+                tmp_.write_bytes(done_)
+                try:
+                    to_portrait_bmp(str(tmp_), new_, src.width, src.height, None,
+                                    (0, 0, src.width, src.height))
+                finally:
+                    try:
+                        tmp_.unlink()
+                    except OSError:
+                        pass
+            else:
+                Path(new_).write_bytes(done_)
+            gs["skin_catch"] = cat
+            try:
+                pg.save_patch(gs, {"skin_catch": cat})       # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 - the setting is not worth an error
+                pass
+        except OSError as e:
+            say(f"Could not touch up {q.name} ({e}).")
+            win.destroy()
+            return
+        win.destroy()
+        # the plain picture stays: Plain has something to go back to, and the next touch up starts from
+        # the plain one rather than piling onto this one
+        on_done(path, new_, "")
+        said = [f"{skin_v.get().lower()} skin" if amt > 0 else "",
+                f"{lips_v.get().lower()} lips" if lam > 0 else "",
+                f"{eyes_v.get().lower()} on {len(spots)} spot(s)" if eam > 0 else "",
+                f"faded to {int(fad * 100)}%" if fad > 0 else "",
+                f"{int(gri * 100)}% grime" if gri > 0 else "",
+                f"{int(cre * 100)}% creases" if cre > 0 else "",
+                f"{len(shapes)} scar(s)" if scr > 0 and shapes else "",
+                f"{len(shapes)} wound(s)" if wnd > 0 and shapes else "",
+                "mirrored" if flp else "",
+                ("swollen" if wrp > 0 else "pinched") if abs(wrp) >= 0.01 else "",
+                ("lighter" if lig > 0 else "darker") if abs(lig) >= 0.01 else ""]
+        say(", ".join(x for x in said if x).capitalize()
+                  + ". Press Plain under it to put the picture back."
+                  + (" It is already portrait-sized, so Propose under it makes it the one this creature "
+                     "wears - nothing is cut out of it again." if as_bmp and not generic else ""))
+    def reset_() -> None:
+        """Every slider back where it started: nothing changed, the color the creature's own words ask for."""
+        remember()
+        skin_v.set(start_ if start_ in skins else "Leave")
+        lips_v.set("Leave")
+        eyes_v.set("Leave")
+        spots.clear()
+        amount.set(0.9)
+        lipamt.set(0.85)
+        eyeamt.set(0.95)
+        eyesize.set(0.035)
+        fade.set(0.0)
+        grime.set(0.0)
+        creases.set(0.0)
+        speckle.set(0.0)
+        spkarea.set(0.16)
+        spkdeep.set(0.6)
+        spkamt.set(0.75)
+        blots.clear()
+        cut_v.set("None")
+        cutamt.set(0.85)
+        flip_v.set(False)
+        warp.set(0.0)
+        warpsize.set(0.17)
+        ridge.set(0.5)
+        linew.set(1.0)
+        angle_v.set(-55.0)
+        edge_v.set(0.5)
+        scarlen.set(0.17)
+        stretch.set(0.0)
+        glow_v.set("None")
+        glowamt.set(0.85)
+        glowsize.set(0.028)
+        glowspill.set(0.6)
+        glowround.set(0.40)
+        blood_v.set(next(iter(bloods), "Blood"))
+        shapes.clear()
+        light.set(0.0)
+        catch.set(float(gs.get("skin_catch", 0.6)))
+        draw()
+    brow_ = ttk.Frame(win)
+    brow_.pack(fill="x", padx=10, pady=(0, 10))
+    ttk.Button(brow_, text="Cancel", command=win.destroy).pack(side="right")
+    ttk.Button(brow_, text="Use this", command=apply_).pack(side="right", padx=(0, 6))
+    rb_ = ttk.Button(brow_, text="Reset", command=reset_)
+    rb_.pack(side="left")
+    undo_b = ttk.Button(brow_, text="Undo", command=undo, state="normal" if hist else "disabled")
+    undo_b.pack(side="left", padx=(6, 0))
+    bake_b = ttk.Button(brow_, text="Paint these in", command=lambda: paint_in())
+    bake_b.pack(side="left", padx=(6, 0))
+    tooltip(bake_b, "Settle what is set now into the picture and start again on top, marks cleared. One scar at a time: paint"
+            " one in, then give the next its own width, color and angle. Undo takes a pass back off.")
+    keep["undo"] = undo_b
+    tooltip(undo_b, "Take back the last thing you did here - a slider moved, a color chosen, a mark "
+                    "placed. Ctrl+Z does the same. Reset puts everything back at once.")
+    win.bind("<Control-z>", lambda e: undo())
+    scan.bind("<MouseWheel>", side_wheel)
+    wheel_on(side)
+    side_fits()
+    tooltip(rb_, "Put every slider back where it started, without closing this window.")
+    draw()
+    win.bind("<Return>", lambda e: apply_())
+    win.bind("<Escape>", lambda e: win.destroy())
+    win.update_idletasks()
+    try:
+        x = dlg.winfo_rootx() + max(0, (dlg.winfo_width() - win.winfo_width()) // 2)
+        y = dlg.winfo_rooty() + max(0, (dlg.winfo_height() - win.winfo_height()) // 4)
+        win.geometry(f"+{x}+{y}")
+    except tk.TclError:
+        pass
+    win.grab_set()
+
+
 def run_gui() -> None:
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -2568,33 +3524,6 @@ def run_gui() -> None:
     ttk.Button(mb_, text="Browse...", command=lambda: browse(mod_var, "Mod folder (has the .tp2 / .tra / .d files)",
                                                              mod_var.get() or game_var.get())).pack(side="left")
     ttk.Button(mb_, text="\u2922", width=3, command=lambda: path_box(mod_var, "Mod folder")).pack(side="left", padx=(3, 0))
-    def tooltip(widget: object, text: str) -> None:
-        """Show `text` in a small box while the mouse rests on the widget."""
-        tip: Dict[str, object] = {"win": None, "job": None}
-
-        def show() -> None:
-            tip["job"] = None
-            w = tk.Toplevel(root)
-            w.wm_overrideredirect(True)
-            w.wm_geometry(f"+{widget.winfo_rootx() + 12}+{widget.winfo_rooty() + widget.winfo_height() + 4}")   # type: ignore[attr-defined]
-            tk.Label(w, text=text, justify="left", wraplength=420, bg="#ffffe0", relief="solid", bd=1,
-                     padx=6, pady=4).pack()
-            tip["win"] = w
-
-        def enter(_e: object) -> None:
-            leave(_e)
-            tip["job"] = root.after(450, show)
-
-        def leave(_e: object) -> None:
-            if tip["job"]:
-                root.after_cancel(tip["job"])                        # type: ignore[arg-type]
-                tip["job"] = None
-            if tip["win"]:
-                tip["win"].destroy()                                 # type: ignore[attr-defined]
-                tip["win"] = None
-        widget.bind("<Enter>", enter, add="+")                       # type: ignore[attr-defined]
-        widget.bind("<Leave>", leave, add="+")                       # type: ignore[attr-defined]
-        widget.bind("<ButtonPress>", leave, add="+")                 # type: ignore[attr-defined]
 
     src_chk = ttk.Checkbutton(chk1, text="Read Mod Files", variable=source_var,
                               command=lambda: merge_chk.config(state="disabled" if source_var.get() else "normal"))
@@ -2602,11 +3531,9 @@ def run_gui() -> None:
     src_note = ttk.Label(chk1, text="(install not needed)", foreground="#777")
     src_note.pack(side="left", padx=(4, 0))
     for w_ in (src_chk, src_note):
-        tooltip(w_, "Read the mod's own files. The mod does not have to be installed: the speakers are worked out "
-                "from them (.d, .tra, "
-                ".tp2, .cre, .are) instead of by matching its text against the installed game.\n\nEvery line comes with "
-                "its speaker, so short lines like \"Yes.\" are not credited to the wrong creature, and components that "
-                "are not installed are counted too.\n\nExperimental. Needs both the game folder and the mod folder.")
+        tooltip(w_, "Work the speakers out from the mod's own files (.d, .tra, .tp2, .cre, .are) rather than by matching text"
+                " against the game. The mod need not be installed, every line comes with its speaker, and uninstalled "
+                "components count too.\n\nExperimental.")
 
     def mod_bmp_index() -> Dict[str, str]:
         """NAME -> the mod folder's own .bmp, and CRE NAME -> the portraits the mod's own creature file asks for.
@@ -2649,7 +3576,7 @@ def run_gui() -> None:
         save_settings(st)
         if state["res"]:
             refresh()
-    pic_chk = ttk.Checkbutton(chk1, text="Show mod's own portraits only", variable=modpic_var, command=modpic_changed)
+    pic_chk = ttk.Checkbutton(chk1, text="Mod's portraits only", variable=modpic_var, command=modpic_changed)
     pic_chk.pack(side="left", padx=(14, 0))
     tooltip(pic_chk, "Gallery only, and only with a mod folder chosen.\n\nOff: each NPC as it looks in the game now, "
             "which includes pictures another mod or the installer replaced.\nOn: only the .bmp files the mod folder "
@@ -2659,7 +3586,7 @@ def run_gui() -> None:
     go_btn = tk.Button(btns, text="Analyze", bg="#2e9e4f", fg="white", activebackground="#25803f",
                        activeforeground="white", font=("TkDefaultFont", 10, "bold"), padx=14, pady=3, relief="raised")
     go_btn.pack(side="left")
-    save_btn = ttk.Button(btns, text="Save as text file...", state="disabled")
+    save_btn = ttk.Button(btns, text="Save as text...", state="disabled")
     save_btn.pack(side="right")
     csv_btn = ttk.Button(btns, text="Save as CSV...", state="disabled")
     csv_btn.pack(side="right", padx=6)
@@ -2741,15 +3668,12 @@ def run_gui() -> None:
     party_cb.pack(side="left", padx=(12, 0))
     skip_cb = ttk.Checkbutton(gbar, text="Ignored", variable=show_skip_var)
     skip_cb.pack(side="left", padx=(12, 0))
-    tooltip(skip_cb, "Creatures you have marked as not wanting a portrait, with 'Ignore this creature' on the "
-                     "right-click menu in the gallery or the table.\n\nOff: they are left out of the table, the "
-                     "gallery and the proposals.\nOn: they are listed with everybody else, marked (ignored), so "
-                     "you can find one and let it back in.")
-    tooltip(party_cb, "NPCs who can join the party: the game's own and any a mod adds, found in the party dialog "
-                      "tables (pdialog.2da, interdia.2da).\n\nOn: they are listed like everybody else.\nOff: they are "
-                      "left out of the table, the gallery, the reports and the exports - they nearly always have a "
-                      "portrait already.\n\nA creature that shares a script name or dialog with one of them can be "
-                      "caught by this too.")
+    tooltip(skip_cb, "Creatures marked with 'Ignore this creature' on the right-click menu.\n\nOff: left out of the table, the"
+            " gallery and the proposals.\nOn: listed with everybody else, marked (ignored), so you can let one back "
+            "in.")
+    tooltip(party_cb, "NPCs who can join the party, from pdialog.2da and interdia.2da.\n\nOn: listed like everybody else.\nOff:"
+            " left out everywhere - they nearly always have a portrait already.\n\nA creature sharing a script name "
+            "or dialog with one can be caught too.")
 
     pick_var = tk.BooleanVar(value=False)                            # gallery select mode: a box on every card
     gbar2 = ttk.Frame(tab_gal, padding=(0, 0, 0, 4))                 # its own row: the toolbar above is full
@@ -2777,6 +3701,8 @@ def run_gui() -> None:
     share_btn.pack(side="left", padx=(6, 0))
     takein_btn = ttk.Button(ebar, text="Import work...")
     takein_btn.pack(side="left", padx=(6, 0))
+    lost_btn = tk.Button(ebar, text="", bg="#b5452f", fg="white", activebackground="#8f3524",
+                         activeforeground="white", relief="raised", bd=1)   # shown only when something is lost
     ttk.Label(ebar, textvariable=prop_where, foreground="#888").pack(side="left", padx=10)
     ecols = ("creature", "cre", "picture", "size", "areas")
     etree = ttk.Treeview(tab_exp, columns=ecols, show="headings", selectmode="browse")
@@ -3033,13 +3959,13 @@ def run_gui() -> None:
         more = tk.Frame(box, bg=BG)
         more.grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
-        ttk.Button(more, text="Forge: what it is, and its install notes",
+        ttk.Button(more, text="About Forge",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))
-        ttk.Button(more, text="Other Forge builds (CUDA / Torch)",
+        ttk.Button(more, text="Other builds",
                    command=lambda: webbrowser.open(FORGE_ALL)).pack(side="left", padx=(0, 6))
-        ttk.Button(more, text="Portrait Scout's setup notes",
+        ttk.Button(more, text="Setup notes",
                    command=lambda: open_path(str(here / "generator" / "README.md"))).pack(side="left", padx=(0, 6))
-        ttk.Button(more, text="The Portrait Scout folder", command=lambda: open_path(str(here))).pack(side="left")
+        ttk.Button(more, text="Portrait Scout folder", command=lambda: open_path(str(here))).pack(side="left")
         return box
 
     def saved_sets() -> None:
@@ -3079,7 +4005,7 @@ def run_gui() -> None:
             save_settings(st)
             update_prop_label()
             w.destroy()
-        ttk.Button(row, text="Forget the selected set", command=forget).pack(side="left")
+        ttk.Button(row, text="Forget this set", command=forget).pack(side="left")
         ttk.Button(row, text="Close", command=w.destroy).pack(side="right")
     hist_btn.config(command=saved_sets)
 
@@ -3336,6 +4262,15 @@ def run_gui() -> None:
                     if f:
                         names.add(f[0].upper())
                         names |= {x.upper() for x in f[1:] if x not in ("***", "*")}
+            # portrait.2da holds the three portrait sizes of every joinable NPC, which is the only place some
+            # of them are named: an EET game can carry BG1's NPCs without putting them in the dialog tables.
+            # Only the name of the picture's owner is taken, never the picture, so a creature merely wearing
+            # a party NPC's face is not mistaken for one.
+            txt = (game.get("PORTRAIT", T_2DA) or b"").decode("latin-1", "replace")
+            for ln in txt.splitlines()[3:]:
+                f = ln.split()
+                if f and len(f[0]) > 1 and f[0][-1].upper() in "LMS":
+                    names.add(f[0][:-1].upper())
         except (OSError, AttributeError, ValueError):
             names = set()
         for r in [x for r_ in res["rows"] for x in ([r_] + (r_.get("parts") or []))]:
@@ -3422,6 +4357,31 @@ def run_gui() -> None:
         finally:
             menu.grab_release()
 
+    def touch_this(r: dict, pp: str, parent: object) -> None:
+        """Work on the picture this creature has now. Whatever comes out of it becomes the proposal."""
+        pg_ = generator_module()
+        if pg_ is None:
+            return
+        try:
+            gs_ = pg_.load_settings()                                # type: ignore[attr-defined]
+        except Exception as e:  # noqa: BLE001 - the generator may be half installed
+            status.set(f"The generator settings could not be read ({e}).")
+            return
+        try:
+            desc_ = pg_.describe(r, gs_)[1]                          # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - only used to guess a starting color
+            desc_ = ""
+
+        def took(_old: str, new_: str, _drop: str = "") -> None:
+            props[rowkey(r)] = os.path.normpath(new_)
+            persist_props()
+            if view_var.get() == "gallery":
+                rebuild_keep_scroll()
+            refresh_table_only()
+            status.set(f"{Path(new_).name} is now the portrait proposed for {r['name']}.")
+        touch_up_window(parent, pp, pg=pg_, gs=gs_, r=r, desc=desc_, say=status.set,
+                        on_done=took, touch_memory=TOUCH_MEMORY)
+
     def image_menu(event: object, r: dict, parent: object) -> None:
         res = state["res"]
         if not res:
@@ -3450,6 +4410,10 @@ def run_gui() -> None:
                 n += 1
         if not n:
             menu.add_command(label="No image to save", state="disabled")
+        pg_ = generator_module()
+        if pp and os.path.isfile(pp) and pg_ is not None and hasattr(pg_, "touch_up"):
+            menu.add_separator()
+            menu.add_command(label=f"Touch up {Path(pp).name}...", command=lambda: touch_this(r, pp, parent))
         lbl, why = declone_label(r)
         if lbl:
             menu.add_separator()
@@ -3459,8 +4423,47 @@ def run_gui() -> None:
         finally:
             menu.grab_release()
 
+    def show_lost() -> None:
+        """The button appears only when a proposed picture has gone missing, and says how many."""
+        n = len(lost_proposals(props))
+        if n and not lost_btn.winfo_ismapped():
+            lost_btn.pack(side="left", padx=(6, 0))
+        elif not n and lost_btn.winfo_ismapped():
+            lost_btn.pack_forget()
+        if n:
+            lost_btn.config(text=f"{n} missing picture(s)...")
+
+    def fix_lost() -> None:
+        """Point the proposals that lost their picture at another crop of the same one, where there is one."""
+        lost = lost_proposals(props)
+        if not lost:
+            return
+        can = {k: v for k, v in lost.items() if v}
+        name = {rowkey(o): o["name"] for o in all_rows()}
+        lines = [f"  {name.get(k, k)}: {Path(props[k]).name}" + (f"\n      -> {Path(v).name}" if v else
+                 "\n      -> nothing like it is left") for k, v in list(lost.items())[:12]]
+        more = f"\n  ...and {len(lost) - 12} more" if len(lost) > 12 else ""
+        if not can:
+            messagebox.showinfo("Portrait Scout", f"{len(lost)} proposed picture(s) are no longer on the disk, "
+                                "and there is no other crop of them to use instead:\n\n" + "\n".join(lines) + more
+                                + "\n\nPropose something else for them, or put the files back.", parent=root)
+            return
+        if not messagebox.askyesno("Portrait Scout", f"{len(lost)} proposed picture(s) are no longer on the disk. "
+                                   f"{len(can)} of them can point at another crop of the same picture:\n\n"
+                                   + "\n".join(lines) + more + "\n\nPoint them at it?", parent=root):
+            return
+        for k, v in can.items():
+            props[k] = v
+        persist_props()
+        if view_var.get() == "gallery":
+            rebuild_keep_scroll()
+        refresh_table_only()
+        status.set(f"{len(can)} proposal(s) now point at another crop of the same picture"
+                   + (f"; {len(lost) - len(can)} still have nothing to use." if len(can) < len(lost) else "."))
+
     def update_prop_label() -> None:
         res = state["res"]
+        show_lost()
         prop_label.set(f"Proposed portraits: {len(props)}")
         prop_where.set(f"kept for \"{res['mod']}\", and remembered between sessions" if res else "")   # type: ignore[index]
         if view_var.get() == "export":
@@ -3596,11 +4599,11 @@ def run_gui() -> None:
                            "wearing in your game now.", wraplength=460, justify="left").pack(anchor="w")
         skip_mod = tk.BooleanVar(value=True)
         keep_w = tk.BooleanVar(value=True)
-        c1 = ttk.Checkbutton(bx, text="Leave out portraits this mod ships itself", variable=skip_mod)
+        c1 = ttk.Checkbutton(bx, text="Skip mod portraits", variable=skip_mod)
         c1.pack(anchor="w", pady=(8, 0))
         tooltip(c1, "Installing the mod brings those pictures with it, so copying them into your portrait mod "
                     "only duplicates them.")
-        c2 = ttk.Checkbutton(bx, text="Keep the pictures I chose by hand", variable=keep_w)
+        c2 = ttk.Checkbutton(bx, text="Keep my choices", variable=keep_w)
         c2.pack(anchor="w")
         tooltip(c2, "On: a creature you have already proposed a picture for keeps it. Untick to let the portrait it "
                     "wears in the game replace your choice.")
@@ -3621,17 +4624,20 @@ def run_gui() -> None:
         out = (Path(__file__).resolve().parent / "generated"
                / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", str(res["mod"])) / "current")     # type: ignore[index]
         rows = [r for r in all_rows() if rowkey(r) in checked]
-        took, biffed, none_, failed, mine = 0, 0, 0, 0, 0
+        took, biffed, none_, failed, mine, lent = 0, 0, 0, 0, 0, 0
         for r in rows:
             if rowkey(r) in props and keep_w.get():                  # a picture was already chosen for this one
                 continue
             nm = next((x for x in (r.get("large_name"), r.get("small_name")) if x), "")
-            if not nm:
+            borrowed = ""
+            if not nm and r.get("copy_port"):                        # wears none of its own, so the face Analyze
+                nm, borrowed = str(r["copy_port"]), str(r.get("copy_of") or "")   # found on the creature it was
+            if not nm:                                               # copied from is the one to take
                 none_ += 1
                 continue
-            if (nm.lower() + ".bmp") not in over:                    # it comes with the game: everyone has it
-                biffed += 1
-                continue
+            if not borrowed and (nm.lower() + ".bmp") not in over:   # it comes with the game: everyone has it
+                biffed += 1                                          # (a borrowed one is taken either way: the
+                continue                                             # creature wearing it has none of its own)
             if nm.upper() in own:                                    # the mod ships it, so installing the mod brings it
                 mine += 1
                 continue
@@ -3649,6 +4655,7 @@ def run_gui() -> None:
             crop_store().pop(rowkey(r), None)
             props[rowkey(r)] = os.path.normpath(str(dst))
             took += 1
+            lent += 1 if borrowed else 0
         persist_props()
         if view_var.get() == "gallery":
             rebuild_keep_scroll()
@@ -3660,6 +4667,9 @@ def run_gui() -> None:
             extra.append(f"{biffed:,} already had a portrait that comes with the game, so nothing was copied")
         if mine:
             extra.append(f"{mine:,} wear a picture this mod ships itself, which installing it brings anyway")
+        if lent:
+            extra.append(f"{lent:,} wear nothing of their own and took the face of the creature they were copied "
+                         "from - the same face is on somebody else too, so these are the ones worth a picture")
         if none_:
             extra.append(f"{none_:,} have no portrait at all")
         if failed:
@@ -4761,823 +5771,13 @@ def run_gui() -> None:
             gstat.set(f"{Path(back).name} — the plain picture.")
 
         batch_at: Dict[str, int] = {}                                # how far along this creature's seeds we are
-        touch_memory: Dict[str, dict] = {}                           # what was last done to each picture
 
-        def plain_of(path: str) -> Path:
-            """The picture as it came out of the engine, whatever has been done to it since."""
-            q = Path(path)
-            if not q.stem.endswith(("_ghost", "_skin", "_touch")):
-                return q
-            cut = next(len(x) for x in ("_ghost", "_touch", "_skin") if q.stem.endswith(x))
-            return next((x for x in (q.with_name(q.stem[:-cut] + e) for e in
-                                     (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tga", ".gif", ".tif"))
-                         if x.is_file()), q)
 
         def skinned(path: str) -> None:
-            """Touch up a finished picture: the skin's color, how dark it is, the lips and the eyes. Opening it
-            again on a picture already worked on starts from the plain one, with the sliders where they were -
-            so it is the same touch up carried on, not one piled on top of another."""
-            q = plain_of(path)
-            mem = touch_memory.get(str(q), {})
-            try:
-                from PIL import Image, ImageTk
-                src = Image.open(q).convert("RGB")
-            except Exception:  # noqa: BLE001 - no Pillow, or a picture it will not open
-                gstat.set("Pillow is needed to touch a picture up, and it is not installed.")
-                return
-            skins = dict(getattr(pg, "SKIN_TINTS", {}) or {})
-            lipset = dict(getattr(pg, "LIP_TINTS", {}) or {})
-            eyeset = dict(getattr(pg, "SPOT_TINTS", None) or getattr(pg, "EYE_TINTS", {}) or {})
-            bloods = dict(getattr(pg, "BLOOD_TINTS", {}) or {"Blood": ()})
-            glows = dict(getattr(pg, "GLOW_TINTS", {}) or {"Fire": ()})
-            if not skins or not lipset:
-                return
-            win = tk.Toplevel(dlg)
-            win.title(f"Touch up - {r['name']}")
-            win.transient(dlg)
-            # the picture at its own size, with scrollbars when the screen has no room for it
-            room_w = max(260, int(win.winfo_screenwidth() * 0.46))
-            room_h = max(320, int(win.winfo_screenheight() * 0.78))
-            small = src
-            sbuf = io.BytesIO()
-            small.save(sbuf, "PNG")
-            thumb = sbuf.getvalue()
-            rough = src.resize((max(1, src.width // 2), max(1, src.height // 2)), Image.BILINEAR)
-            rbuf = io.BytesIO()                                      # half size, for while a slider is moving:
-            rough.save(rbuf, "PNG")                                  # a full pass is too slow to follow a drag
-            thumb_rough = rbuf.getvalue()
-            body = ttk.Frame(win)
-            body.pack(fill="both", expand=True, padx=10, pady=10)
-            hold = ttk.Frame(body)
-            hold.grid(row=0, column=0, rowspan=2, padx=(0, 12), sticky="n")
-            pane = ttk.Frame(hold)                                   # the picture and its scrollbars
-            pane.pack(side="top")
-            zrow = ttk.Frame(hold)                                   # how big it is shown
-            zrow.pack(side="top", fill="x", pady=(5, 0))
-            fit_k = min(room_w / max(1, small.width), room_h * 0.8 / max(1, small.height), 3.0)
-            zoom_at = {"k": round(fit_k, 2) if fit_k >= 1.5 else 1.0}   # a game portrait opens big enough to work on
-            view_w, view_h = min(small.width, room_w), min(small.height, room_h)
-            lab = tk.Canvas(pane, width=view_w, height=view_h, highlightthickness=0, cursor="tcross",
-                            scrollregion=(0, 0, small.width, small.height))
-            pv = ttk.Scrollbar(pane, orient="vertical", command=lab.yview)
-            ph = ttk.Scrollbar(pane, orient="horizontal", command=lab.xview)
-            lab.configure(yscrollcommand=pv.set, xscrollcommand=ph.set)
-            zcap = tk.StringVar(value="")
-
-            def shown() -> Tuple[int, int]:
-                """The picture's size on screen. The touch up itself is always done at the picture's own size."""
-                k = zoom_at["k"]
-                return max(1, int(small.width * k)), max(1, int(small.height * k))
-
-            def fit_view() -> None:
-                """The canvas, its scrollbars and the caption, for whatever zoom is set now."""
-                nonlocal view_w, view_h
-                sw_, sh_ = shown()
-                view_w, view_h = min(sw_, room_w), min(sh_, room_h)
-                lab.configure(width=view_w, height=view_h, scrollregion=(0, 0, sw_, sh_))
-                for w__ in (pv, ph, lab):                            # packed in this order, so the bar under the
-                    w__.pack_forget()                                # picture does not run under the side one
-                if sh_ > view_h:
-                    pv.pack(side="right", fill="y")
-                if sw_ > view_w:
-                    ph.pack(side="bottom", fill="x")
-                lab.pack(side="left")
-                zcap.set(f"{small.width}x{small.height} at {int(zoom_at['k'] * 100)}%")
-
-            def zoom_to(k: float) -> None:
-                zoom_at["k"] = max(0.25, min(8.0, round(k, 2)))
-                fit_view()
-                draw()
-            ttk.Label(zrow, text="Zoom:").pack(side="left")
-            ttk.Button(zrow, text="-", width=3, command=lambda: zoom_to(zoom_at["k"] / 1.25)).pack(side="left", padx=(4, 0))
-            ttk.Button(zrow, text="+", width=3, command=lambda: zoom_to(zoom_at["k"] * 1.25)).pack(side="left", padx=(4, 0))
-            ttk.Button(zrow, text="1:1", width=4, command=lambda: zoom_to(1.0)).pack(side="left", padx=(4, 0))
-            ttk.Button(zrow, text="Fit", width=4, command=lambda: zoom_to(fit_k)).pack(side="left", padx=(4, 8))
-            ttk.Label(zrow, textvariable=zcap, foreground="#888").pack(side="left")
-            fit_view()
-            lab.bind("<MouseWheel>", lambda e: lab.yview_scroll(-1 if e.delta > 0 else 1, "units"))
-            lab.bind("<Control-MouseWheel>", lambda e: zoom_to(zoom_at["k"] * (1.25 if e.delta > 0 else 1 / 1.25)))
-            sidebox = ttk.Frame(body)                            # the settings scroll: there are more of them
-            sidebox.grid(row=0, column=1, sticky="nsew")         # than a short screen has room for
-            scan = tk.Canvas(sidebox, highlightthickness=0, borderwidth=0, width=1, height=min(room_h, 820))
-            sbar = ttk.Scrollbar(sidebox, orient="vertical", command=scan.yview)
-            scan.configure(yscrollcommand=sbar.set)
-            sbar.pack(side="right", fill="y")
-            scan.pack(side="left", fill="both", expand=True)
-            side = ttk.Frame(scan)
-            scan.create_window((0, 0), window=side, anchor="nw")
-
-            def side_fits(_e: object = None) -> None:
-                scan.configure(scrollregion=scan.bbox("all"))
-                need, tall = side.winfo_reqwidth(), side.winfo_reqheight()
-                if need > 1 and scan.winfo_width() != need:
-                    scan.configure(width=need)
-                room = min(tall, room_h)                         # as tall as it needs, up to what the screen has
-                if room > 1 and scan.winfo_height() != room:
-                    scan.configure(height=room)
-                if tall <= room_h:                               # it all fits: no bar in the way
-                    sbar.pack_forget()
-                elif not sbar.winfo_ismapped():
-                    sbar.pack(side="right", fill="y", before=scan)
-            side.bind("<Configure>", side_fits)
-
-            def side_wheel(e: object) -> None:
-                scan.yview_scroll(-1 if getattr(e, "delta", 0) > 0 else 1, "units")
-
-            def wheel_on(wid: tk.Misc) -> None:
-                """Every setting answers the wheel, not only the gaps between them."""
-                wid.bind("<MouseWheel>", side_wheel)
-                for ch in wid.winfo_children():
-                    wheel_on(ch)
-            keep: Dict[str, object] = {}
-            start_ = pg.suggest_tint(desc_var.get()) if hasattr(pg, "suggest_tint") else ""   # type: ignore[attr-defined]
-            skin_v = tk.StringVar(value=mem.get("skin", start_ if start_ in skins else "Leave"))
-            lips_v = tk.StringVar(value=mem.get("lips", "Leave"))
-            amount = tk.DoubleVar(value=float(mem.get("amount", 0.9)))
-            lipamt = tk.DoubleVar(value=float(mem.get("lipamt", 0.85)))
-            light = tk.DoubleVar(value=float(mem.get("light", 0.0)))
-            catch = tk.DoubleVar(value=float(mem.get("catch", gs.get("skin_catch", 0.6))))
-            fade = tk.DoubleVar(value=float(mem.get("fade", 0.0)))
-            grime = tk.DoubleVar(value=float(mem.get("grime", 0.0)))
-            creases = tk.DoubleVar(value=float(mem.get("creases", 0.0)))
-            speckle = tk.DoubleVar(value=float(mem.get("speckles", 0.0)))
-            was_sc, was_wn = float(mem.get("scars", 0.0)), float(mem.get("wounds", 0.0))
-            cut_v = tk.StringVar(value=mem.get("cut", "Wound" if was_wn > 0 else "Scar" if was_sc > 0 else "None"))
-            cutamt = tk.DoubleVar(value=float(mem.get("cutamt", max(was_sc, was_wn) or 0.85)))
-            flip_v = tk.BooleanVar(value=bool(mem.get("flip", False)))
-            eyes_v = tk.StringVar(value=mem.get("eyes", "Leave"))
-            marks_v = tk.BooleanVar(value=True)
-            eyeamt = tk.DoubleVar(value=float(mem.get("eyeamt", 0.95)))
-            eyesize = tk.DoubleVar(value=float(mem.get("eyesize", 0.035)))
-            spots: List[Tuple[float, float]] = list(mem.get("spots", []))
-            shapes: List[Tuple[float, float]] = list(mem.get("shapes", []))
-            blots: List[Tuple[float, float]] = list(mem.get("blots", []))
-            spkarea = tk.DoubleVar(value=float(mem.get("spkarea", 0.16)))
-            spkdeep = tk.DoubleVar(value=float(mem.get("spkdeep", 0.6)))
-            spkamt = tk.DoubleVar(value=float(mem.get("spkamt", 0.75)))
-            mark_kind = tk.StringVar(value="color")
-            warp = tk.DoubleVar(value=float(mem.get("warp", 0.0)))
-            warpsize = tk.DoubleVar(value=float(mem.get("warpsize", 0.17)))
-            ridge = tk.DoubleVar(value=float(mem.get("ridge", 0.5)))
-            linew = tk.DoubleVar(value=float(mem.get("line", 1.0)))
-            stretch = tk.DoubleVar(value=float(mem.get("stretch", 0.0)))
-            scarlen = tk.DoubleVar(value=float(mem.get("scarlen", 0.17)))
-            glow_v = tk.StringVar(value=mem.get("glow", "None"))
-            glowclr = tk.StringVar(value=mem.get("glowtint", next(iter(glows), "Fire")))
-            glowamt = tk.DoubleVar(value=float(mem.get("glowamt", 0.85)))
-            glowsize = tk.DoubleVar(value=float(mem.get("glowsize", 0.028)))
-            glowspill = tk.DoubleVar(value=float(mem.get("glowspill", 0.6)))
-            glowround = tk.DoubleVar(value=float(mem.get("glowround", 0.40)))
-            angle_v = tk.DoubleVar(value=float(mem.get("angle", -55.0)))
-            edge_v = tk.DoubleVar(value=float(mem.get("edge", 0.5)))
-            blood_v = tk.StringVar(value=mem.get("blood", next(iter(bloods), "Blood")))
-
-            hist: List[dict] = []                                # one entry per step taken
-            prev: Dict[str, object] = {}                         # how things stood after the last redraw
-
-            def snapshot() -> dict:
-                return {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(), "kind": mark_kind.get(), "flip": flip_v.get(),
-                        "amount": amount.get(), "lipamt": lipamt.get(), "eyeamt": eyeamt.get(),
-                        "eyesize": eyesize.get(), "light": light.get(), "catch": catch.get(), "fade": fade.get(),
-                        "grime": grime.get(), "creases": creases.get(), "speckles": speckle.get(), "cut": cut_v.get(),
-                        "cutamt": cutamt.get(), "flip": flip_v.get(), "warp": warp.get(),
-                        "warpsize": warpsize.get(), "ridge": ridge.get(), "line": linew.get(), "scarlen": scarlen.get(), "angle": angle_v.get(),
-                        "stretch": stretch.get(),
-                        "edge": edge_v.get(), "blood": blood_v.get(), "glow": glow_v.get(),
-                        "glowtint": glowclr.get(), "glowamt": glowamt.get(), "glowsize": glowsize.get(),
-                        "glowspill": glowspill.get(), "glowround": glowround.get(),
-                        "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
-                        "spkarea": spkarea.get(), "spkdeep": spkdeep.get(), "spkamt": spkamt.get()}
-
-            def remember() -> None:
-                """Put the state as it was before this change on the pile."""
-                if prev:
-                    hist.append(dict(prev))
-                    del hist[:-40]
-
-            def undo() -> None:
-                if not hist:
-                    gstat.set("Nothing to undo.")
-                    return
-                d = hist.pop()
-                if d.get("base"):                                    # a pass that was painted in: take it off again
-                    set_base(d["base"])                              # type: ignore[arg-type]
-                skin_v.set(d["skin"]), lips_v.set(d["lips"]), eyes_v.set(d["eyes"]), mark_kind.set(d["kind"])
-                flip_v.set(bool(d.get("flip", False)))
-                for var, key in ((amount, "amount"), (lipamt, "lipamt"), (eyeamt, "eyeamt"), (eyesize, "eyesize"),
-                                 (light, "light"), (catch, "catch"), (fade, "fade"), (grime, "grime"),
-                                 (creases, "creases"), (speckle, "speckles"), (cutamt, "cutamt"),
-                                 (warp, "warp"), (warpsize, "warpsize"), (ridge, "ridge"), (linew, "line"),
-                                 (angle_v, "angle"), (edge_v, "edge"), (scarlen, "scarlen"), (stretch, "stretch"),
-                                 (glowamt, "glowamt"), (glowsize, "glowsize"), (glowspill, "glowspill"),
-                                 (glowround, "glowround")):
-                    var.set(float(d[key]))                           # type: ignore[arg-type]
-                blood_v.set(str(d.get("blood", blood_v.get())))
-                cut_v.set(str(d.get("cut", cut_v.get())))
-                glow_v.set(str(d.get("glow", glow_v.get())))
-                glowclr.set(str(d.get("glowtint", glowclr.get())))
-                spots.clear()
-                spots.extend(d["spots"])                             # type: ignore[arg-type]
-                shapes.clear()
-                shapes.extend(d["shapes"])                           # type: ignore[arg-type]
-                blots.clear()
-                blots.extend(d.get("blots") or [])                   # type: ignore[arg-type]
-                spkarea.set(float(d.get("spkarea", spkarea.get())))
-                spkdeep.set(float(d.get("spkdeep", spkdeep.get())))
-                spkamt.set(float(d.get("spkamt", spkamt.get())))
-                prev.clear()
-                prev.update(d)
-                tab_marks(redraw=False)                              # the tab, not the undone step, says where
-                draw()                                               # draw() puts the button right again
-
-            def set_base(png: bytes) -> None:
-                """Make this the picture everything is worked out from (a pass painted in, or an undo of one)."""
-                nonlocal thumb, thumb_rough, small
-                thumb = png
-                small = Image.open(io.BytesIO(png)).convert("RGB")
-                rb = io.BytesIO()
-                small.resize((max(1, small.width // 2), max(1, small.height // 2)), Image.BILINEAR).save(rb, "PNG")
-                thumb_rough = rb.getvalue()
-                fit_view()                                           # in case the painted-in pass is another size
-
-            def values() -> Tuple[object, ...]:
-                hue, sat = skins.get(skin_v.get(), (110, 1.3))
-                lh, ls = lipset.get(lips_v.get(), (6, 1.7))
-                eh, es, ev = eyeset.get(eyes_v.get(), (35, 185, -1))
-                amt = 0.0 if skin_v.get() == "Leave" else round(float(amount.get()), 2)
-                lam = 0.0 if lips_v.get() == "Leave" else round(float(lipamt.get()), 2)
-                eam = 0.0 if eyes_v.get() == "Leave" or not spots else round(float(eyeamt.get()), 2)
-                return (hue, amt, sat, round(float(catch.get()), 2), round(float(light.get()), 2), lh, lam, ls,
-                        eh, eam, es, round(float(eyesize.get()), 3), ev, round(float(fade.get()), 2),
-                        round(float(grime.get()), 2), round(float(warp.get()), 2), round(float(warpsize.get()), 3),
-                        round(float(creases.get()), 2),
-                        round(float(cutamt.get()), 2) if cut_v.get() == "Scar" else 0.0,
-                        round(float(cutamt.get()), 2) if cut_v.get() == "Wound" else 0.0, bool(flip_v.get()),
-                        round(float(ridge.get()), 2), blood_v.get(), round(float(linew.get()), 2),
-                        round(float(angle_v.get()), 1), round(float(edge_v.get()), 2),
-                        round(float(scarlen.get()), 3), glow_v.get(), glowclr.get(),
-                        0.0 if glow_v.get() == "None" or not spots else round(float(glowamt.get()), 2),
-                        round(float(glowsize.get()), 3), round(float(glowspill.get()), 2),
-                        round(float(glowround.get()), 2), round(float(stretch.get()), 2),
-                        round(float(speckle.get()), 2), round(float(spkarea.get()), 3),
-                        round(float(spkdeep.get()), 2), round(float(spkamt.get()), 2))
-
-            def draw(fast: bool = False) -> None:
-                keep.pop("job", None)
-                (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
-                gpct2.config(text=f"{int(gri * 100)}%")
-                cpct3.config(text=f"{int(max(scr, wnd) * 100)}%")
-                for rb__ in bbtn:
-                    rb__.config(state="normal" if wnd > 0 else "disabled")
-                rdpct.config(text=f"{int(rdg * 100)}%")
-                lnpct.config(text=f"{lnw:.1f}x")
-                agpct.config(text=f"{int(agl)}\N{DEGREE SIGN}")
-                lgpct.config(text=f"{sln:.2f}")
-                rch.config(text=f"{wsz:.2f}")
-                stpct.config(text=("+" if stc > 0 else "") + f"{int(stc * 100)}%")
-                edpct.config(text=f"{int(edg * 100)}%")
-                cpct2.config(text=f"{int(cre * 100)}%")
-                wpct.config(text=("+" if wrp > 0 else "") + f"{int(wrp * 100)}%")
-                fpct.config(text=f"{int(fad * 100)}%")
-                pct.config(text=f"{int(amt * 100)}%")
-                lpct.config(text=f"{int(lam * 100)}%")
-                cpct.config(text=f"{int(cat * 100)}%")
-                spkpct.config(text=f"{int(spk * 100)}%")
-                for w_, on_ in ((pct, skin_v.get() != "Leave"), (lpct, lips_v.get() != "Leave"),
-                                (epct, eyes_v.get() != "Leave"), (arpct, spk > 0), (dppct, spk > 0), (smpct, spk > 0)):
-                    sc__ = keep.get(f"sc_{id(w_)}")              # a strength with nothing to be strong about
-                    if sc__ is not None:
-                        sc__.config(state="normal" if on_ else "disabled")   # type: ignore[union-attr]
-                    if not on_:
-                        w_.config(text="-")                      # not 0%, which its own handle contradicts
-                arpct.config(text=f"{spa:.2f}")
-                dppct.config(text=("+" if spd > 0 else "") + f"{int(spd * 100)}%")
-                smpct.config(text=f"{int(spm * 100)}%")
-                blotlab.config(text=(f"{len(blots)} patch(es) marked." if blots else
-                                     "Click a cheek to put the speckles there."),
-                               foreground="#666")
-                epct.config(text=f"{int(eam * 100)}%")
-                for box_, on_, after_ in ((lit_, glw != "None", lrow), (cut_, cut_v.get() != "None", crow)):
-                    if on_ and not box_.winfo_ismapped():        # a kind's own settings are no use until it is
-                        box_.pack(fill="x", padx=(10, 0), after=after_)     # chosen, and take up half the column
-                    elif not on_ and box_.winfo_ismapped():
-                        box_.pack_forget()
-                glpct.config(text=f"{int(gam * 100)}%")
-                gspct.config(text=f"{gsz:.3f}")
-                gppct.config(text=f"{int(gsp * 100)}%")
-                grpct.config(text=f"{grd:.2f}")
-                gpct.config(text=("+" if lig > 0 else "") + f"{int(lig * 100)}%")
-                if shapes:
-                    shapelab.config(text=f"{len(shapes)} shape point(s) marked.", foreground="#666")
-                elif abs(wrp) >= 0.01 or scr > 0 or wnd > 0:
-                    shapelab.config(text="Nothing marked yet - tick 'clicks mark these' above, then click "
-                                         "the face.", foreground="#b5452f")
-                else:
-                    shapelab.config(text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
-                                    foreground="#666")
-                eyelab.config(text="Click an eye, a gem, a buckle..." if not spots else
-                              f"{len(spots)} marked. Click more; the 9th starts over."
-                              if len(spots) < 8 else "Eight marked - clicking again starts over.")
-                clr_.config(state="normal" if spots else "disabled")
-                try:  # noqa: SIM105
-                    src_ = thumb_rough if fast else thumb
-                    if flp:                                          # mirrored first, so the marks you place
-                        src_ = pg.flip_image(src_)                   # land where you see them
-                    src_ = pg.stretch_image(src_, shapes, stc, wsz)   # type: ignore[attr-defined]
-                    src_ = pg.warp_image(src_, shapes, wrp, wsz)     # type: ignore[attr-defined]
-                    if (scr > 0 or wnd > 0) and shapes:              # a scar sits on a little swell of its own
-                        src_ = pg.warp_image(src_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
-                                             max(0.03, sln * 0.32))
-                    done_ = pg.touch_up(src_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                        spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
-                                        glw, gtn, gam, gsz, gsp, grd)
-                    im = Image.open(io.BytesIO(pg.ghost_image(done_, fad)))   # type: ignore[attr-defined]
-                    sw_, sh_ = shown()                               # the rough pass is half size: back up to the
-                    if (im.width, im.height) != (sw_, sh_):          # shown size too, so nothing jumps about
-                        im = im.resize((sw_, sh_), Image.BILINEAR if fast else
-                                       Image.NEAREST if zoom_at["k"] >= 3 else Image.LANCZOS)
-                except Exception as e:  # noqa: BLE001 - say so rather than showing an empty box
-                    lab.delete("all")
-                    lab.create_text(view_w // 2, view_h // 2, width=view_w - 20, fill="#b5452f",
-                                    text=f"Could not draw the preview:\n{e}")
-                    return
-                keep["img"] = ImageTk.PhotoImage(im)
-                lab.delete("all")
-                lab.create_image(0, 0, image=keep["img"], anchor="nw")
-                prev.clear()
-                prev.update(snapshot())
-                if keep.get("undo"):
-                    keep["undo"].config(state="normal" if hist else "disabled")   # type: ignore[union-attr]
-                if marks_v.get():                                    # where you clicked, and what for
-                    sw_, sh_ = shown()
-                    if eyes_v.get() != "Leave":
-                        for fx, fy in spots:
-                            x_, y_ = fx * sw_, fy * sh_
-                            rr = max(3.0, esz * sw_)
-                            lab.create_oval(x_ - rr, y_ - rr * 0.8, x_ + rr, y_ + rr * 0.8, outline="#ffd000", width=1)
-                    if spk > 0:
-                        for fx, fy in blots:
-                            x_, y_ = fx * sw_, fy * sh_
-                            rr = max(4.0, spa * sw_)
-                            lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#7ad17a", width=1)
-                    if abs(wrp) >= 0.01 or scr > 0 or wnd > 0:
-                        for fx, fy in shapes:
-                            x_, y_ = fx * sw_, fy * sh_
-                            rr = max(4.0, wsz * sw_)
-                            lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#36a0ff", width=1)
-
-            def mark(e: "tk.Event") -> None:
-                """Click an eye: two marks, then a third starts over."""
-                remember()
-                here = {"color": spots, "shape": shapes}.get(mark_kind.get(), blots)
-                if len(here) >= 8:                               # eight is plenty; the ninth starts over
-                    here.clear()
-                sw_, sh_ = shown()
-                here.append((min(1.0, max(0.0, lab.canvasx(e.x) / sw_)),
-                             min(1.0, max(0.0, lab.canvasy(e.y) / sh_))))
-                if mark_kind.get() == "skin" and float(speckle.get()) < 0.01:
-                    speckle.set(0.6)                             # a patch marked with nothing to put in it
-                elif mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
-                    eyes_v.set(next((k for k in eyeset if k != "Leave"), "Leave"))
-                elif (mark_kind.get() == "shape" and abs(float(warp.get())) < 0.01
-                      and abs(float(stretch.get())) < 0.01 and cut_v.get() == "None"):
-                    warp.set(0.35)
-                draw()
-            lab.bind("<Button-1>", mark)
-            lab.bind("<Button-3>", lambda e: clear_eyes())
-
-            def later(*_a: object) -> None:
-                """Rough while the slider is moving, proper once it stops."""
-                for k in ("job", "slow"):
-                    if keep.get(k):
-                        win.after_cancel(keep[k])                    # type: ignore[arg-type]
-                        keep.pop(k, None)
-                keep["job"] = win.after(35, lambda: draw(True))
-                keep["slow"] = win.after(260, draw)
-
-            def slider(parent: tk.Misc, text: str, var: tk.DoubleVar, lo: float, hi: float) -> ttk.Label:
-                row_ = ttk.Frame(parent)
-                row_.pack(fill="x", pady=(2, 0))
-                ttk.Label(row_, text=text, width=9).pack(side="left")
-                out = ttk.Label(row_, width=5)
-                sc_ = ttk.Scale(row_, from_=lo, to=hi, variable=var, command=later)
-                sc_.pack(side="left", fill="x", expand=True, padx=6)
-                sc_.bind("<ButtonPress-1>", lambda e: remember(), add="+")   # one step per drag, not per pixel
-                out.pack(side="left")
-                keep[f"sc_{id(out)}"] = sc_                      # so a slider can be grayed when it does nothing
-                return out
-            def group(parent: tk.Misc, text: str) -> ttk.Frame:
-                """One thing you can do, with the settings that belong to it under it and nothing else."""
-                ttk.Label(parent, text=text, font=("TkDefaultFont", 8, "bold"),
-                          foreground="#555").pack(anchor="w", pady=(6, 0))
-                box_ = ttk.Frame(parent)
-                box_.pack(fill="x", padx=(10, 0))
-                return box_
-
-            nb = ttk.Notebook(side)                              # a tab each, rather than one long column
-            nb.pack(fill="both", expand=True)
-            t_skin, t_lips, t_spot, t_shape, t_pic = (ttk.Frame(nb, padding=(6, 4)) for _ in range(5))
-            for f_, nm_ in ((t_skin, "Skin"), (t_lips, "Lips"), (t_spot, "Spots"), (t_shape, "Shape"),
-                            (t_pic, "Picture")):
-                nb.add(f_, text=nm_)
-
-            def tab_marks(_e: object = None, redraw: bool = True) -> None:
-                """Clicks on the picture land where you are working: spots on Spots, shape points on Shape."""
-                now = nb.index(nb.select())
-                want = {0: "skin", 2: "color", 3: "shape"}.get(now)
-                if want and mark_kind.get() != want:
-                    mark_kind.set(want)
-                    if redraw:
-                        draw()
-            nb.bind("<<NotebookTabChanged>>", tab_marks)
-            t_color = group(t_skin, "Color it")
-            sgrid = ttk.Frame(t_color)
-            sgrid.pack(fill="x")
-            for i, nm_ in enumerate(["Leave"] + list(skins)):
-                ttk.Radiobutton(sgrid, text=nm_, value=nm_, variable=skin_v,
-                                command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            pct = slider(t_color, "Strength", amount, 0.1, 1.0)
-            gpct = slider(t_color, "Darker", light, -1.0, 1.0)
-            cpct = slider(t_color, "Catch", catch, 0.1, 1.0)
-            t_speck = group(t_skin, "Speckle it")
-            spkpct = slider(t_speck, "How many", speckle, 0.0, 1.0)
-            smpct = slider(t_speck, "Strength", spkamt, 0.1, 1.0)
-            dppct = slider(t_speck, "Tone", spkdeep, -1.0, 1.0)
-            arpct = slider(t_speck, "Area", spkarea, 0.04, 0.45)
-            tooltip(smpct, "How strongly the speckles are laid on, and nothing else. How many sets the count, "
-                           "Tone sets whether they are lighter or darker than the skin, Area how wide a patch "
-                           "each mark covers.")
-            tooltip(dppct, "How the speckles sit against the skin: to the right darker than it, to the left "
-                           "lighter - pale freckles, old pocks, the bleached flecks on a sea creature. How many "
-                           "says how many; this says how much they show. It is measured against the face's own "
-                           "level, so darkening the skin does not take the markings down with it, and at 0 "
-                           "nothing shows.")
-            blotlab = ttk.Label(t_speck, text="Click a cheek to put the speckles there.", foreground="#666")
-            blotlab.pack(anchor="w")
-            tooltip(arpct, "How wide a patch each mark speckles. With no marks the speckles go across the bridge "
-                           "of the nose and both cheeks, where freckles are; click the picture to put them "
-                           "somewhere of your own, and the green ring shows what each click covers.")
-            tooltip(spkpct, "Freckles, a gith's markings, the spatter on a pox-scarred face. Mixed from the "
-                            "skin's own color a few shades down and scattered over the bridge of the nose and "
-                            "both cheeks - or around your shape marks, if you have placed any. The engine will "
-                            "not paint these: at portrait size a freckle is two pixels and it paints over them.")
-            tooltip(cpct, "How much of the face counts as skin, for Skin and for Lips. Low leaves patches behind; "
-                          "high can start taking the background with it. Hair, cloth and metal are left alone "
-                          "either way.")
-            lgrid = ttk.Frame(t_lips)
-            lgrid.pack(fill="x")
-            for i, nm_ in enumerate(lipset):
-                ttk.Radiobutton(lgrid, text=nm_, value=nm_, variable=lips_v,
-                                command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            lpct = slider(t_lips, "Strength", lipamt, 0.1, 1.0)
-            def header(parent: tk.Misc, text: str) -> None:
-                """A section, named."""
-                ttk.Label(parent, text=text, font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(6, 0))
-            header(t_spot, "Spot color")
-            eyelab = ttk.Label(t_spot, text="Click an eye, a gem, a buckle...", foreground="#666")
-            eyelab.pack(anchor="w")
-            tooltip(eyelab, "Click anything whose color you want changed - an eye, a gem, a buckle, a cloak "
-                            "trim - then set the color and strength. Click again elsewhere and the same "
-                            "settings are used there. What is under each click is sampled and only what matches "
-                            "it inside the ring is moved, so the ring can be loose without taking everything "
-                            "around it. Eight at a time; right-click the picture to clear them.")
-            egrid = ttk.Frame(t_spot)
-            egrid.pack(fill="x")
-            for i, nm_ in enumerate(eyeset):
-                ttk.Radiobutton(egrid, text=nm_, value=nm_, variable=eyes_v,
-                                command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-            epct = slider(t_spot, "Strength", eyeamt, 0.1, 1.0)
-            slider(t_spot, "Size", eyesize, 0.015, 0.08)
-
-            lrow = ttk.Frame(t_spot)                               # the same marks, lit instead of recolored
-            lrow.pack(fill="x", pady=(6, 0))
-            ttk.Label(lrow, text="Light it", font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(side="left")
-            for nm_ in ("None", "Glow", "Flame"):
-                ttk.Radiobutton(lrow, text=nm_, value=nm_, variable=glow_v,
-                                command=lambda: (remember(), draw())).pack(side="left", padx=(8, 0))
-            lit_ = ttk.Frame(t_spot)
-            lit_.pack(fill="x", padx=(10, 0))
-            ggrid = ttk.Frame(lit_)
-            ggrid.pack(fill="x")
-            for i, nm_ in enumerate(glows):
-                ttk.Radiobutton(ggrid, text=nm_, value=nm_, variable=glowclr,
-                                command=lambda: (remember(), draw())).grid(row=i // 4, column=i % 4, sticky="w",
-                                                                           padx=(0, 8))
-            glpct = slider(lit_, "Strength", glowamt, 0.1, 1.0)
-            gspct = slider(lit_, "Size", glowsize, 0.01, 0.09)
-            grpct = slider(lit_, "Round", glowround, 0.15, 1.0)
-            gppct = slider(lit_, "Spill", glowspill, 0.0, 1.0)
-            tooltip(grpct, "The shape of the light. 1.00 is a circle; lower makes it an eye - a wide almond, "
-                           "pointed at the corners - which is what a burning eye looks like and what a round "
-                           "glow never does. Drop it further for a slit.")
-            tooltip(lrow, "Light coming off the marks above - eyes, a gem, a brazier, the head of a staff. Glow "
-                          "is a steady light, Flame is tongues of it rising and flickering. The engine will not "
-                          "paint a lit eye however it is asked, so the light is put on here.")
-            tooltip(ggrid, "The color of the light. Shadow is the other way round - the marks become pits of "
-                           "dark instead, which is what an undead thing has where its eyes were.")
-            tooltip(gspct, "How big the hot middle is. An eye is about six pixels across in a portrait this "
-                           "size, so small is usually right; the light around it does the work.")
-            tooltip(gppct, "How far the light falls on everything else - the brow, the cheekbone, the bridge of "
-                           "the nose. This is what makes a glow look lit rather than stuck on. At 0 it lights "
-                           "nothing but itself.")
-
-            def clear_eyes() -> None:
-                remember()
-                spots.clear()
-                shapes.clear()
-                blots.clear()
-                eyes_v.set("Leave")
-                glow_v.set("None")
-                warp.set(0.0)
-                draw()
-            erow_ = ttk.Frame(side)
-            erow_.pack(fill="x", pady=(2, 0))
-            clr_ = ttk.Button(erow_, text="Clear marks", width=11, command=clear_eyes, state="disabled")
-            clr_.pack(side="left")
-            tooltip(clr_, "Forget every mark and put what they did back to nothing, so the picture is as it was "
-                          "painted. Right-clicking the picture does the same.")
-            ttk.Label(erow_, text="Clicks land on the tab you are on.", foreground="#888").pack(side="right")
-            mk_ = ttk.Checkbutton(erow_, text="Show marks", variable=marks_v, command=draw)
-            mk_.pack(side="left", padx=(8, 0))
-            tooltip(mk_, "The yellow rings are only there to show where you clicked. Turn them off to see the "
-                         "picture as it will be - the color stays either way.")
-            shapelab = ttk.Label(t_shape, text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
-                                 foreground="#666")
-            shapelab.pack(anchor="w")
-            push = group(t_shape, "Push it out of shape")
-            wpct = slider(push, "Swell", warp, -1.0, 1.0)
-            stpct = slider(push, "Stretch", stretch, -1.0, 1.0)
-            rch = slider(push, "Spread", warpsize, 0.05, 0.40)
-            tooltip(stpct, "Pull what you marked away from the middle of the face, with a taper: a human ear "
-                           "drawn out to an elven point, a jaw lengthened, a horn pulled up. To the left pulls "
-                           "it back in, which rounds off an ear that came out too elven. The two ears of a face "
-                           "go opposite ways from the one setting; Spread sets how much of the ear comes with "
-                           "the tip.")
-            tooltip(rch, "How wide an area Swell pushes. Small moves a nostril, large reshapes a whole jaw.")
-            crow = ttk.Frame(t_shape)                               # the kind of cut, then the settings it takes
-            crow.pack(fill="x", pady=(6, 0))
-            ttk.Label(crow, text="Cut it", font=("TkDefaultFont", 8, "bold"), foreground="#555").pack(side="left")
-            for nm_ in ("None", "Scar", "Wound"):
-                ttk.Radiobutton(crow, text=nm_, value=nm_, variable=cut_v,
-                                command=lambda: (remember(), draw())).pack(side="left", padx=(8, 0))
-            cut_ = ttk.Frame(t_shape)
-            cut_.pack(fill="x", padx=(10, 0))
-            cpct3 = slider(cut_, "Strength", cutamt, 0.1, 1.0)
-            lgpct = slider(cut_, "Length", scarlen, 0.05, 0.40)
-            lnpct = slider(cut_, "Width", linew, 0.4, 2.5)
-            agpct = slider(cut_, "Angle", angle_v, -90.0, 90.0)
-            rdpct = slider(cut_, "Ridge", ridge, 0.0, 1.0)
-            edpct = slider(cut_, "Edge", edge_v, 0.0, 1.0)
-            tooltip(lgpct, "How far the cut runs across the face: a nick beside the eye at the low end, brow "
-                           "to jaw at the high.")
-            tooltip(agpct, "Which way the line runs: 0 is straight across the face, negative tilts the near end "
-                           "down, and either edge of the slider stands it upright. Marks in one pass vary by a "
-                           "few degrees so they are not stamped out; paint one in before setting the next.")
-            tooltip(edpct, "A dark line drawn round the outside of a scar or a wound, the way the shipped "
-                           "portraits draw round every feature. It is what makes a wound sit in the face "
-                           "instead of on top of it.")
-            tooltip(lnpct, "How thick the line of a scar or a wound is. Length sets how far it runs; this sets "
-                           "how heavy it is - a razor cut at the low end, a sword's work at the high.")
-            bgrid = ttk.Frame(cut_)
-            bgrid.pack(fill="x", pady=(2, 0))
-            bbtn: List[ttk.Radiobutton] = []                     # only a wound bleeds, so these gray out for a scar
-            for i, nm_ in enumerate(bloods):
-                rb_ = ttk.Radiobutton(bgrid, text=nm_, value=nm_, variable=blood_v,
-                                      command=lambda: (remember(), draw()))
-                rb_.grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 8))
-                bbtn.append(rb_)
-            tooltip(bgrid, "What runs out of a wound. Blood for anything that has it; ichor for the things that "
-                           "do not - a golem, a spectre, a mind flayer. It sets the cut, its raw edge and the "
-                           "bruise around it together.")
-            tooltip(rdpct, "How much light the edge catches, so a scar reads as a raised ridge rather than a "
-                           "smudge, and a wound looks wet. At 0 the scar is only a groove.")
-            tooltip(crow, "What a shape point is: nothing, a healed scar or a fresh wound. A scar is mixed from "
-                          "the skin's own color where it falls - a groove, a healed ridge beside it and the "
-                          "light it catches. A wound is raw and bleeding, with the skin around it bruised. Both "
-                          "sit on a little swell of their own; the settings below belong to whichever is chosen.")
-            tooltip(cpct3, "How deep the cut is. Low is an old nick, high is a wound that has only just closed.")
-            tooltip(wpct, "Push the face out of shape where it was clicked: to the right swells what is under the "
-                          "mark, to the left pinches it. A bigger, broader, crooked nose; a heavier jaw; smaller "
-                          "eyes. The engine paints everybody good-looking whatever the description says - a "
-                          "broken nose comes out straight - so the shape is changed here instead.")
-            fs_ = ttk.Frame(t_pic)
-            fs_.pack(fill="x")
-            fpct = slider(fs_, "Ghostly", fade, 0.0, 1.5)
-            cpct2 = slider(fs_, "Creases", creases, 0.0, 1.0)
-            gpct2 = slider(fs_, "Grime", grime, 0.0, 1.0)
-            fl_ = ttk.Checkbutton(fs_, text="Mirror the picture", variable=flip_v,
-                                  command=lambda: (remember(), draw()))
-            fl_.pack(anchor="w", pady=(2, 0))
-            tooltip(fpct, "Fade the picture into its own background: solid at the brow, gone by the bottom, with "
-                          "the eyes left burning. Past 100% the dissolve starts higher up the face and the mist "
-                          "thickens. The engine will not paint a see-through person however the description is "
-                          "worded, so it is done here. Spectres and ghosts arrive faded already.")
-            tooltip(cpct2, "Lines where a face creases: the brow, the corners of the eyes, the folds beside the "
-                           "nose and the jowls. Mark the two eyes as color spots and the crow's feet go where "
-                           "they belong; otherwise they go where they usually are, since these portraits are all "
-                           "framed alike.")
-            tooltip(gpct2, "Dirt: soft smudges where sweat and soot gather, and a little grain over the whole "
-                           "picture. The engine paints a peasant as clean as a prince whatever the description "
-                           "says, so this is done to the picture afterwards.")
-            tooltip(fl_, "Turn the picture left to right. The engine favors one three-quarter turn of the head, "
-                         "so a roomful of its portraits all face the same way; mirroring some of them breaks "
-                         "that up. Marks you place go where you see them.")
-
-            def paint_in() -> None:
-                """Settle this pass into the picture, so the next scar or wound can be set differently."""
-                (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
-                if (not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0 and gri <= 0 and cre <= 0
-                        and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
-                    gstat.set("Nothing set to paint in yet.")
-                    return
-                try:
-                    cur = pg.flip_image(thumb) if flp else thumb     # type: ignore[attr-defined]
-                    cur = pg.stretch_image(cur, shapes, stc, wsz)    # type: ignore[attr-defined]
-                    cur = pg.warp_image(cur, shapes, wrp, wsz)       # type: ignore[attr-defined]
-                    if (scr > 0 or wnd > 0) and shapes:
-                        cur = pg.warp_image(cur, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
-                                            max(0.03, sln * 0.32))
-                    cur = pg.touch_up(cur, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                      spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
-                                        glw, gtn, gam, gsz, gsp, grd)
-                    cur = pg.ghost_image(cur, fad)                   # type: ignore[attr-defined]
-                except Exception as e:  # noqa: BLE001 - say so rather than losing the picture
-                    gstat.set(f"Could not paint that in ({e}).")
-                    return
-                hist.append(dict(prev or snapshot()))                # one undo step, and it holds the picture too
-                hist[-1]["base"] = thumb
-                del hist[:-40]
-                set_base(cur)
-                keep["baked"] = True
-                skin_v.set("Leave"), lips_v.set("Leave"), eyes_v.set("Leave")
-                cut_v.set("None")
-                glow_v.set("None")
-                for v_, z_ in ((warp, 0.0), (stretch, 0.0), (fade, 0.0), (grime, 0.0), (creases, 0.0),
-                               (light, 0.0)):
-                    v_.set(z_)
-                flip_v.set(False)
-                spots.clear()
-                shapes.clear()
-                blots.clear()
-                prev.clear()
-                draw()
-                gstat.set("Painted in. Mark the next one - it can have its own width, color and angle.")
-
-            def apply_() -> None:
-                (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
-                 cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
-                if (not keep.get("baked") and not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0
-                        and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
-                    win.destroy()
-                    return
-                touch_memory[str(q)] = {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(),
-                                        "amount": float(amount.get()), "lipamt": float(lipamt.get()),
-                                        "eyeamt": float(eyeamt.get()), "eyesize": float(eyesize.get()),
-                                        "light": float(light.get()), "catch": float(catch.get()),
-                                        "fade": float(fade.get()), "grime": float(grime.get()),
-                                        "warp": float(warp.get()), "warpsize": float(warpsize.get()),
-                                        "creases": float(creases.get()), "speckles": float(speckle.get()),
-                                        "cut": cut_v.get(),
-                                        "cutamt": float(cutamt.get()), "flip": bool(flip_v.get()),
-                                        "ridge": float(ridge.get()), "line": float(linew.get()),
-                                        "angle": float(angle_v.get()), "edge": float(edge_v.get()),
-                                        "scarlen": float(scarlen.get()), "stretch": float(stretch.get()),
-                                        "glow": glow_v.get(),
-                                        "glowtint": glowclr.get(), "glowamt": float(glowamt.get()),
-                                        "glowsize": float(glowsize.get()), "glowspill": float(glowspill.get()),
-                                        "glowround": float(glowround.get()),
-                                        "blood": blood_v.get(),
-                                        "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
-                                        "spkarea": float(spkarea.get()), "spkdeep": float(spkdeep.get()),
-                                        "spkamt": float(spkamt.get())}
-                try:
-                    as_bmp = q.suffix.lower() == ".bmp"          # already the shape and size of a game portrait:
-                    new_ = str(q.with_name(q.stem + "_touch" + (".bmp" if as_bmp else ".png")))   # it stays one,
-                    start_bytes = thumb                          # so nothing is cut out of it a second time
-                    if flp:
-                        start_bytes = pg.flip_image(start_bytes)     # type: ignore[attr-defined]
-                    was_ = pg.stretch_image(start_bytes, shapes, stc, wsz)   # type: ignore[attr-defined]
-                    was_ = pg.warp_image(was_, shapes, wrp, wsz)      # type: ignore[attr-defined]
-                    if (scr > 0 or wnd > 0) and shapes:
-                        was_ = pg.warp_image(was_, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
-                                             max(0.03, sln * 0.32))
-                    out_ = pg.touch_up(was_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
-                                       spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
-                                        glw, gtn, gam, gsz, gsp, grd)
-                    done_ = pg.ghost_image(out_, fad)                # type: ignore[attr-defined]
-                    if as_bmp:                                       # back to a 24-bit BMP the game can read
-                        tmp_ = q.with_name(q.stem + "_touch_tmp.png")
-                        tmp_.write_bytes(done_)
-                        try:
-                            to_portrait_bmp(str(tmp_), new_, src.width, src.height, None,
-                                            (0, 0, src.width, src.height))
-                        finally:
-                            try:
-                                tmp_.unlink()
-                            except OSError:
-                                pass
-                    else:
-                        Path(new_).write_bytes(done_)
-                    gs["skin_catch"] = cat
-                    try:
-                        pg.save_patch(gs, {"skin_catch": cat})       # type: ignore[attr-defined]
-                    except Exception:  # noqa: BLE001 - the setting is not worth an error
-                        pass
-                except OSError as e:
-                    gstat.set(f"Could not touch up {q.name} ({e}).")
-                    win.destroy()
-                    return
-                win.destroy()
-                swap_candidate(path, new_, path if os.path.normcase(path) != os.path.normcase(new_) else "")
-                said = [f"{skin_v.get().lower()} skin" if amt > 0 else "",
-                        f"{lips_v.get().lower()} lips" if lam > 0 else "",
-                        f"{eyes_v.get().lower()} on {len(spots)} spot(s)" if eam > 0 else "",
-                        f"faded to {int(fad * 100)}%" if fad > 0 else "",
-                        f"{int(gri * 100)}% grime" if gri > 0 else "",
-                        f"{int(cre * 100)}% creases" if cre > 0 else "",
-                        f"{len(shapes)} scar(s)" if scr > 0 and shapes else "",
-                        f"{len(shapes)} wound(s)" if wnd > 0 and shapes else "",
-                        "mirrored" if flp else "",
-                        ("swollen" if wrp > 0 else "pinched") if abs(wrp) >= 0.01 else "",
-                        ("lighter" if lig > 0 else "darker") if abs(lig) >= 0.01 else ""]
-                gstat.set(", ".join(x for x in said if x).capitalize()
-                          + ". Press Plain under it to put the picture back."
-                          + (" It is already portrait-sized, so Propose under it makes it the one this creature "
-                             "wears - nothing is cut out of it again." if as_bmp and not generic else ""))
-            def reset_() -> None:
-                """Every slider back where it started: nothing changed, the color the creature's own words ask for."""
-                remember()
-                skin_v.set(start_ if start_ in skins else "Leave")
-                lips_v.set("Leave")
-                eyes_v.set("Leave")
-                spots.clear()
-                amount.set(0.9)
-                lipamt.set(0.85)
-                eyeamt.set(0.95)
-                eyesize.set(0.035)
-                fade.set(0.0)
-                grime.set(0.0)
-                creases.set(0.0)
-                speckle.set(0.0)
-                spkarea.set(0.16)
-                spkdeep.set(0.6)
-                spkamt.set(0.75)
-                blots.clear()
-                cut_v.set("None")
-                cutamt.set(0.85)
-                flip_v.set(False)
-                warp.set(0.0)
-                warpsize.set(0.17)
-                ridge.set(0.5)
-                linew.set(1.0)
-                angle_v.set(-55.0)
-                edge_v.set(0.5)
-                scarlen.set(0.17)
-                stretch.set(0.0)
-                glow_v.set("None")
-                glowamt.set(0.85)
-                glowsize.set(0.028)
-                glowspill.set(0.6)
-                glowround.set(0.40)
-                blood_v.set(next(iter(bloods), "Blood"))
-                shapes.clear()
-                light.set(0.0)
-                catch.set(float(gs.get("skin_catch", 0.6)))
-                draw()
-            brow_ = ttk.Frame(win)
-            brow_.pack(fill="x", padx=10, pady=(0, 10))
-            ttk.Button(brow_, text="Cancel", command=win.destroy).pack(side="right")
-            ttk.Button(brow_, text="Use this", command=apply_).pack(side="right", padx=(0, 6))
-            rb_ = ttk.Button(brow_, text="Reset", command=reset_)
-            rb_.pack(side="left")
-            undo_b = ttk.Button(brow_, text="Undo", command=undo, state="normal" if hist else "disabled")
-            undo_b.pack(side="left", padx=(6, 0))
-            bake_b = ttk.Button(brow_, text="Paint these in", command=lambda: paint_in())
-            bake_b.pack(side="left", padx=(6, 0))
-            tooltip(bake_b, "Paint what is set now into the picture and start again on top of it, with the marks "
-                            "cleared. One scar at a time: set a long thin one, paint it in, then mark another and "
-                            "give it a width, a color and an angle of its own. Undo takes a pass back off.")
-            keep["undo"] = undo_b
-            tooltip(undo_b, "Take back the last thing you did here - a slider moved, a color chosen, a mark "
-                            "placed. Ctrl+Z does the same. Reset puts everything back at once.")
-            win.bind("<Control-z>", lambda e: undo())
-            scan.bind("<MouseWheel>", side_wheel)
-            wheel_on(side)
-            side_fits()
-            tooltip(rb_, "Put every slider back where it started, without closing this window.")
-            draw()
-            win.bind("<Return>", lambda e: apply_())
-            win.bind("<Escape>", lambda e: win.destroy())
-            win.update_idletasks()
-            try:
-                x = dlg.winfo_rootx() + max(0, (dlg.winfo_width() - win.winfo_width()) // 2)
-                y = dlg.winfo_rooty() + max(0, (dlg.winfo_height() - win.winfo_height()) // 4)
-                win.geometry(f"+{x}+{y}")
-            except tk.TclError:
-                pass
-            win.grab_set()
+            """Touch up this candidate. The window itself lives at module level, so the creature's own
+            picture can be worked on from the lines window too."""
+            touch_up_window(dlg, path, pg=pg, gs=gs, r=r, desc=desc_var.get(), say=gstat.set,
+                            on_done=swap_candidate, touch_memory=TOUCH_MEMORY, generic=generic)
 
         def files_of(path: str) -> List[str]:
             """A generated picture and the game-size .bmp copies made from it."""
@@ -5595,7 +5795,8 @@ def run_gui() -> None:
 
         def discard(paths: List[str], confirm: str = "") -> None:
             """Delete generated pictures from the disk and take them off the window."""
-            files = [f for q in paths for f in files_of(q)]
+            # from the plain picture, so discarding a touched-up card takes its original with it
+            files = [f for q in paths for f in files_of(str(plain_of(q)))]
             same = lambda q: os.path.normcase(os.path.normpath(q))  # noqa: E731
             cur = props.get(key)
             used = bool(cur) and same(cur) in {same(f) for f in files}
@@ -5761,10 +5962,9 @@ def run_gui() -> None:
                           command=lambda: open_path(str(here_ / "generator" / "settings.json")))
         ebtn = ttk.Menubutton(erow2, text="Engine \u25be", menu=emenu, width=9)
         ebtn.pack(side="left", padx=(6, 0))
-        tooltip(ebtn, "Keep open: leave the generator running when Portrait Scout closes, so the next session does "
-                      "not wait for the model to load again - it holds graphics memory until you press Stop.\n\n"
-                      "Own window: watch what the generator is doing; takes effect the next time it starts. With it "
-                      "off the same text goes to generator/engine.log, which 'Show the log' opens.")
+        tooltip(ebtn, "Keep open: leave the generator running when Portrait Scout closes, so the model need not load again. It "
+                "holds graphics memory until you press Stop.\n\nOwn window: watch what it is doing, from its next start. "
+                "Off, the same text goes to generator/engine.log.")
 
         def engine_state() -> None:
             eng = get_engine()
@@ -5885,7 +6085,7 @@ def run_gui() -> None:
             bg_var.set(pg.baseline_background())                      # type: ignore[attr-defined]
             save_prompt()
         ttk.Button(pbtns, text="Save", command=lambda: save_prompt()).pack(side="left")
-        ttk.Button(pbtns, text="Save as new style...", command=save_as).pack(side="left", padx=6)
+        ttk.Button(pbtns, text="Save as style...", command=save_as).pack(side="left", padx=6)
         rev_btn = ttk.Button(pbtns, text="Revert to baseline", command=revert_prompt)
         rev_btn.pack(side="left")
         ttk.Label(pbtns, text="unsaved changes are still used when you press Generate",
@@ -5945,7 +6145,7 @@ def run_gui() -> None:
         sbody.columnconfigure(1, weight=1)
         field(0, 0, "Generator address:", "url", 46, "Where the generator answers (Automatic1111 / Forge API). "
               "Point this at one you already run to use it instead.")
-        ttk.Checkbutton(sbody, text="start it for me", variable=auto_var).grid(row=0, column=2, sticky="w", padx=8)
+        ttk.Checkbutton(sbody, text="Start it", variable=auto_var).grid(row=0, column=2, sticky="w", padx=8)
         field(1, 0, "Start command:", "start", 46, "Run from the Portrait Scout folder when nothing answers at the "
               "address above. {port} is taken from the address. Leave empty if you start the generator yourself.")
         field(2, 0, "Model (checkpoint):", "model", 46, "Sent as override_settings.sd_model_checkpoint - the name as "
@@ -6140,7 +6340,7 @@ def run_gui() -> None:
                     after()                                          # type: ignore[operator]
                 status.set(f"{Path(path).name} is now proposed for {len(picked) + 1} creature(s).")
             w.destroy()
-        ttk.Button(row, text="Use it for the picked ones", command=use_them).pack(side="left")
+        ttk.Button(row, text="Use for these", command=use_them).pack(side="left")
         ttk.Button(row, text="Pick all", command=lambda: lb.select_set(0, "end")).pack(side="left", padx=6)
         ttk.Button(row, text="Pick none", command=lambda: lb.select_clear(0, "end")).pack(side="left")
         ttk.Button(row, text="Cancel", command=w.destroy).pack(side="right")
@@ -6472,8 +6672,10 @@ def run_gui() -> None:
                 over = not messagebox.askyesno(                   # Yes keeps mine, so No is the one that replaces
                     "Portrait Scout", f"{len(mine)} creature(s) already have a picture you chose.\n\n"
                     "Yes: keep yours.   No: take theirs.") if mine else True
-                try:
-                    made = str((pg.load_settings() or {}).get("output_folder") or "generated")   # type: ignore[attr-defined]
+                try:                                             # "pg" was never in scope here, so this
+                    pg_ = generator_module()                     # raised NameError every time and shared
+                    made = str((pg_.load_settings() or {}).get(   # type: ignore[union-attr]
+                        "output_folder") or "generated")         # work always landed in generated/
                 except Exception:  # noqa: BLE001 - the generator may not be there at all
                     made = "generated"
                 into = Path(__file__).resolve().parent / made / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", mod_name) / \
@@ -6483,6 +6685,8 @@ def run_gui() -> None:
                 for k, rel in theirs.items():
                     if not rel.startswith("pictures/") or ".." in rel:
                         continue
+                    if where.get(k, k) in props and not over:        # kept mine, so their picture is never
+                        continue                                     # used: copying it only fills the disk
                     dst = into / Path(rel).name
                     with z.open(rel) as f_, open(dst, "wb") as g_:
                         shutil.copyfileobj(f_, g_)
@@ -6529,7 +6733,7 @@ def run_gui() -> None:
                    + (f"; kept {kept} of your own." if kept else ".")
                    + f"  They are in {into}.")
 
-    def ask_mod_folder(mod_name: str) -> str:
+    def ask_mod_folder(mod_name: str) -> Tuple[str, bool, bool]:
         """Which mod to write, and where. The default is a folder of its own under the project's 'mod' folder."""
         here = Path(__file__).resolve().parent
         out: Dict[str, str] = {}
@@ -6564,6 +6768,49 @@ def run_gui() -> None:
             if d:
                 folder["dir"] = d
                 shown()
+        lent = [r_ for r_ in all_rows() if r_.get("copy_port") and rowkey(r_) not in props]
+        lent_n, stock_n = sum(1 for r_ in lent if r_.get("copy_named")), sum(1 for r_ in lent if not r_.get("copy_named"))
+        see_v = tk.BooleanVar(value=bool(st.get("mod_export_as_seen", True)))
+        ship_v = tk.BooleanVar(value=bool(st.get("mod_export_inherited_files", True)))
+        gen_v = tk.BooleanVar(value=bool(st.get("mod_export_stock_faces", True)))
+        if lent_n:
+            ttk.Label(f, foreground="#1a5fb4", wraplength=460, justify="left",
+                      text=f"{lent_n:,} creature(s) here are a copy of one of the game's own and wear its face. "
+                           "They are written in too, so the copy keeps looking like it whatever order the mods "
+                           "went in.").grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+            cb1_ = ttk.Checkbutton(f, variable=see_v, text="Everything I see", command=lambda: see_changed())
+            cb1_.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            tooltip(cb1_, "The mod puts these creatures back the way they look on your game, pictures and all - "
+                          "it means both of the boxes below at once. Untick to set those two yourself: which "
+                          "creatures are included, and whether their pictures go in the mod.")
+            kids = ttk.Frame(f)
+            kids.grid(row=7, column=0, columnspan=3, sticky="w", padx=(18, 0))
+            if stock_n:
+                cb3_ = ttk.Checkbutton(kids, variable=gen_v, text=f"Stock faces too ({stock_n:,})")
+                cb3_.pack(anchor="w")
+                tooltip(cb3_, f"Which creatures go in.\n\nAlways: the {lent_n:,} that copy a particular "
+                              "creature - a second Bassilus, who is Bassilus on anybody's game.\n\nThis box: "
+                              f"the {stock_n:,} that copy a stock farmer, commoner or merchant. That picture is "
+                              "whatever each install puts there, and need not even be the same sex.")
+            cb2_ = ttk.Checkbutton(kids, variable=ship_v, text="Carry the pictures")
+            cb2_.pack(anchor="w")
+            tooltip(cb2_, "What goes in the mod, for the creatures above.\n\nOff: the face is named only. It has "
+                          "to be in that game already, and a creature whose face is missing there is left "
+                          "alone.\n\nOn: the picture is copied in, so it shows without the mod it came from. "
+                          "Credit that mod if you pass yours on.")
+
+            def see_changed() -> None:
+                """Ticked, it means both of the two below; unticked, they are there to set one by one."""
+                if see_v.get():
+                    gen_v.set(True)
+                    ship_v.set(True)
+                    kids.grid_remove()
+                else:
+                    kids.grid()
+            see_changed()
+            tooltip(cb2_, "Off: the face is named, not copied - it is already in the game, and a creature whose face is missing "
+                    "there is left alone.\n\nOn: copied in, so the portraits show without the mod they came from. Credit it "
+                    "if you pass yours on.")
         row = ttk.Frame(f)
         row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
@@ -6574,17 +6821,20 @@ def run_gui() -> None:
                 return
             out["dir"] = os.path.join(folder["dir"], nm)
             st["mod_export_name"], st["mod_export_parent"] = nm, folder["dir"]
+            st["mod_export_as_seen"] = bool(see_v.get())
+            st["mod_export_inherited_files"] = bool(ship_v.get())
+            st["mod_export_stock_faces"] = bool(gen_v.get())
             save_settings(st)
             w.destroy()
         ttk.Button(row, text="Export", command=ok).pack(side="left")
-        ttk.Button(row, text="Put it somewhere else...", command=elsewhere).pack(side="left", padx=6)
+        ttk.Button(row, text="Somewhere else...", command=elsewhere).pack(side="left", padx=6)
         ttk.Button(row, text="Cancel", command=w.destroy).pack(side="left")
         ttk.Label(f, foreground="#888", wraplength=460, justify="left", padding=(0, 10, 0, 0),
                   text="Exporting again with the same name updates that mod; a different name starts another one. "
                        "Proposals stay where they are either way.").grid(row=4, column=0, columnspan=3, sticky="w")
         w.grab_set()
         root.wait_window(w)
-        return out.get("dir", "")
+        return out.get("dir", ""), bool(ship_v.get()), bool(gen_v.get())
 
     def export_as_mod() -> None:
         res = state["res"]
@@ -6592,7 +6842,7 @@ def run_gui() -> None:
         if not res or not rows:
             messagebox.showinfo("Portrait Scout", "No portraits proposed yet. Use 'Propose portrait...' on a gallery card first.")
             return
-        d = ask_mod_folder(str(res["mod"]))                          # type: ignore[index]
+        d, ship_lent, take_stock = ask_mod_folder(str(res["mod"]))   # type: ignore[index]
         if not d:
             return
         pg = generator_module()
@@ -6608,15 +6858,47 @@ def run_gui() -> None:
                             tuple(box) if box else None)             # type: ignore[arg-type]
         try:
             os.makedirs(d, exist_ok=True)
-            info = export_mod(d, str(res["mod"]),
-                               [{"name": r["name"], "cres": r["cre_list"], "image": props[rowkey(r)],
-                                 "areas": areas_text(r), "box": (crop_for(r) or {}).get("box")} for r in rows],
-                               convert, game_var.get())
+            entries = [{"name": r["name"], "cres": r["cre_list"], "image": props[rowkey(r)],
+                        "areas": areas_text(r), "box": (crop_for(r) or {}).get("box")} for r in rows]
+            lent_rows = [r for r in sorted_rows(False)               # a copy of a creature wears its face
+                         if rowkey(r) not in props and r.get("copy_port") and r.get("cre_list")
+                         and (take_stock or r.get("copy_named"))]     # ...a copy of a stock type only if asked
+            stage = (Path(__file__).resolve().parent / "generated"
+                     / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", str(res["mod"])) / "inherited")   # type: ignore[index]
+            kept_face: Dict[str, str] = {}
+
+            def face_file(face: str) -> str:
+                """The inherited picture, pulled out of the game once, when it is to be carried along."""
+                if face not in kept_face:
+                    dst = stage / (face.upper() + ".bmp")
+                    if not dst.is_file():
+                        data = res["game"].get(face, T_BMP)           # type: ignore[index]
+                        if not data:
+                            kept_face[face] = ""
+                            return ""
+                        stage.mkdir(parents=True, exist_ok=True)
+                        dst.write_bytes(data)
+                    kept_face[face] = str(dst)
+                return kept_face[face]
+            for r in lent_rows:
+                face = str(r["copy_port"])
+                e_ = {"name": r["name"], "cres": r["cre_list"], "areas": areas_text(r), "box": None, "image": ""}
+                if ship_lent:
+                    e_["image"] = face_file(face)
+                    if not e_["image"]:
+                        continue                                      # the picture is not readable: leave it out
+                else:
+                    e_["point_at"] = face                             # already in the game: just point at it
+                entries.append(e_)
+            info = export_mod(d, str(res["mod"]), entries, convert, game_var.get())
         except (OSError, ValueError) as e:
             messagebox.showwarning("Portrait Scout", f"Could not export the mod:\n\n{e}")
             return
         name = Path(d).name
-        msg = (f"Exported {info['portraits']} portrait(s) for {info['creatures']} creature file(s) of {res['mod']}.\n\n"   # type: ignore[index]
+        carried = info.get("carried", info["portraits"])
+        pointed = info["portraits"] - carried
+        msg = (f"Exported {info['portraits']} portrait(s) for {info['creatures']} creature file(s) of {res['mod']}"
+               + (f", {pointed} of them already in the game and only pointed at" if pointed > 0 else "") + ".\n\n"   # type: ignore[index]
                f"{d}\n  setup-{name}.tp2   the installer\n  readme.txt, portraits.txt   what is in it\n"
                f"  portraits\\...   the pictures\n\n"
                f"The mod now has {info['sets']} set(s). Each is offered twice in the installer: replace the portraits "
@@ -6733,10 +7015,12 @@ def run_gui() -> None:
             mod_idx = mod_bmp_index() if modpic_var.get() and not src_mode else {}
             mod_only = bool(modpic_var.get()) and (src_mode or bool(mod_idx))
             mod_file = ""
-            for field in ("small", "large"):
+            for field in ("small", "large", "copy"):
                 if img:
                     break
-                if mod_only and src_mode:
+                if field == "copy":                                  # wears none of its own: show the face of the
+                    nm = "" if mod_only else str(r.get("copy_port") or "")   # creature it was copied from
+                elif mod_only and src_mode:
                     nm = r.get("mod_ports", {}).get(field, "")
                 else:
                     nm = r[field].split("/")[0] if r[field] else ""
@@ -6761,9 +7045,11 @@ def run_gui() -> None:
                 if img:
                     shown_field = field
                     mod_file = mod_idx.get(nm.upper(), "") if mod_only and not src_mode else ""
-            if prop and not load_thumb(prop):
-                tk.Label(card, text=f"{Path(prop).name}\n(preview needs PNG/GIF/BMP,\nor install Pillow)", bg="#cfe8d6",
-                         width=18, height=6).pack()
+            if prop and not load_thumb(prop):                    # say which it is: a picture that has been
+                lost_ = not os.path.isfile(prop)                  # deleted since reads nothing like one Tk cannot show
+                tk.Label(card, text=(f"{Path(prop).name}\n\nthis picture is no longer\non the disk" if lost_ else
+                                     f"{Path(prop).name}\n(preview needs PNG/GIF/BMP,\nor install Pillow)"),
+                         bg="#f0d6d6" if lost_ else "#cfe8d6", width=18, height=6).pack()
             elif img:
                 il = tk.Label(card, image=img, bg=CARD)
                 il.pack()
@@ -6775,7 +7061,10 @@ def run_gui() -> None:
             sz = (prop_dims(prop) if shown_field == "prop" else r.get(f"{shown_field}_size", "")) if shown_field else ""
             if mod_only and shown_field in ("small", "large"):
                 sz = bmp_file_dims(mod_file) if mod_file else r.get("mod_sizes", {}).get(shown_field, "")
-            if sz:
+            if shown_field == "copy" or (r.get("copy_worn") and shown_field in ("small", "large")):
+                tk.Label(card, text=f"{r.get('copy_port')} - borrowed", bg=CARD, fg="#1a5fb4",
+                         font=("TkDefaultFont", 8, "bold")).pack()   # not its face: the one it was copied from
+            elif sz:
                 tk.Label(card, text=sz, bg=CARD, fg="#888", font=("TkDefaultFont", 8)).pack()
             nl = tk.Label(card, text=r["name"], bg=CARD, wraplength=CARD_W - 30, justify="center", cursor="hand2",
                           font=("TkDefaultFont", 9, "bold"))
@@ -6952,6 +7241,13 @@ def run_gui() -> None:
         ttk.Label(info, text=f"Portrait: {r['portrait']}" + (f"  ({sizes})" if sizes else "")
                   + "     (click the picture to see it full size, right-click to save it)",
                   foreground="#666").pack(anchor="w")
+        if r.get("copy_of"):                                         # built by copying one of the game's own
+            ttk.Label(info, foreground="#1a5fb4", wraplength=640, justify="left",
+                      text=(f"The mod builds this by copying {r['copy_of']}.CRE, so the face it shows is "
+                            f"{r['copy_port']} - that creature's, not its own."
+                            if r.get("copy_worn") else
+                            f"Wears nothing of its own. The mod builds it by copying {r['copy_of']}.CRE, "
+                            f"which wears {r['copy_port']} - the face it would have had.")).pack(anchor="w")
         mine = {x.upper() for f in ("large", "small") for x in str(r.get(f) or "").split("/") if x}
         others = sorted({o["name"] for o in all_rows() if o is not r and o["name"] != r["name"]
                          and mine & {x.upper() for f in ("large", "small") for x in str(o.get(f) or "").split("/") if x}})
@@ -7362,6 +7658,10 @@ def run_gui() -> None:
 
     share_btn.config(command=share_work)
     takein_btn.config(command=open_work)
+    lost_btn.config(command=fix_lost)
+    tooltip(lost_btn, "Some creatures are proposed a picture that is no longer on the disk - usually one that "
+                      "was cropped again, which deletes the crop it replaces. This points them at the crop "
+                      "that is there, and lists any it cannot place.")
     tooltip(share_btn, "Put everything another person needs to carry on into one .zip: the pictures you have "
                        "chosen, which creature each one is for, the creatures you have set aside, and what each "
                        "picture was asked for. Their copy of Portrait Scout reads it with 'Import work...'.")

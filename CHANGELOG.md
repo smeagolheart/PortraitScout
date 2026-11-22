@@ -1,5 +1,54 @@
 # Portrait Scout - what changed
 
+## 1.5 - 22 November 2026
+
+### Features
+
+- **Missing picture(s)...** appears on the Proposals tab when a creature is proposed a picture that is no
+  longer on the disk. It points each one at another crop of the same picture where there is one, and lists
+  the rest. A re-crop deletes the crop it replaces, so a proposal could be left pointing at a deleted name.
+- **Create mod...** writes in the creatures a mod builds by copying one of the game's own, with the face that
+  creature wears. A second Bassilus is still Bassilus, so the copy keeps looking like it whatever order the
+  mods were installed in. The face is named, not copied, and a creature whose face is not in that game is
+  left alone; one box carries the pictures along instead, for a mod that has to work without whatever
+  supplied them, and the readme then names the faces it does not carry, since they are somebody else's work.
+  - **Everything I see** does the lot: the mod puts those creatures back the way they look on your game,
+    pictures and all. Untick it and the two halves of that are there to set one by one - whether copies of a
+    stock farmer or merchant are included at all, and whether the pictures are carried or only named. A stock
+    face is the doubtful one: that picture is whatever each install puts there, and need not even be the
+    same sex.
+- A creature that wears a face only because it was copied from somebody is marked whether or not the copying
+  worked. The install order decides whether it shows that face or nothing at all, and only the second was
+  ever obvious - Cedric Shan has been wearing Kivan's portrait and nothing said so.
+- Creatures a mod builds by **copying one of the game's own** are read as such. A copy keeps the original's
+  face, so install a mod before whatever gave that original its portrait and the copy is left with nothing.
+  Analyze now reads the mod's installer for those copies and shows the borrowed face, marked as borrowed, with
+  the Portrait column reading `(none) <- FARM` and the creature's window naming the file it came from. The
+  same face turning up a dozen times is where a portrait of its own is wanted most.
+- **Touch up** from the picture menu: right-click a portrait on a gallery card, in a creature's window or in
+  the full-size view. It works on the picture the creature has now, and what comes out becomes the proposal.
+  Until now Touch up could only be reached from a candidate in the Propose tab.
+
+### Changes
+
+- **Party NPCs** finds the ones an EET game keeps out of its dialog tables. `pdialog.2da` can hold only the
+  BG2 NPCs, which left Kivan, Khalid, Alora, Skie, Tiax and the rest listed with everybody else; the sizes
+  named in `portrait.2da` find them. Only the name of the picture's owner is read, never the picture, so a
+  creature merely wearing a party NPC's face is still listed.
+- Buttons and tick boxes say it in three words or fewer, with the explaining left to the tooltip, and no
+  tooltip runs past about forty words.
+- A touch up no longer deletes the picture it was made from. **Plain** had nothing to go back to, and because
+  the plain picture was gone the next touch up started from the touched one and piled on top of it - which is
+  where `_touch_touch` and `_touch_touch_touch` files came from.
+- **Discard** works on the whole family, so the plain picture kept above is not left behind.
+- **Import work...** no longer copies the pictures it is about to ignore. Answering "keep yours" still wrote
+  every picture in the bundle to the disk - 105 of them, 14 MB, that nothing then pointed at.
+- A proposed picture that has been deleted says so on its gallery card, instead of claiming the format cannot
+  be previewed.
+- Shared work lands in the folder the generator settings name. `output_folder` was read through a variable
+  that was never in scope, and the error was swallowed, so imported work always went to `generated/`.
+- "How many" fits in the Skin tab again instead of reading "How man".
+
 ## 1.4 - 20 November 2026
 
 ### Features
