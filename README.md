@@ -61,10 +61,12 @@ Image Generators are large files and separately licensed.
 
 Supply your own, suggested working steps below: 
 
-Download [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) in an `engine` folder (or any generator with an Automatic1111 / Forge API)
+Two engines are set up for, and anything else with an Automatic1111 / Forge API works as well:
 
- **The Propose tab shows the steps with download links as buttons**; [generator/README.md](generator/README.md) has more detailed instructions. 
- Typically, 16 GB of disk and an 8 GB card are comfortable; 6 GB of graphics RAM works, though slower.
+- **[Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) with FLUX.2 Klein 9B**, in an `engine-neo` folder - what the newest styles are written against. Cloned with git, three model files (~18 GB), 4 steps at CFG 1. 16 GB of graphics memory at fp8.
+- **[Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) with FLUX.1 dev**, in an `engine` folder - a 1.7 GB package and one 12 GB model file, no git. An 8 GB card is comfortable; 6 GB works, slower.
+
+ **The Propose tab shows the steps of either with download links as buttons** (pick the engine at the top of the panel); [generator/README.md](generator/README.md) has the detailed instructions, the model links and the `settings.json` to go with each.
 
 - **Description** comes from the creature's gender, race and animation, plus a face drawn from its own file - shape, nose, hair, sometimes a scar. The same creature always gets the same face, and creatures sharing a portrait share it, so a decloned crowd comes out as different people. Edit it freely; what you type wins.
 - **Race**, **Gender** and **Role** start from the creature's own file and do nothing until you change one, which rewrites the description. With no creature selected they are the whole description.

@@ -6222,6 +6222,13 @@ def run_gui() -> None:
     FLUX_DL = "https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4"
     LORA_DL = "https://civitai.com/models/850634"                     # the one the default style asks for
     LORA_DL2 = "https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux"
+    NEO_DOC = "https://github.com/Haoming02/sd-webui-forge-classic/tree/neo"   # Forge Neo: paints FLUX.2 Klein
+    NEO_GIT = "git clone https://github.com/Haoming02/sd-webui-forge-classic engine-neo --branch neo"
+    NEO_VENV = "uv venv venv --python 3.13 --seed"
+    GIT_DL = "https://git-scm.com/downloads"
+    UV_DL = "https://github.com/astral-sh/uv#installation"
+    KLEIN_DL = "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8"
+    KLEIN_BITS = "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b"   # encoder and VAE
 
     def lora_files() -> List[str]:
         here_ = Path(__file__).resolve().parent
@@ -6234,10 +6241,12 @@ def run_gui() -> None:
         return sorted(found_)
 
     def engine_ready() -> bool:
-        """Forge is really unpacked - the file start_engine.bat runs. An empty engine\\webui\\models\\ tree, made
-        while putting a model in place, must not count."""
-        w = Path(__file__).resolve().parent / "engine" / "webui"
-        return (w / "webui.bat").is_file() or (w / "webui.sh").is_file()
+        """An engine is really there - the file a start_engine bat runs. Either Forge Neo in engine-neo\\ or the
+        older Forge in engine\\webui\\. An empty models\\ tree, made while putting a model in place, must not
+        count."""
+        here_ = Path(__file__).resolve().parent
+        return any((d / n).is_file() for d in (here_ / "engine-neo", here_ / "engine" / "webui")
+                   for n in ("webui.bat", "webui.sh"))
 
     def open_make(path: str, *fallbacks: str) -> None:
         """Open a folder of the engine, making it if it is not there yet (the deeper ones appear as Forge unpacks)."""
@@ -6263,63 +6272,116 @@ def run_gui() -> None:
                       "generator itself and its models are many gigabytes and separately licensed, so they are not in "
                       "the repository. Set one up once:").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
 
-        def step(n: int, text: object, buttons: List[Tuple[str, object]]) -> None:
+        def step(n: int, text: object, buttons: List[Tuple[str, object]], where: object = None) -> None:
             try:
-                _step(n, text, buttons)
+                _step(n, text, buttons, where)
             except Exception as e:  # noqa: BLE001 - a step that will not draw must not hide the ones after it
                 traceback.print_exc()
-                tk.Label(box, bg=BG, fg="#a03030", justify="left", wraplength=840,
+                tk.Label(where if where is not None else box, bg=BG, fg="#a03030", justify="left", wraplength=840,
                          text=f"(step {n} could not be drawn: {e.__class__.__name__}: {e})"
-                         ).grid(row=n + 1, column=0, columnspan=2, sticky="w")
+                         ).grid(row=n, column=0, columnspan=2, sticky="w")
 
-        def _step(n: int, text: object, buttons: List[Tuple[str, object]]) -> None:
+        def _step(n: int, text: object, buttons: List[Tuple[str, object]], where: object = None) -> None:
             """text: a string, or pieces of one where (piece, True) is shown in bold."""
+            into = where if where is not None else box
             pieces = [(text, False)] if isinstance(text, str) else list(text)   # type: ignore[arg-type]
-            t = tk.Text(box, bg=BG, width=78, height=2, wrap="word", bd=0, highlightthickness=0,
+            t = tk.Text(into, bg=BG, width=78, height=2, wrap="word", bd=0, highlightthickness=0,
                         font=("TkDefaultFont", 9), cursor="arrow", spacing3=2)
             t.tag_configure("b", font=("TkDefaultFont", 9, "bold"))
             for piece, bold in pieces:
                 t.insert("end", piece, ("b",) if bold else ())
             whole = "".join(p for p, _b in pieces)                   # as tall as the text needs, counted by hand:
-            lines = whole.count("\n") + 1                             # asking Tk before it is drawn gives nonsense
+            lines = whole.count("\n") + 1                            # asking Tk before it is drawn gives nonsense
             for para in whole.split("\n"):
                 lines += len(para) // 74
             t.config(height=max(1, min(8, lines)), state="disabled")
-            t.grid(row=n + 1, column=0, sticky="w", pady=2)
+            t.grid(row=n, column=0, sticky="w", pady=2)
             if buttons:
-                f = tk.Frame(box, bg=BG)
-                f.grid(row=n + 1, column=1, sticky="w", padx=(10, 0))
+                f = tk.Frame(into, bg=BG)
+                f.grid(row=n, column=1, sticky="w", padx=(10, 0))
                 for label, cmd in buttons:
                     ttk.Button(f, text=label, command=cmd).pack(side="left", padx=(0, 6))   # type: ignore[arg-type]
-        step(1, [("1.  Download Forge's Windows one-click package (webui_forge_cu121_torch231.7z, 1.7 GB) and ", 0),
+
+        def copy_cmd(text: str) -> None:
+            """Put a command on the clipboard: it is typed into a command window, not run from here."""
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            status.set("Copied: " + text)
+
+        which = state.get("setup_engine") or "neo"                   # which of the two is being set up
+        pick = tk.StringVar(value=str(which))
+        picker = tk.Frame(box, bg=BG)
+        picker.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        neo_f, old_f = tk.Frame(box, bg=BG), tk.Frame(box, bg=BG)
+        neo_f.grid(row=3, column=0, columnspan=2, sticky="w")
+        old_f.grid(row=3, column=0, columnspan=2, sticky="w")
+
+        def picked() -> None:
+            state["setup_engine"] = pick.get()
+            (neo_f if pick.get() == "neo" else old_f).tkraise()
+            (old_f if pick.get() == "neo" else neo_f).lower()
+        for val, lab in (("neo", "Forge Neo (FLUX.2 Klein)"), ("old", "Forge (FLUX.1 dev, one file)")):
+            tk.Radiobutton(picker, text=lab, value=val, variable=pick, bg=BG, activebackground=BG,
+                           command=picked).pack(side="left", padx=(0, 12))
+
+        # ---- Forge Neo: what the styles are written against now ----
+        step(0, [("1.  Install ", 0), ("git", 1), (" and ", 0), ("uv", 1),
+                 (", then open a command window in " + str(here) + ".", 0)],
+             [("git", lambda: webbrowser.open(GIT_DL)), ("uv", lambda: webbrowser.open(UV_DL)),
+              ("Open folder", lambda: open_make(str(here)))], neo_f)
+        step(1, [("2.  Clone Forge Neo into ", 0), ("engine-neo", 1), (":\n", 0), (NEO_GIT, 1)],
+             [("Copy", lambda: copy_cmd(NEO_GIT)), ("About Neo", lambda: webbrowser.open(NEO_DOC))], neo_f)
+        step(2, [("3.  Make its Python, from inside engine-neo:\n", 0), (NEO_VENV, 1),
+                 ("\n(Portrait Scout starts it with --uv.)", 0)],
+             [("Copy", lambda: copy_cmd(NEO_VENV))], neo_f)
+        step(3, [("4.  Three files, about 18 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
+                 ("flux-2-klein-9b-fp8.safetensors", 1), (" (8.8 GB) in Stable-diffusion\\, ", 0),
+                 ("qwen_3_8b_fp8mixed.safetensors", 1), (" (8.7 GB) in text_encoder\\, ", 0),
+                 ("flux2-vae.safetensors", 1), (" (321 MB) in VAE\\. The last two are in one repository, under "
+                  "split_files.", 0)],
+             [("Model", lambda: webbrowser.open(KLEIN_DL)), ("Encoder + VAE", lambda: webbrowser.open(KLEIN_BITS)),
+              ("Open folder", lambda: open_make(str(here / "engine-neo" / "models"), str(here)))], neo_f)
+        step(4, [("5.  In Generator settings, set ", 0), ("start", 1), (" to ", 0),
+                 ("generator\\start_engine_neo.bat {port}", 1), (", the checkpoint to the Klein file, and list the "
+                  "encoder and the VAE in ", 0), ("forge_additional_modules", 1),
+                 (" by their full paths. Klein is step-distilled: 4 steps, CFG 1.", 0)],
+             [("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
+        step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself after that.",
+             [], neo_f)
+
+        # ---- the older Forge: one package, one model file, no git ----
+        step(0, [("1.  Download Forge's Windows one-click package (webui_forge_cu121_torch231.7z, 1.7 GB) and ", 0),
                  ("unpack it into " + str(here / "engine"), 1),
                  (", so that you end up with engine\\webui\\ and engine\\system\\, with run.bat in engine\\.", 0)],
              [("Download Forge", lambda: webbrowser.open(FORGE_DL)),
               ("(releases)", lambda: webbrowser.open(FORGE_ALL)),
-              ("Open folder", lambda: open_make(str(here / "engine"), str(here)))])
-        step(2, [("2.  Run ", 0), ("engine\\update.bat", 1), (" once, then ", 0), ("engine\\run.bat", 1),
-                 (" once and wait for the Forge page to open. That proves it works, then close it again.", 0)], [])
-        step(3, [("3.  Put ", 0), ("flux1-dev-bnb-nf4-v2.safetensors", 1),
+              ("Open folder", lambda: open_make(str(here / "engine"), str(here)))], old_f)
+        step(1, [("2.  Run ", 0), ("engine\\update.bat", 1), (" once, then ", 0), ("engine\\run.bat", 1),
+                 (" once and wait for the Forge page to open. That proves it works, then close it again.", 0)],
+             [], old_f)
+        step(2, [("3.  Put ", 0), ("flux1-dev-bnb-nf4-v2.safetensors", 1),
                  (" (12 GB) in engine\\webui\\models\\Stable-diffusion\\. One file: the text encoders and the VAE "
                   "are inside it.", 0)],
              [("Download model", lambda: webbrowser.open(FLUX_DL)),
               ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Stable-diffusion"),
-                                                str(here / "engine"), str(here)))])
-        step(4, [("4.  Optional: ", 0), ("chargen_oil_painting_v2.safetensors", 1),
+                                                str(here / "engine"), str(here)))], old_f)
+        step(3, [("4.  Optional: ", 0), ("chargen_oil_painting_v2.safetensors", 1),
                  (" (86 MB, from Painterly Fantasy Portrait) in engine\\webui\\models\\Lora\\. The style Portrait "
                   "Scout starts with asks for it by name - without it that style still runs, but the painted look is "
                   "mostly gone.", 0)],
              [("Download LoRA", lambda: webbrowser.open(LORA_DL)),
               ("(other LoRA)", lambda: webbrowser.open(LORA_DL2)),
               ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Lora"),
-                                                str(here / "engine"), str(here)))])
-        step(5, "5.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after that.", [])
+                                                str(here / "engine"), str(here)))], old_f)
+        step(4, "5.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after "
+                "that.", [], old_f)
+        picked()
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=860,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
                       "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
-                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         more = tk.Frame(box, bg=BG)
-        more.grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        more.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
         ttk.Button(more, text="About Forge",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))

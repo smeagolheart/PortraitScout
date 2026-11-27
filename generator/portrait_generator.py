@@ -103,6 +103,21 @@ DEFAULTS: dict = {
                       "from one side with soft shadows. <lora:Baldurs_Gate_Portrait_Flux:.35> Behind the head, "
                       "{background}."
         },
+        "Klein painterly": {
+            "_about": "Written for Forge Neo with FLUX.2 Klein 9B (4 steps, CFG 1), and carrying no LoRA on "
+                      "purpose: the painterly LoRA has a face baked into it, so every seed paints the same "
+                      "person. Klein paints nearly the same face for the same words whatever the seed anyway, "
+                      "which is what Vary faces and the face bank are for.",
+            "zoom": 1.0,
+            "background": "softly blurred painterly background with warm {random} earthy blue green tone "
+                          "muted backdrop",
+            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. stylized "
+                      "digital art, head and shoulders, large head focus, close up depth of field, rich "
+                      "vibrant colors, detailed eyes, detailed skin texture and pores, crisp facial details, "
+                      "artstation trending, weathered appearance, out-of-focus painterly background: "
+                      "{background}, subtle chiaroscuro lighting, faint indistinct shadows, fantasy oil "
+                      "painting style, facial wrinkles and detail, {character}",
+        },
         "Animal (no person)": {
             "_about": "For a portrait of an actual animal - a cat, a dog, a horse - rather than a person. The "
                       "other looks ask for a character portrait, and at full portrait size (taller than wide) "

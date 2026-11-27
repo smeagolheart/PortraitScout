@@ -96,6 +96,16 @@
   its second box still reads **Stock faces too**. Once a mod has ticks, that box becomes **The rest
   too**, meaning the ones you left unticked.
 - **Zoom 1** button beside Mid on the crop row, which puts Head zoom back to 1.0.
+- **Forge Neo and FLUX.2 Klein 9B.** `generator/start_engine_neo.bat` starts Forge Neo from an
+  `engine-neo` folder with its API on, and passes `--forge-ref-a1111-home ..\engine\webui`, so the old
+  engine's models, LoRAs, VAE and text encoders are read as well and nothing has to be moved. The setup
+  panel on the Propose tab now has both engines to pick between, each with its own steps, download
+  buttons and folders, and `generator/README.md` has the model files, where they go, and the
+  `settings.json` for each. A **Klein painterly** style ships with it, carrying no LoRA on purpose - the
+  painterly LoRA has a face baked into it, so every seed painted the same person. Klein is
+  step-distilled: 4 steps at CFG 1.
+- An engine in `engine-neo` counts as an engine: Portrait Scout looked only in `engine\webui` before, so
+  someone who had installed only Forge Neo was told there was no generator.
 
 ### Changes
 
