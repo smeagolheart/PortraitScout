@@ -9,3 +9,5 @@ generated/
 generator/settings.json
 generator/engine.log
 mod/
+faces/
+engine-neo/

@@ -62,17 +62,17 @@ DEFAULTS: dict = {
                    "look; a style can also carry a 'background' of its own. {random} here is replaced by one of "
                    "background_palettes, picked fresh for each picture.",
     "background_palettes": [
-        "muted warm brown and clay",
-        "aged canvas and parchment, cream and tan",
+        "muted warm brown and terracotta",
+        "pale cream and soft tan",
         "dull ochre and soft gray-brown",
         "faded red-brown and deep umber",
         "smoky gold and warm brown",
         "dusty olive and warm gray",
         "deep green-gray and dull ochre",
         "muted teal and warm shadow",
-        "desaturated slate blue and pale stone",
+        "desaturated slate blue and pale gray",
         "muted indigo and bone white",
-        "dull brick red and dark umber",
+        "dull rust red and dark umber",
         "deep moss green and weak amber",
     ],
     "_background_palettes": "Color schemes for the background, used wherever the background text says {random}. "
@@ -90,18 +90,35 @@ DEFAULTS: dict = {
                       "Head filling the frame, the way Baldur's Gate portraits (and the HPS portrait project) are "
                       "framed, so the picture needs little "
                       "or no cropping afterwards (zoom 1). If faces still come out small, raise the LoRA weight "
-                      "(:.65 -> :1) or crop with Head zoom. Its trigger word 'b2g8' is left out on purpose: it pulls hard "
+                      "(:.35 -> :.65) or crop with Head zoom. Its trigger word 'b2g8' is left out on purpose: it pulls hard "
                       "towards the faces it was trained on and drops things like a tiefling's horns.",
             "zoom": 1.0,
-            "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
+            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
                       "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
                       "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
                       "Nothing below the collarbone, no chest, no armor plates, no hands, no weapons. Head upright, "
                       "eyes on the viewer. Painted as a classic Baldur's Gate character portrait: a realistic oil "
                       "painting with visible brushstrokes and canvas texture, realistic facial proportions, natural "
                       "skin tones, detailed weathered skin, expressive lifelike eyes, deep rich colors, warm light "
-                      "from one side with soft shadows. <lora:Baldurs_Gate_Portrait_Flux:.65> Behind the head, "
+                      "from one side with soft shadows. <lora:Baldurs_Gate_Portrait_Flux:.35> Behind the head, "
                       "{background}."
+        },
+        "Animal (no person)": {
+            "_about": "For a portrait of an actual animal - a cat, a dog, a horse - rather than a person. The "
+                      "other looks ask for a character portrait, and at full portrait size (taller than wide) "
+                      "the oil-painting LoRA and its trigger word fill the body below the head with a "
+                      "character's clothes, so a cat came out as a cat-headed person. This one leaves the "
+                      "trigger word out, keeps the LoRA light (.4) for the brushwork only, and says up front "
+                      "that it is a real animal with its own body down to the bottom edge. Flux at cfg 1 "
+                      "ignores the negative prompt, so the positive prompt has to do all of it.",
+            "zoom": 1.0,
+            "negative_prompt": "(picture frame:1.6), (border:1.6), (framed picture:1.6), (photograph:1.5), "
+                               "(3d render:1.5), anthropomorphic, humanoid, clothing, armor, human face, hands",
+            "prompt": "An oil painting of a real animal and nothing else: {character}. Close-up of its head "
+                      "and shoulders, as a naturalist would paint it from life - its natural animal body, fur "
+                      "or feathers down to the bottom edge, animal eyes looking at the viewer. Painted in thick "
+                      "matte oils: broken color, visible brush edges, dry-brush texture. "
+                      "<lora:chargen_oil_painting_v2:.4> Behind the head, {background}, kept off the face.",
         },
         "BG2 oil painting": {
             "_about": "The best Flux result worked out against the HPS portraits. Short on purpose: Flux weights "
@@ -138,7 +155,7 @@ DEFAULTS: dict = {
             "_about": "The same framing on the small BG2 LoRA (BG_Portrait, 38 MB) that the setup notes point to. "
                       "It nudges the style instead of taking it over, so the description is followed more closely.",
             "zoom": 1.0,
-            "prompt": "Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
+            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
                       "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
                       "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
                       "Nothing below the collarbone, no chest, no armor plates, no hands, no weapons. Head upright, "
@@ -150,7 +167,7 @@ DEFAULTS: dict = {
         "Painterly": {
             "_about": "Closer than the HPS portraits: crop it with Head zoom 1.25 or so.",
             "zoom": 1.0,
-            "prompt": "Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
+            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
                       "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
                       "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
                       "and rich canvas texture, realistic facial proportions, natural skin tones, detailed weathered "
@@ -159,13 +176,25 @@ DEFAULTS: dict = {
         },
         "Painterly, lighter LoRA": {
             "zoom": 1.0,
-            "prompt": "Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
+            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
                       "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
                       "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
                       "and rich canvas texture, realistic facial proportions, natural skin tones, detailed weathered "
                       "skin, expressive lifelike eyes, deep rich colors, warm light from one side with soft shadows. "
                       "<lora:Baldurs_Gate_Portrait_Flux:.3> Set against {background}."
         },
+    },
+    "face_bank": {
+        "_about": "Start from: a picture starts from a real face (img2img) so that faces differ - the model paints "
+                  "nearly one face per description whatever the seed. folder = where the faces are, beside "
+                  "Portrait Scout unless a full path: one folder per race (human, elf, dwarf...), human used for any "
+                  "race without its own, child only for children. strength = how far from the face the picture may "
+                  "go. steps = the steps a picture from the bank is painted in: the engine runs steps x strength of "
+                  "them, so 6 at 0.68 costs what 4 plain ones do, and 4 steps leave nothing between keeping the "
+                  "photo (0.7) and ignoring it (0.75). A folder may hold male and female folders; the picture's "
+                  "gender picks one. skip = races left to their words unless they have a folder of their own: a "
+                  "human face holds a dwarf's to human proportions and shaves his beard.",
+        "folder": "faces", "strength": 0.68, "steps": 6, "skip": ["dwarf", "duergar", "gnome", "svirfneblin"],
     },
     "candidates": 2,
     "payload": {
@@ -221,12 +250,12 @@ DEFAULTS: dict = {
     },
     "age_terms": {
         "_about": "Offered as 'Age' in the Generate window; the text goes into the description.",
-        "Young": "young", "Adult": "adult", "Middle-aged": "middle-aged",
+        "Child": "child", "Young": "young", "Adult": "adult", "Middle-aged": "middle-aged",
         "Old": "old, lined face, gray hair", "Ancient": "very old, deeply wrinkled, thin white hair",
     },
     "look_terms": {
-        "_about": "Offered as 'Look' in the Generate window; the text is added to the end of the description. "
-                  "Flux paints clean skin unless it is told otherwise, so these are worth using - and the "
+        "_about": "Offered as 'Look' in the Propose tab: the state of the face only (the expression is Mood, "
+                  "the clothes are Outfit). It goes right after the race. Flux paints clean skin unless it is told otherwise, so these are worth using - and the "
                   "blemishes have to be named one by one, because 'weathered' on its own is not enough.",
         "Ordinary": "",
         "Weathered": "a deeply lined weather-beaten face, furrowed brow and heavy crow's feet, sun-darkened "
@@ -235,24 +264,166 @@ DEFAULTS: dict = {
         "Blotchy and freckled": "blotchy ruddy skin heavily freckled across the nose and cheeks, patches of red "
                                 "and sallow color, flaking dry skin, pitted pores, uneven stubble, yellowed "
                                 "crooked teeth",
-        "Gaunt and old": "a gaunt deeply wrinkled old face, hollow cheeks and sunken temples, sagging skin, liver "
-                         "spots and broken veins, heavy eye bags, thin gray hair and straggly beard, sallow "
-                         "weathered color",
-        "Scarred": "an old scar across the face, rough pitted skin",
+        "Sickly": "pale, gaunt and unwell, gray blotchy skin, dark rings under the eyes",
+        "Well-kept": "a clean, well-kept face, neatly groomed",
+    },
+    "scar_terms": {
+        "_about": "Offered as 'Scars' in the Propose tab, from none to fresh wounds. scar_default is used when "
+                  "nothing is picked (a creature's own description, the gallery's Generate). Klein paints the "
+                  "words as written, so each step names a little more.",
+        "None": "",
+        "Few": "a thin pale healed scar on one cheek",
+        "Scarred": "a pale healed scar across the brow and cheek",
+        "Heavy": "a heavily scarred face, many pale healed scars across the cheeks, brow and lips",
+        "Wounded": "fresh bleeding cuts across the face, a split lip, dried blood on the cheek",
+    },
+    "scar_default": "Few",
+    "grime_terms": {
+        "_about": "Offered as 'Grime' in the Propose tab: how dirty the face is.",
+        "Clean": "",
+        "Smudged": "a faint smudge of dirt on one cheek",
+        "Dirty": "a dirty face, smudges of dirt and dust on the cheeks and brow",
+        "Filthy": "a filthy face smeared with soot and grime, streaked with sweat",
+    },
+    "edit_terms": {
+        "_about": "Right-click a picture > Change expression / Change it...: the picture is repainted from itself in "
+                  "edit mode (the model keeps the person and changes only what it is told). keep = what is said "
+                  "after the change; expressions = the list offered, name: words.",
+        "keep": "Keep everything else exactly the same: the same person, pose, lighting, background and painting "
+                "style.",
+        "expressions": {"Neutral": "a calm, neutral expression", "Smiling": "a warm smile", "Stern": "a stern, hard look", "Sad": "a sad, downcast look", "Anxious": "an anxious, worried look with a furrowed brow", "Tired": "a tired, weary look", "Smug": "a smug, sly half-smile", "Surprised": "a surprised look, raised eyebrows", "Angry": "an angry scowl"},
+    },
+    "mood_terms": {
+        "_about": "Offered as 'Mood' in the Propose tab: the expression. Any says nothing, and then Vary "
+                  "faces picks one for each picture, mostly calm ones (vary_terms expression).",
+        "Any": "",
+        "Neutral": "a calm, neutral expression",
         "Stern": "a stern, hard expression",
         "Friendly": "a warm, friendly expression, smiling eyes",
         "Sad": "a tired, downcast expression",
-        "Fierce": "a fierce, angry expression, bared teeth",
-        "Angry": "an angry, scowling expression, furrowed brow",
-        "Sickly": "pale, gaunt and unwell, gray blotchy skin, dark rings under the eyes",
-        "Noble": "clean, well-kept, proud bearing",
+        "Angry": "an angry, scowling expression, bared teeth",
+        "Fierce": "a furious snarl, bared teeth",
     },
-    "bald_animations": ["fat"],
-    "_bald_animations": "Words from the creature's animation name whose sprite is bald (the 'Fat Man' sprite "
-                        "several merchants use). These win over the creature file, which can give a hair color "
-                        "to a creature whose sprite has no hair. Anything else with a hair color is never drawn "
-                        "bald. Minsc is the other way round - bald in the art, hair in his file - so a creature "
-                        "the game draws bald without using one of these sprites has to be typed in by hand.",
+    "beard_terms": {"By race": "", "None": "a smooth, clean-shaven chin and upper lip", "Stubble": "stubble", "Short": "a short beard", "Full": "a full beard", "Long": "a long beard", "Braided": "a braided beard"},
+    "_beard_terms": "Offered as 'Beard' in the Propose tab, for men. By race: what race_picks gives the race (a dwarf "
+                    "his own beard), else nothing said. None names a smooth chin and lip rather than 'no beard': "
+                    "naming a beard, even to deny it, paints one.",
+    "role_terms": {
+        "_about": "Offered as 'Role' in the Propose tab, one for each kind of person the games have a sprite for. "
+                  "who: the words for the person. outfit: one of outfit_terms, what they wear unless Outfit says "
+                  "otherwise. also: other words in an animation name that mean this role. The first role word in "
+                  "the animation name wins, so 'Harlot Fighter' and 'Peasant Woman Fighter' are not fighters.",
+        "Fighter": {"who": "fighter", "outfit": "Padded armor"},
+        "Cleric": {"who": "cleric", "outfit": "Vestments", "also": ["priest"]},
+        "Mage": {"who": "mage", "outfit": "Robes", "also": ["wizard", "sorcerer"]},
+        "Thief": {"who": "rogue", "outfit": "Leather", "also": ["rogue"]},
+        "Monk": {"who": "monk", "outfit": "Robes"},
+        "Soldier": {"who": "soldier", "outfit": "Mail", "also": ["guard"]},
+        "Noble": {"who": "noble", "outfit": "Fine", "also": ["nobleman", "noblewoman", "aristocrat"]},
+        "Peasant": {"who": "peasant", "outfit": "Peasant", "also": ["commoner", "farmer", "laborer"]},
+        "Beggar": {"who": "beggar, thin and underfed", "outfit": "Rags", "also": ["slave", "poor"]},
+        "Sailor": {"who": "sailor, salt-weathered", "outfit": "Plain", "also": ["pirate"]},
+        "Courtesan": {"who": "courtesan", "outfit": "Fine", "also": ["harlot"]},
+    },
+    "outfit_terms": {
+        "_about": "Offered as 'Outfit' in the Propose tab: what the character wears. 'By role' takes the role's "
+                  "own. {color} is the creature's main clothes color and {trim} 'with red trim' when it has a "
+                  "second one; both drop out when the file gives none. A value can be {\"male\": ..., "
+                  "\"female\": ...}. Name the garment - a tunic, a gambeson, a gown: plain 'clothes' in a "
+                  "color is painted as a modern shirt.",
+        "By role": "",
+        "Rags": "torn, patched {color} rags",
+        "Plain": {"male": "a plain faded {color} wool tunic{trim}", "female": "a plain faded {color} wool kirtle{trim}"},
+        "Peasant": {"male": "a coarse homespun {color} wool tunic", "female": "a coarse homespun {color} wool kirtle"},
+        "Fine": {"male": "a rich embroidered {color} velvet doublet{trim}",
+                 "female": "a rich embroidered {color} velvet gown{trim}"},
+        "Robes": "a high-collared {color} robe{trim}",
+        "Vestments": "{color} priestly vestments{trim}",
+        "Leather": "a fitted jerkin of supple {color} leather, laced at the front",
+        "Padded armor": "a worn {color} padded gambeson",
+        "Mail": "a mail shirt under a {color} tabard",
+        "Plate armor": "plate armor over a {color} surcoat",
+    },
+    "sprite_terms": {
+        "_about": "Animations that show a body or gear of their own, so the portrait matches the figure walking "
+                  "around. Matched on the words of the animation name ('Static Fat Man' is a Fat Man; the longest "
+                  "match wins, so an Ogre Mage is not an Ogre). text: what the sprite shows. front: true puts it "
+                  "before the race ('very fat ... male human') - a body said late is painted ordinary. bald: "
+                  "the sprite has no hair, whatever the creature file says. Hoods and headscarves belong here, "
+                  "on the sprites that wear them, not in an outfit - not every peasant wears one. outfit: what it wears - an "
+                  "outfit_terms name, or \"\" for nothing past the text (a beast in its own hide and helmet). "
+                  "Left out, the role decides as usual. Never name a beard to say there is none: it paints one.",
+        "Fat Man": {"text": "very fat, bald, clean-shaven: a huge, round, fleshy face, wider than it is long, fat cheeks and jowls, a double chin, a thick neck, a smooth shaven head, a smooth bare chin and upper lip", "front": True, "bald": True, "outfit": "Plain"},
+        "Fat Woman": {"text": "very fat, heavy-set: a broad, round, fleshy face, plump cheeks, a double chin, a "
+                              "thick neck", "front": True, "outfit": "Plain"},
+        "Peasant Woman": {"text": "a plain headscarf"},
+        "Thief": {"text": "a deep hood pulled up over the head"},
+        "Harlot Woman": {"text": "her hair pulled up into a high ponytail, a medieval off-the-shoulder linen chemise with a front-laced bodice over it, the shoulders bare", "outfit": ""},
+        "Orog": {"text": "a grotesquely long horse-like face twice as long as a man's with a huge long jaw, one pair of huge long pointed ears set high on the sides of the skull and sweeping straight upward, their tips rising well above the crown of the bald head, dull reddish-orange skin, heavy black spiked iron shoulder plates over a dark leather harness", "bald": True, "outfit": ""},
+        "Beggar Man": {"text": "bald, with a straggly unkempt beard, gaunt and bare-chested: no shirt, bony bare shoulders and chest", "bald": True, "outfit": ""},
+        "Boy": {"text": "", "child": True, "race": "human"},
+        "Girl": {"text": "", "child": True, "race": "human"},
+        "Ogre": {"text": "wearing a battered horned iron helmet", "outfit": ""},
+        "Ogre Mage": {"text": "reddish-brown skin, a bare, hairless head with two short curved horns on the brow, layered white and gray robes with pale padded shoulder pieces", "bald": True, "outfit": ""},
+        "Half Ogre": {"text": "wearing a battered horned iron helmet", "outfit": ""},
+        "Ogrillon": {"text": "", "outfit": ""},
+        "Hobgoblin": {"text": "wearing a battered horned rusty steel helmet", "outfit": ""},
+    },
+    "young_lead": "A young {person} of about twenty, with youthful smooth skin.",
+    "child_lead": "A {person} of about nine years old, a small child with a soft, round child's face, smooth skin and big eyes.",
+    "young_drop": ["weathered appearance", "facial wrinkles and detail"],
+    "_young_lead": "For a young character (Age: Young, or 'young' at the start of the description): young_lead goes "
+                   "first in the prompt and the young_drop words are taken out of the style, or a style asking for "
+                   "a weathered, wrinkled face paints everybody forty.",
+    "vary_terms": {
+        "pose": {"": 70, "head turned slightly to the left, a slight three-quarter view": 10, "head turned slightly to the right, a slight three-quarter view": 10, "head tilted slightly to one side": 5, "eyes glancing slightly off to one side": 5},
+        "_about": "Vary faces on the Propose tab: each picture of a Generate gets one of each of these, drawn at "
+                  "random, added to the description. Klein paints nearly the same face for one description "
+                  "whatever the seed, so a face has to be told apart in words. A list is skipped when the "
+                  "description already says it (an age, a hair color, the eyes).",
+        "age": ["about twenty years old", "about thirty years old", "about forty years old",
+                "about fifty years old", "about sixty years old"],
+        "face": ["a heart-shaped face", "a gaunt hollow-cheeked face", "a broad square jaw", "a long narrow face",
+                 "a round soft face", "a sharp angular face", "a lean weathered face", "a heavy-jowled face"],
+        "nose": ["a small upturned nose", "a hooked nose", "a flattened broken nose", "a long straight nose",
+                 "a wide flat nose", "a crooked nose", "a strong aquiline nose", "a bulbous nose"],
+        "mouth": ["full lips", "thin lips", "a wide mouth", "a small tight mouth", "a crooked half-smile",
+                  "a downturned mouth"],
+        "eyes": ["wide-set green eyes", "deep-set gray eyes", "heavy-lidded dark eyes", "pale blue eyes",
+                 "narrow amber eyes", "warm brown eyes"],
+        "hair": {"short neat hair": 14, "close-cropped hair": 12, "short untidy hair": 12, "shaggy hair to the ears": 10, "a plain short cut": 8, "wavy hair to the jaw": 8, "curly hair": 6, "hair tied back in a short tail": 6, "shoulder-length hair": 6, "long loose hair": 4, "hair shaved at the sides": 3, "a tangled mane": 3, "short spiky hair": 2, "a single braid": 1, "dreadlocks": 5, "hair bound with leather cords and small beads": 2},
+        "hair_female": {"long loose hair": 14, "hair tied back in a tail": 12, "wavy hair to the shoulders": 12, "hair pinned up in a knot": 10, "long straight hair": 10, "curly hair": 8, "a thick plait over one shoulder": 6, "short practical hair": 5, "a messy braid": 4, "a tangled mane": 3, "dreadlocks": 5, "long hair with small beaded tassels": 2},
+        "hair_color": {"brown": 40, "black": 30, "dark brown": 15, "blond": 8, "auburn": 4, "red": 3},
+        "_hair_color": "How often each hair color comes up, out of the total. Gray and white are not here: they "
+                       "come with age - old_hair_color is used instead once the face is fifty or older.",
+        "old_hair_color": {"gray": 45, "graying brown": 25, "white": 15, "salt-and-pepper": 15},
+        "brows": ["heavy brows", "thin arched brows", "bushy brows", "straight level brows", "sparse pale brows",
+                  "a scarred eyebrow", "", ""],
+        "skin": {"fair": 30, "tanned": 20, "ruddy": 15, "olive": 15, "pale": 10, "light brown": 6, "dark brown": 4},
+        "cloth_color": {"undyed": 20, "brown": 20, "gray-green": 12, "faded blue": 12, "dull red": 8, "ochre": 8,
+                        "dark gray": 10, "rust": 6, "moss green": 4},
+        "cloth_detail": ["patched sleeves", "a frayed collar", "a wide leather belt", "a woolen shawl over the shoulders",
+                         "a cord necklace with a wooden charm", "a simple brooch at the collar", "rolled-up sleeves",
+                         "a laced neckline", "a pouch strap across the chest", "a scarf knotted at the throat",
+                         "a rough cloak pinned at the shoulder", "a fur-trimmed collar", "a hood pushed back",
+                         "a knotted kerchief", "", ""],
+        "cloth_detail_armor": ["dented pauldrons", "a scuffed leather strap across the chest",
+                               "a cloak pinned at the shoulder", "a battered gorget", "a frayed tabard",
+                               "rivets and rust on the armor", "a wool scarf under the collar", "a fur mantle"],
+        "beast": {"age": {"young": 25, "": 45, "old and grizzled": 30}, "expression": {"a calm, watchful look": 30, "an alert, wary look": 25, "a menacing glare": 20, "a hungry look": 15, "bared teeth": 10}, "mark": ["a torn ear", "an old scar across the face", "a missing tooth", "a clouded eye", "a notched ear", "", "", ""], "detail": ["", "", "", "patchy, uneven coloring", "a darker streak across the brow", "lighter coloring around the eyes"]},
+        "undead": {"expression": {"a vacant, hungry stare": 30, "a lipless grin": 20, "a menacing glare": 25, "a slack, dead look": 25}, "mark": ["a patch of bare bone on the cheek", "a torn, missing ear", "tattered strips of dead skin", "a cracked jaw", "one eye socket empty", "rotted holes in the cheek", "", ""], "detail": ["", "", "grave dirt in the creases", "a few teeth missing", "a pale, faintly glowing gaze"]},
+        "_beast": "Vary faces for beasts and the undead (werewolves, kobolds, lizard men, ghouls, zombies...): their face is their race's, so they are told apart by temper, age and marks, put right after the race's name.",
+        "monster": {"expression": {"a dull, sullen look": 20, "a cunning, sly look": 15, "a fierce glare": 15, "a calm, watchful look": 20, "a toothy sneer": 10, "a weary look": 10, "a crooked grin": 10}, "age": {"young": 25, "in his prime": 40, "grizzled and older": 35}, "face": ["a broad, flat face", "a gaunt, bony face", "a heavy, jowly face", "a long, narrow face", "a lumpy, warty face", "a lean, hard face"], "long_face": ["a long, gaunt face with sunken cheeks", "a long, heavy, jowly face", "a long, lumpy, warty face", "a long, bony face with a jutting underbite", "a long face with a pointed, bony chin", "a long, lean, hard face with deep-set eyes", "a long, coarse face with a wide mouth", "a long, craggy face with a heavy chin"], "mark": ["a torn ear", "a notched ear", "a missing tooth", "a broken fang", "a cloudy blind eye", "an old scar across the nose", "heavy brow ridges", "a crooked broken nose", "", ""], "detail": ["tufts of coarse hair on the ears", "a ring through one ear", "tribal paint on the cheeks", "a bone stud in the nose", "", "", ""]},
+        "_monster": "Vary faces for goblins, orcs, ogres and the like: their face is their race's, so they are told apart by temper, age, build and marks - never a person's nose, eyes or skin, which made them men painted red.",
+        "_cloth": "Vary faces dresses each picture a little differently too: cloth_color when the description "
+                  "names no color (the creature file's color always wins), and one cloth_detail - the armor "
+                  "list for anyone in armor. brows and skin go with the face; skin only for humans and others "
+                  "whose description does not say their skin.",
+
+        "mark": ["freckles", "a pockmarked face", "an old scar on the chin", "a mole on the cheek", "", "", ""],
+        "expression": {"a calm, neutral expression": 32, "a faint, polite smile": 15, "a thoughtful, attentive look": 13, "a warm smile": 10, "a guarded, wary look": 8, "a stern, serious look": 8, "a tired, weary look": 7, "a sly smirk": 4, "a broad grin": 3},
+        "_expression": "How often each expression comes up, out of the total: mostly calm, since most of them are just talking to you. Angry ones are left out on purpose: pick Angry or Fierce as the Mood for those.",
+    },
     "feature_terms": {
         "_about": "Drawn from the creature's own file name, so the same creature always gets the same face and "
                   "two creatures with the same name and class do not. One is taken from each list below and added "
@@ -327,14 +498,41 @@ DEFAULTS: dict = {
     "_feature_mark_chance": "How often a creature gets a distinguishing mark from feature_terms['mark'] (0 = "
                             "never, 1 = always). Kept low on purpose: a crowd where everyone has a scar looks as "
                             "uniform as a crowd where nobody does.",
+    "race_picks": {
+        "_about": "Things that differ between creatures of one race, by weight, added to its race words: a drow's "
+                  "eye color, a dwarf's beard. Each creature gets the same one every time (drawn from its own "
+                  "seed). A list called beard is for men only. An empty choice adds nothing (a gnome without a "
+                  "beard).",
+        "drow": {"eyes": {"red eyes": 60, "violet eyes": 25, "pale lavender eyes": 15}},
+        "dwarf": {"beard": {"a full beard": 30, "a long beard": 30, "a bushy beard": 25, "a braided beard": 15}},
+        "gnome": {"nose": {"a very large, long, pointed nose": 25, "a big bulbous nose": 20, "a long hooked nose": 15, "a broad round nose": 15, "a long upturned nose": 10, "a big crooked nose": 15}, "ears": {"big ears tapering to points": 40, "large pointed ears sticking out sideways": 30, "long swept-back pointed ears": 15, "big ears with round-tipped points": 15}, "eyes": {"bright twinkling eyes under bushy eyebrows": 25, "small sharp eyes under wild white eyebrows": 15, "large curious eyes": 20, "heavy-lidded sleepy eyes": 10, "keen dark eyes under thick brows": 20}, "lines": {"deep wrinkles and laugh lines": 30, "apple cheeks": 20, "a deeply lined forehead": 15, "crow's feet": 15, "": 20}, "beard": {"a short wispy beard": 50, "a thin goatee": 30, "": 20}},
+        "kobold": {"hide": {"rust-red scaly hide": 35, "dull brick-red scaly hide": 20, "dark red-brown scaly hide": 20, "mottled orange and brown scaly hide": 15, "faded gray-red scaly hide": 10}, "horns": {"two small backswept horns": 40, "two short stubby horns": 25, "long curved horns": 20, "one horn broken off short": 15}, "eyes": {"small beady red eyes": 50, "small beady yellow eyes": 25, "small beady orange eyes": 25}, "mark": {"": 40, "a scar across the snout": 20, "a chipped tooth": 15, "a ragged frill behind the jaw": 10, "a notched horn": 15}},
+        "halfling": {"face": {"a broad, round face with rosy cheeks": 30, "a broad face with freckled cheeks": 20, "a broad, weathered face": 25, "a broad, plump face with a double chin": 15, "a broad face with a strong jaw": 10}, "hair": {"a head of thick tight curls": 35, "loose brown curls": 20, "short curly hair": 20, "curly hair tied back": 10, "thinning curly hair": 15}, "nose": {"a button nose": 40, "a small upturned nose": 25, "a broad snub nose": 20, "": 15}},
+        "hobgoblin": {"skin": {"coarse dusky orange-brown hide-like skin": 25, "rough brick-red skin": 20, "dark reddish-brown skin": 20, "mottled gray-orange skin": 15, "ruddy ochre skin": 20}, "nose": {"a swollen red tinted nose with thin blue veins": 25, "a flat, wide nose": 30, "a short upturned snout-like nose": 30, "a broad squashed nose": 15}, "eyes": {"small dark beady eyes": 30, "narrow yellow eyes": 25, "deep-set amber eyes": 20, "small red-rimmed eyes": 15, "pale watery eyes": 10}, "beard": {"a scraggly black beard": 25, "a thin drooping black mustache": 15, "coarse black stubble": 20, "a braided chin tuft": 10, "": 30}},
+        "goblin": {"skin": {"sickly green skin": 30, "olive-green skin": 20, "grayish-green skin": 20, "yellowish-green skin": 15, "mottled dark green skin": 15}, "ears": {"small pointed ears": 40, "long drooping pointed ears": 20, "large batlike ears": 20, "ragged notched pointed ears": 20}, "nose": {"a long hooked nose": 35, "a sharp pointed nose": 25, "a stubby snub nose": 20, "a warty bulbous nose": 20}, "eyes": {"small yellow eyes": 30, "beady red eyes": 20, "large bulging yellow eyes": 20, "narrow orange eyes": 15, "squinting dark eyes": 15}, "hair": {"a bald head with a few wiry hairs": 30, "a greasy black mop of hair": 20, "a thin wispy topknot": 20, "patchy gray stubble on the scalp": 15, "stringy dark hair": 15}},
+        "ogre": {"skin": {"pale yellow tinted skin blotched with warts": 25, "muddy gray-brown skin": 20, "sallow olive skin": 20, "ruddy pinkish skin": 15, "dull bluish-gray skin": 20}, "face": {"a heavy brow and a huge jutting jaw": 30, "a low sloping forehead": 20, "sagging jowls": 20, "a thick bull neck": 15, "": 15}, "eyes": {"small dumb mean eyes": 30, "tiny piggish eyes": 25, "deep-set dark eyes under a heavy brow": 20, "bloodshot yellow eyes": 15, "mismatched eyes, one larger": 10}, "nose": {"a flat smashed nose": 30, "a broad bulbous nose": 25, "a huge warty nose": 20, "a pig-like upturned nose": 15, "": 10}, "beard": {"": 40, "coarse black stubble": 20, "a ragged dark beard": 20, "a few long chin whiskers": 20}},
+        "duergar": {"beard": {"a long white beard": 60, "a braided white beard": 25, "a short white beard": 15}},
+    },
+    "_tusks": "Tusks are said as lower canines growing up from inside the mouth: said loosely ('jutting tusks'), "
+              "Klein grows them out of the chin. Half-orcs have none.",
+    "race_terms_female": {
+        "_about": "Used instead of race_terms for a woman of these races. Flux paints any woman as a slim pretty human "
+                  "unless told plainly otherwise, so a dwarf or gnome woman came out as a human girl with braids "
+                  "(braids made it worse). Saying her age and that she is homely rather than pretty is what moves it.",
+        "dwarf": "dwarf, a stout, broad-shouldered dwarf woman in her fifties, homely and rugged rather than pretty: "
+                 "a very broad, chubby, round face, wider than it is long, heavy fleshy ruddy cheeks, a double chin, "
+                 "a thick neck, a big broad nose, a heavy brow",
+        "duergar": "duergar, a gray dwarf woman from the deep underdark, stout and broad-shouldered, grim and homely rather than pretty: dark charcoal-gray skin with a faint purple sheen, a broad heavy face, deep-set pale eyes under a heavy brow, a big broad nose, stark white hair pulled back tight",
+        "gnome": "gnome, a grown-up gnome woman, homely and quirky rather than pretty",
+    },
     "race_terms": {
         "_about": "How a race from the game is worded in the prompt. Races not listed are used as they are, which is rarely enough for a monster: a bare \"orc\" is painted as a human with pointed ears, so say what makes one.",
         "human": "human",
-        "elf": "elf",
-        "half elf": "half-elf",
-        "dwarf": "dwarf, stocky",
+        "elf": "elf, an ageless elf: long ears that sweep up to fine points, a narrow face with high sharp cheekbones, a pointed chin, large almond-shaped eyes, smooth fine skin",
+        "half elf": "half-elf, a mostly human face touched with elven blood: ears only slightly pointed at the tips, fine high cheekbones",
+        "dwarf": "dwarf, short, stout and heavy-boned, a grown-up: a broad, plump face, wider than it is long, heavy round ruddy cheeks, a big broad nose, a heavy brow",
         "halfling": "halfling",
-        "gnome": "gnome",
+        "gnome": "gnome, a grown-up of the gnome folk, not a child",
         "half orc": "half-orc, pale green skin, heavy brow, muscular",
         "sirine": "sirine, a sea fey woman, green skin, long dark hair wet and tangled with seaweed, large dark "
                   "eyes, a serene unsettling beauty",
@@ -370,7 +568,7 @@ DEFAULTS: dict = {
         "wererat": "wererat, a rat's head on a man's shoulders, patchy brown fur, a long snout, yellow incisors, "
                    "pink ears",
         "revenant": "revenant, a corpse come back, gray tight skin, sunken burning eyes, old wounds unhealed",
-        "ghast": "ghast, a ravening corpse, gray rotting skin, bared teeth, sunken eyes, lank clumps of hair",
+        "ghast": "ghast, a ravening undead corpse-eater, not a living man: a gaunt skull-like head, gray-green rotting skin stretched tight over the bones, no nose but two slits, a lipless mouth of long jagged yellow teeth, deep sunken sockets with small burning eyes, lank clumps of hair",
         "spectre": "spectre, a ghostly undead spirit, hollow eyes lit from within, gaunt drawn face, "
                    "colorless bloodless skin, wisps of mist where the shoulders fade away",
         "spectral undead": "spectral undead, a ghostly spirit, hollow eyes lit from within, gaunt drawn face, "
@@ -379,57 +577,27 @@ DEFAULTS: dict = {
         "ghost": "ghost, a pale ghostly figure, hollow eyes, bloodless colorless skin, edges fading away",
         "shadow": "living shadow, a man-shaped darkness, two cold points of light for eyes",
         "vampire": "vampire, bloodless white skin, red eyes, long fangs, sunken cheeks",
-        "ghoul": "ghoul, gray rotting skin stretched over the skull, sunken eyes, bared teeth, patchy hair",
+        "ghoul": "ghoul, an undead corpse-eater, not a living man: a gaunt skull-like head, gray-green rotting skin stretched tight over the bones, no nose but two slits, a lipless mouth of long jagged yellow teeth, deep sunken sockets with small glowing pale eyes, pointed ears, a few wisps of lank hair",
         "zombie": "zombie, gray rotting skin, clouded eyes, slack jaw, matted hair",
         "skeleton": "skeleton, a bare skull and bones, empty eye sockets, no flesh at all",
         "lich": "lich, a skull face with shrivelled gray skin drawn tight over it, points of light in the sockets",
         "mummy": "mummy, dried blackened skin wrapped in filthy bandages, sunken sockets",
-        "orc": "orc, green skin, a heavy jutting brow and small eyes, a broad flat nose, jutting lower tusks, pointed ears, coarse black hair",
-        "goblin": "goblin, sickly green skin, huge pointed ears, a long hooked nose, small yellow eyes, sharp teeth",
-        "hobgoblin": "goblin, orange-red skin, a flat broad face with a heavy jutting brow, dark beady eyes, a "
-                     "blue-gray flattened nose, pointed ears, yellowed teeth, wearing a battered "
-                     "horned rusty steel helmet",
-        "kobold": "kobold, small reptilian head, rust-red scaled skin, a short snout, horns, beady red eyes",
+        "orc": "orc, green skin, a heavy jutting brow and small eyes, a broad flat nose, two prominent tusks growing up from the lower jaw inside the mouth, in place of the lower canine teeth, resting over the upper lip, pointed ears, coarse black hair",
+        "goblin": "goblin, sharp teeth",
+        "hobgoblin": "hobgoblin, a brutish goblinoid with a wide face, large pointed ears and small yellowed fangs",
+        "kobold": "kobold, a small dog-like reptile creature, not a human: a long narrow lizard snout with the nostrils at its tip, jaws lined with tiny sharp teeth",
         "gnoll": "gnoll, hyena head, coarse spotted fur, a long muzzle with bared teeth, dark eyes",
-        "ogre": "ogre, huge lumpen head, dull yellow-brown skin, a heavy jaw and small eyes, tusks, wearing a "
-                "battered horned iron helmet",
+        "ogre": "close up of an ugly ogre: a broad humanoid face, a wide mouth with two thick tusks growing up from the lower jaw inside the mouth, in place of the lower canine teeth, resting over the upper lip",
         "troll": "troll, long rubbery green head, a hooked nose, sunken eyes, lank hair",
         "lizard man": "lizard man, green scaled head, a blunt snout, slit yellow eyes, a crest of spines",
         "sahuagin": "sahuagin, green-black fish head, round black eyes, gill slits, needle teeth, a finned crest",
-        "githyanki": "githyanki, gaunt yellow-skinned head, sunken black eyes, pointed ears, a hairless skull",
-        "duergar": "gray dwarf, ashen gray skin, a bald head, a long gray beard, hard pale eyes",
-        "tiefling": "devil-blooded human, small horns, unnatural skin",
-        "drow": "drow elf, dark gray skin, white hair",
+        "githyanki": "githyanki, a gaunt alien warrior with jaundiced, leathery yellow skin: a hard, fierce, hollow-cheeked face with high sharp cheekbones, a flat slitted nose, deep-set fierce black eyes, small dark speckles scattered across the cheeks and brow, long swept-back pointed ears, a stiff black topknot on a close-shorn head",
+        "duergar": "duergar, a gray dwarf from the deep underdark, short, stout and heavy-boned: dark charcoal-gray skin with a faint purple sheen, a broad, hard, grim face, deep-set pale eyes under a heavy brow, a big broad nose, a bald head",
+        "tiefling": "tiefling, a devil-blooded human, two curved horns rising from the brow",
+        "drow": "drow, a dark elf with smooth charcoal-black skin with a faint purple sheen, long pointed ears, stark white hair",
         "aasimar": "angelic human, fair luminous skin, pale golden eyes, a faint halo of light",
-        "half ogre": "half-ogre, broad coarse face, dull ruddy skin, a heavy jaw, small tusks, wearing a "
-                     "battered horned iron helmet",
+        "half ogre": "half-ogre, broad coarse face, dull ruddy skin, a heavy jaw, two small tusks growing up from the lower jaw inside the mouth, in place of the lower canine teeth",
         "lycanthrope": "werewolf, a wolf's head on a man's shoulders, coarse gray fur, yellow eyes, bared fangs",
-    },
-    "animation_terms": {
-        "_about": "Words in the creature's animation name -> what the speaker wears. Portraits are head and "
-                  "shoulders, so this is clothing, not held equipment, and each phrase is kept to a couple of "
-                  "words: the more the prompt says about armor and gear, the further back the picture is framed.",
-        "fighter": "fighter, worn armor",
-        "paladin": "paladin, plate armor",
-        "ranger": "ranger, green cloak",
-        "cleric": "cleric, vestments",
-        "druid": "druid, rough robes",
-        "mage": "mage, high-collared robe",
-        "sorcerer": "sorcerer, ornate robe",
-        "thief": "rogue, hooded cloak",
-        "bard": "bard, colorful clothes",
-        "monk": "monk, plain robe",
-        "barbarian": "barbarian, furs",
-        "shaman": "shaman, bone charms",
-        "peasant": "commoner, worn clothes",
-        "noble": "noble, rich clothes",
-        "beggar": "beggar, rags",
-        "slave": "rags",
-        "fat": "heavyset, round face",
-        "guard": "town guard, mail",
-        "merchant": "merchant, good clothes",
-        "boy": "boy, simple clothes",
-        "girl": "girl, simple clothes",
     },
 }
 
@@ -472,6 +640,51 @@ def term_names(settings: dict, which: str) -> List[str]:
     return [k for k in (settings.get(which) or {}) if not k.startswith("_")]
 
 
+BY_ROLE = "By role"
+
+
+def roles(settings: dict) -> dict:
+    """role_terms without its notes: {"Fighter": {"who": ..., "outfit": ..., "also": [...]}, ...}"""
+    return {k: v for k, v in (settings.get("role_terms") or {}).items()
+            if not str(k).startswith("_") and isinstance(v, dict)}
+
+
+def find_role(words: object, settings: dict) -> str:
+    """The role an animation name says ("CLERIC_FEMALE_ELF" -> "Cleric"), or "". The first role word in the name
+    wins: a 'Harlot Fighter' is a courtesan and a 'Nobleman Fighter' a noble, both of them sprites of their own."""
+    seq = [str(w).lower() for w in words] if isinstance(words, (list, tuple)) else \
+        re.findall(r"[a-z]+", str(words).lower())
+    table = roles(settings)
+    for w in seq:
+        for name, v in table.items():
+            if w == name.lower() or w in {str(a).lower() for a in (v.get("also") or [])}:
+                return name
+    return ""
+
+
+def sprite(anim: str, settings: dict) -> dict:
+    """The sprite_terms entry for an animation name, the longest match first, or {}."""
+    aw = set(re.findall(r"[a-z]+", anim.lower()))
+    best: Tuple[int, dict] = (0, {})
+    for k, v in (settings.get("sprite_terms") or {}).items():
+        ks = set(re.findall(r"[a-z]+", str(k).lower()))
+        if not str(k).startswith("_") and isinstance(v, dict) and ks and ks <= aw and len(ks) > best[0]:
+            best = (len(ks), v)
+    return best[1]
+
+
+def outfit_text(settings: dict, outfit: str, gender: str = "", color: str = "", trim: str = "") -> str:
+    """An outfit's words with the creature's colors put in, or dropped when there are none."""
+    t = (settings.get("outfit_terms") or {}).get(outfit, "")
+    if isinstance(t, dict):
+        t = t.get(gender) or t.get("male") or next(iter(t.values()), "")
+    t = str(t or "")
+    if not t:
+        return ""
+    t = t.replace("{color}", color).replace("{trim}", f" with {trim} trim" if trim else "")
+    return " ".join(t.split()).replace(" ,", ",")
+
+
 def _face_key(row: dict) -> str:
     """What a creature's face is drawn from: its own creature file. A shared portrait is not proof of one person -
     a stock picture like FARM is worn by twenty unrelated commoners - so it is only used when there is no creature
@@ -503,12 +716,12 @@ def creature_seed(key: str) -> int:
 
 
 _BALD = ("bald", "balding", "hairless")
+_SUBRACE = {"drow": "elf", "duergar": "dwarf", "svirfneblin": "gnome"}   # a kind the race field can only call
+#                                                                  by its parent race
 _NAME_BLIND = frozenset(("shadow",))    # the Shadow Thieves are a guild of people, not forty-five living shadows
 _VAGUE_RACES = frozenset(("human", "fairy", "demonic", "monster", "animal", "mammal", "no race", "undead",
                           "giant", "golem", "elemental", "statue"))
 _COVERED_HEAD = ("helm", "hood", "coif", "cowl", "turban", "veil")
-_ROLES = frozenset(("fighter", "paladin", "ranger", "cleric", "druid", "mage", "sorcerer", "thief", "bard", "monk",
-                    "barbarian", "shaman", "peasant", "noble", "beggar", "slave", "guard", "merchant"))
 _HAIR_COLOR = re.compile(r"\b(greying|graying|grey|gray|white|black|blond|blonde|red|auburn|brown|silver)\s+"
                           r"(?=hair|mane|curls|locks)", re.I)
 
@@ -546,16 +759,272 @@ def features(key: str, settings: dict, has_hair: bool = False, bald: bool = Fals
     return ", ".join(out)
 
 
-def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[str, str]:
+_FACIAL_HAIR = re.compile(r"\b(beard|bearded|stubble|mustache|moustache|whiskers|goatee|sideburns)\b", re.I)
+
+
+def _no_facial_hair(text: str) -> str:
+    """A look's words without the beard: "thin gray hair and straggly beard" -> "thin gray hair"."""
+    out = []
+    for clause in (c.strip() for c in text.split(",")):
+        if not _FACIAL_HAIR.search(clause):
+            out.append(clause)
+            continue
+        keep = [b for b in re.split(r"\s+and\s+|\s+with\s+", clause) if not _FACIAL_HAIR.search(b)]
+        if keep:
+            out.append(" and ".join(keep))
+    return ", ".join(c for c in out if c)
+
+
+def womanly(desc: str) -> str:
+    """A woman's description without beards or stubble, whatever wrote them in - a saved description from before
+    the looks were fixed said "thin gray hair and straggly beard" of an old elf woman, and every picture had one."""
+    if not re.search(r"\b(female|woman|girl|lady)\b", desc or "", re.I):
+        return desc
+    return _no_facial_hair(desc)
+
+
+def youthen(prompt: str, desc: str, settings: dict) -> str:
+    """A young character in a style that asks for a weathered, wrinkled face comes out forty. Said first, and with
+    the style's aging words taken out (young_drop), Klein paints the age asked for. A child is said the same way."""
+    low = desc.lower()
+    if re.search(r"^(a )?child\b|\bchild (male|female)\b|^(girl|boy)\b", low):
+        who = "girl" if re.search(r"\b(female|girl)\b", low) else "boy" if re.search(r"\b(male|boy)\b", low) else "child"
+        for w in (settings.get("young_drop") or []):
+            prompt = re.sub(r"\s*" + re.escape(str(w)) + r",?", "", prompt, flags=re.I)
+        lead = str(settings.get("child_lead") or "").replace("{person}", who)
+        return (lead + " " + prompt).strip() if lead else prompt
+    if not re.search(r"^(young|a young)\b|\byoung (male|female|man|woman)\b|\babout twenty years old\b", low):
+        return prompt
+    who = "woman" if re.search(r"\b(female|woman)\b", low) else "man" if re.search(r"\b(male|man)\b", low) else "person"
+    for w in (settings.get("young_drop") or []):
+        prompt = re.sub(r"\s*" + re.escape(str(w)) + r",?", "", prompt, flags=re.I)
+    lead = str(settings.get("young_lead") or "").replace("{person}", who)
+    return (lead + " " + prompt).strip() if lead else prompt
+
+
+def _weighted(rnd: object, pool: object, skip: tuple = ()) -> str:
+    """One pick from {"brown": 40, "red": 3, ...} by weight; a plain list counts every entry the same."""
+    if isinstance(pool, dict):
+        items = [(str(k), float(v)) for k, v in pool.items() if not str(k).startswith("_") and str(k) not in skip
+                 and isinstance(v, (int, float)) and v > 0]
+    else:
+        items = [(str(k), 1.0) for k in (pool or []) if str(k) not in skip]
+    if not items:
+        return ""
+    return str(rnd.choices([k for k, _ in items], weights=[w for _, w in items])[0])   # type: ignore[attr-defined]
+
+
+_BEASTLY = re.compile(r"\b(were\w*|lycanthrope|wolf|wolf's|fur|furred|muzzle|snout|fangs|beak|feathers?|"
+                      r"tentacles?|hyena|gnoll|lizard|fish|scales|scaled|insect|mandibles|rat|animal|beast|"
+                      r"not of a person|skeleton|skull|bones|undead spirit|mind flayer|beholder|golem|elemental|"
+                      r"slime|ooze|dragon|wyvern|spider|cat|dog|hound|horse|bear|boar|deer|stag|rabbit|squirrel|chicken|cow|calf|"
+                      r"bird|owl|raven|eagle|snake|bat|beetle|panther|leopard|tiger|lion|ape|baboon|monkey|"
+                      r"ghoul|ghast|zombie|mummy|lich|revenant|wight|corpse|undead)\b")
+#   the undead too: a grizzled age, a heavy jowly face and an ear ring made a ghoul an old man
+
+
+_UNDEAD = re.compile(r"\b(ghoul|ghast|zombie|mummy|lich|revenant|wight|corpse|undead|skeleton|skull|spectre|ghost|"
+                     r"wraith|vampire)\b")
+_MONSTROUS = re.compile(r"\b(goblin|hobgoblin|orc|ogre|ogrillon|half-ogre|troll|githyanki|gnoll|bugbear|"
+                        r"minotaur|yuan-ti|imp|demon|devil|tanar'ri)\b")
+#   a face given in full by its race: a person's nose, eyes, skin tone and haircut on it make it a man painted red
+
+
+def _vary_face(rnd: object, settings: dict, desc: str = "") -> str:
+    """A face in words, drawn at random, for one picture of a Generate: age, face, nose, mouth, eyes, hair and
+    sometimes a mark. Whatever the description already says is left out - its age, its hair color, its eyes -
+    so it is never contradicted."""
+    terms = settings.get("vary_terms") or {}
+    low = desc.lower()
+    if _MONSTROUS.search(low) and terms.get("monster"):            # (fangs or hide do not make it a beast)
+        mt = terms.get("monster") or {}                         # a goblin's face kept a goblin's: told apart by
+        bits = []                                                # build, age, temper and the marks of a hard life
+        long_ = bool(re.search(r"\b(huge|enormous|long|elongated)\b[^,]{0,30}\bface\b", low))   # a sprite's own
+        ears_ = bool(re.search(r"\bears\b[^,]{0,60}\b(top of|upward|crown)\b", low))     # long face
+        for k, skip in (("age", r"\b(young|old|aged|grizzled|prime)\b"),     # still varies, within its length; ears
+                        ("long_face" if long_ else "face", ""),            # on top get no ear marks, or a second
+                        ("expression", ""),                                # pair is drawn at the sides
+                        ("mark", ""), ("detail", "")):              # face and temper said first win over the race's
+            pool = mt.get(k) or (mt.get("face") if k == "long_face" else None)
+            if pool and ears_:
+                pool = ({w: n for w, n in pool.items() if not re.search(r"\bears?\b", w)} if isinstance(pool, dict)
+                        else [w for w in pool if not re.search(r"\bears?\b", w)])
+            if pool and not (skip and re.search(skip, low)):
+                bits.append(_weighted(rnd, pool) if isinstance(pool, dict) else rnd.choice(pool))   # type: ignore[attr-defined]
+        clothes = vary_clothes(rnd, settings, desc)
+        face = ", ".join(b for b in bits if b)
+        face = "!" + face if face else ""                        # ! = right after the race's name, not after its words
+        return f"{face} || {clothes}" if clothes else face
+    if _BEASTLY.search(low) or _MONSTROUS.search(low):          # a werewolf given a person's eyes, hair, nose and
+        undead = bool(_UNDEAD.search(low))                       # skin tone comes out a man: told apart by its own
+        mt = terms.get("undead" if undead else "beast") or {}    # kind of words instead - temper, age, marks
+        bits = []
+        for k, skip in (("age", r"\b(young|old|aged|grizzled|ancient)\b"), ("expression", ""), ("mark", ""), ("detail", "")):
+            pool = mt.get(k)
+            if pool and not (skip and re.search(skip, low)):
+                bits.append(_weighted(rnd, pool) if isinstance(pool, dict) else rnd.choice(pool))   # type: ignore[attr-defined]
+        clothes = vary_clothes(rnd, settings, desc)
+        face = ", ".join(b for b in bits if b)               # after the race's own words: what it is comes first
+        return f"{face} || {clothes}" if clothes else face
+
+    def pick(k: str) -> str:
+        if isinstance(terms.get(k), dict):                       # {"a calm look": 30, ...}: by weight
+            return _weighted(rnd, terms.get(k))
+        pool = [str(x) for x in (terms.get(k) or [])]
+        return rnd.choice(pool) if pool else ""                                       # type: ignore[attr-defined]
+    out = []
+    if not re.search(r"\b(young|elderly|teen|child|twenties|thirties|forties|fifties|sixties|years)\b|"
+                     r"^(very |middle-)?(old|aged)\b|\bold,?\s+(male|female|man|woman)\b", low):   # not "an old scar"
+        out.append(pick("age"))
+    youngish = bool(re.search(r"\b(young|teen|twenty|twenties|thirty|thirties|child|girl|boy|nine)\b", low + " " + " ".join(out)))
+    woman = bool(re.search(r"\b(female|woman|girl|lady|she|her)\b", low))
+    for k in ("face", "nose", "mouth"):
+        if k not in low or k == "face" and "face" not in low:
+            got = pick(k)
+            for _ in range(8):                                   # a young face is not weathered or jowly
+                if not (youngish and re.search(r"weather|gaunt|lined|jowl|wrinkl|sagging|haggard", got)):
+                    break
+                got = pick(k)
+            out.append(got)
+    if "eyes" not in low:
+        out.append(pick("eyes"))
+    own_hair = [str(x).lower() for x in ((settings.get("feature_terms") or {}).get("hair") or []) if str(x).strip()]
+    styled = any(h in low for h in own_hair) or any(re.sub(r"\b(hair|dark|light|[a-z]+-?(brown|gray|grey|white|black|blond|blonde|red))\b|"
+                        r"\b(red|black|gray|grey|blond|blonde|brown|auburn|white|silver|sandy|ginger|golden|"
+                        r"copper|chestnut|fair|raven|flaxen|platinum|steel|and|a|an)\b", "", c).strip(" -")
+                 for c in low.split(",") if re.search(r"\bhair\b", c))   # the creature's own hairstyle is said
+    if not styled and not re.search(r"\b(bald|shaven head|hairless|helmet|hood)\b", low):
+        hair = pick("hair_female" if woman and terms.get("hair_female") else "hair")
+        has_color = bool(re.search(r"\b(red|black|gray|grey|blond|blonde|brown|auburn|white|silver|sandy|ginger|"
+                                       r"golden|copper|chestnut|fair|dark|raven|flaxen|platinum)\s+hair\b|"
+                                       r"\bhair dyed\b", low))          # the creature file's color wins
+        if hair and not has_color:
+            said_age = low + " " + " ".join(out)                 # the person's age, not "an old scar"
+            oldish = not youngish and bool(re.search(
+                r"\b(elderly|ancient|fifty|fifties|sixty|sixties|seventy)\b|"
+                r"\bold,?\s+(male|female|man|woman|\w+\s+(male|female))\b|^(very )?old\b", said_age))
+            col = _weighted(rnd, terms.get("old_hair_color" if oldish and terms.get("old_hair_color") else "hair_color"),
+                            () if oldish else ("gray", "white") if youngish else ())
+            hair = re.sub(r"\bhair\b", f"{col} hair", hair, count=1) if "hair" in hair else f"{col} hair, {hair}"
+        out.append(hair)
+    if not re.search(r"\b(child|girl|boy)\b", low):              # pockmarks and scars are for grown-ups
+        out.append(pick("mark"))
+    if "brow" not in low:
+        out.append(pick("brows"))
+    if "skin" not in low and re.search(r"\b(human|half elf|halfling|man|woman|boy|girl)\b", low):
+        out.append(f"{_weighted(rnd, terms.get('skin'))} skin" if terms.get("skin") else "")
+    if not re.search(r"\b(grin|smil|frown|snarl|scowl|expression|look|smirk|stare|squint)", low):
+        out.insert(0, pick("expression"))                    # the strongest of them all: a face moves with it
+    face = ", ".join(x for x in out if x)
+    clothes = vary_clothes(rnd, settings, desc)
+    return f"{face} || {clothes}" if clothes else face
+
+
+
+_POSED = re.compile(r"\b(turned|three-quarter|profile|side view|looking (left|right|away|over)|glancing|tilted)\b")
+
+
+def vary_words(rnd: object, settings: dict, desc: str = "") -> str:
+    """A face in words for one picture (see _vary_face), and now and then a slight turn of the head from
+    vary_terms' pose list - most portraits face straight ahead, as the game's do, so only a few turn."""
+    words = _vary_face(rnd, settings, desc)
+    pose = _weighted(rnd, (settings.get("vary_terms") or {}).get("pose") or {})
+    if not pose or _POSED.search(desc.lower()):
+        return words
+    face, sep, clothes = words.partition(" || ")
+    face = f"{face}, {pose}" if face.strip("! ") else (f"!{pose}" if face.startswith("!") else pose)
+    return f"{face} || {clothes}" if sep else face
+
+
+_CLOTH_COLORED = re.compile(
+    r"\b(red|blue|green|brown|gray|grey|black|white|yellow|orange|purple|gold|silver|tan|ochre|undyed|dyed|"
+    r"crimson|maroon|teal|olive|russet|indigo)\b[\w\s-]{0,30}?\b(wool|linen|velvet|leather|cloak|robes?|tunic|kirtle|"
+    r"gown|doublet|tabard|surcoat|gambeson|vestments|rags|clothes|armor)\b", re.I)
+_ARMORED = re.compile(r"\b(mail|plate|gambeson|helmet|helm|metal armor)\b", re.I)   # leather is not: a pauldron
+#                                                                  or gorget on a thief's leathers paints plate
+
+
+def vary_clothes(rnd: object, settings: dict, desc: str = "") -> str:
+    """Clothes in words for one picture: a color when the description gives none, and a detail - patched
+    sleeves, a shawl, a belt. Klein paints the same outfit for the same words, so it has to be told apart too."""
+    terms = settings.get("vary_terms") or {}
+    if not re.search(r"\b(wool|linen|velvet|leather|cloak|robes?|tunic|kirtle|gown|doublet|tabard|surcoat|gambeson|"
+                     r"vestments|rags|clothes|armor|mail)\b", desc, re.I):
+        return ""                                            # nothing worn to vary: a beast, a spirit
+    out = []
+    if not _CLOTH_COLORED.search(desc) and terms.get("cloth_color"):
+        c_ = _weighted(rnd, terms.get("cloth_color"))
+        out.append("undyed clothes" if c_ == "undyed" else f"clothes dyed {c_}" if c_ else "")
+    pool = [str(x) for x in (terms.get("cloth_detail_armor" if _ARMORED.search(desc) else "cloth_detail") or [])]
+    low_ = desc.lower()                                          # no second hood on a hooded thief, no scarf on a scarf
+    pool = [x for x in pool if not any(w in low_ for w in ("hood", "scarf", "kerchief", "cloak", "mantle", "collar")
+                                       if w in x.lower())] or pool
+    if pool:
+        out.append(rnd.choice(pool))                                                  # type: ignore[attr-defined]
+    return ", ".join(x for x in out if x)
+
+
+def vary_merge(desc: str, words: str, settings: Optional[dict] = None) -> str:
+    """The description with one picture's Vary words put in: the face right after the race, where Klein looks
+    hardest (said last, much of it was ignored), and the clothes at the end, after the outfit they change.
+    The race's own words are kept together: a dwarf's beard pushed behind a dozen face words came out shaven."""
+    face, _, clothes = (words or "").partition("||")
+    face, clothes = face.strip().strip(","), clothes.strip().strip(",")
+    if face.startswith("!"):                                     # a monster's: first, where Klein looks hardest -
+        face = face[1:].strip()                                  # behind a dozen fixed words it changed nothing
+        head, sep, rest = (desc or "").partition(",")
+        out = f"{head}, {face}" + (f",{rest}" if sep else "")
+        return out + (", " + clothes if clothes else "")
+    if face and settings:
+        texts = [str(v) for k in ("race_terms", "race_terms_female")
+                 for kk, v in (settings.get(k) or {}).items() if not str(kk).startswith("_") and v]
+        hit = max((t for t in texts if t and t in (desc or "")), key=len, default="")
+        if hit:
+            at = desc.index(hit) + len(hit)
+            spr = re.match(r"(,\s*(wearing [^,]*|a plain headscarf|a [^,]*\bhood\b[^,]*|[a-z ]+ eyes))+", desc[at:])   # the race's
+            #                                                      eyes and the sprite's own gear go with it
+            if spr:
+                at += spr.end()
+            extras = sorted({str(c) for v in (settings.get("race_picks") or {}).values() if isinstance(v, dict)
+                             for pool in v.values() if isinstance(pool, dict) for c in pool if c}
+                            | {str(v) for k, v in (settings.get("beard_terms") or {}).items()
+                               if v and not str(k).startswith("_")}, key=len, reverse=True)
+            moved = True
+            while moved:                                         # a dwarf's beard, a drow's eyes: the race's own too
+                moved = False
+                for x in extras:
+                    if desc[at:].startswith(", " + x):
+                        at += len(x) + 2
+                        moved = True
+                        break
+            out = desc[:at].rstrip(", ") + ", " + face + desc[at:]
+            return out + (", " + clothes if clothes else "")
+    parts = [c.strip() for c in (desc or "").split(",")]
+    if face and parts and parts[0]:
+        at = next((i for i, c in enumerate(parts) if re.search(r"\b(male|female|man|woman|boy|girl)\b", c)), 0)
+        at = at if ":" in parts[at] else at + 1              # "clean-shaven male human: a huge, round face" is
+        parts.insert(at, face)                               # one body: the face words go before it, not inside
+    elif face:
+        parts = [face]
+    if clothes:
+        parts.append(clothes)
+    return ", ".join(p for p in parts if p)
+
+
+def describe(row: dict, settings: dict, age: str = "", look: str = "", outfit: str = "",
+             mood: str = "", scars: str = "", grime: str = "", beard: str = "") -> Tuple[str, str]:
     """(subject, character) from a Portrait Scout row: gender, race and the animation name (which says what the
     speaker wears: 'Cleric Female Elf', 'Peasant Woman', 'Fat Man'). Nothing here is certain - it is a starting
-    point the user can edit before generating."""
+    point the user can edit before generating.
+    The parts, each saying one thing: race and body, Age, Look (the face), Mood (the expression), Role (who they
+    are - from the animation name unless one is picked) and Outfit (what they wear - the role's own unless one
+    is picked), with the creature's own colors put into the outfit."""
     race = str(row.get("race") or "").strip()
     anim = str(row.get("anim") or "").strip()
     sex = str(row.get("sex") or "").strip().lower()
     aw = set(re.findall(r"[a-z]+", anim.lower()))
-    gender = "female" if sex == "female" or aw & {"female", "woman", "girl"} else \
-             "male" if sex == "male" or aw & {"male", "man", "boy"} else ""
+    gender = "female" if aw & {"female", "woman", "girl"} else "male" if aw & {"male", "man", "boy"} else \
+             "female" if sex == "female" else "male" if sex == "male" else ""   # the sprite's gender first
     races = {k: v for k, v in settings.get("race_terms", {}).items() if not k.startswith("_")}
     rkey = race.lower().replace("-", " ").replace("_", " ")
     rkey = re.sub(r"^half ?(orc|elf|ogre)$", r"half \1", rkey)      # RACE.IDS writes HALFORC, HALFELF
@@ -565,7 +1034,14 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
         rkey = anim_race
     elif rkey == "human" and anim_race and anim_race != "human":     # human is the race byte's default, so a sprite
         rkey = anim_race                                             # picked on purpose is the better evidence.
+    elif anim_race and rkey not in _SPRITE_RACES and find_role(anim, settings) and \
+            (_BEASTLY.search(rkey) or _UNDEAD.search(rkey) or rkey not in races):
+        rkey = anim_race                                             # a "golem" walking about as a gnome cleric
     kind = next((k for k in races if k and k not in _SPRITE_RACES and set(k.split()) <= aw), "")
+    if kind in _NAME_BLIND and find_role(anim, settings):          # a Shadow Thief is a man in black
+        kind = ""
+    if kind and _SUBRACE.get(kind) == rkey:                         # the "Drow Female" sprite on a file that says
+        rkey = kind                                                  # ELF: the race field has no room for drow
     if kind and (rkey not in races or rkey in _VAGUE_RACES):         # a sirine's file says FAIRY and only its
         rkey = kind                                                  # sprite says sirine; the sprite wins there
     said_kind = str((row.get("colors") or {}).get("kind") or "")    # DrowSkin and the like: the surest of all
@@ -581,35 +1057,81 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
     #                                                                  room for live in the name instead
     #   Only this way round: a half-elf, tiefling or werewolf has no sprite of its own and borrows one, so a
     #   non-human file race keeps what it says however the creature walks around the map.
+    spr0 = sprite(anim, settings)
+    if spr0.get("race") and rkey not in _SPRITE_RACES:             # Mia the lycanthrope walks around as a human
+        rkey = str(spr0["race"])                                     # girl: the sprite shows what she looks like
+    child = bool(spr0.get("child")) or age == "Child"
     race_txt = races.get(rkey, "")
+    if gender == "female":                                           # a woman of some races needs her own words:
+        race_txt = str((settings.get("race_terms_female") or {}).get(rkey) or race_txt)   # see its _about
+    beard_pick = str((settings.get("beard_terms") or {}).get(beard, "")) if beard else ""
+    picks_ = (settings.get("race_picks") or {}).get(rkey)
+    spr_said_ = str((sprite(anim, settings) or {}).get("text") or "").lower()   # what the sprite shows wins:
+    if isinstance(picks_, dict) and race_txt:                        # no pick for a part it already says                        # a drow's red eyes, a dwarf's braided beard:
+        rng_ = random.Random(creature_seed(face_key(row)) ^ 0x5EED) if face_key(row) else random.Random()
+        for slot_, pool_ in picks_.items():                          # one creature's own, the same every time
+            if str(slot_).startswith("_") or not isinstance(pool_, dict):
+                continue
+            got_ = _weighted(rng_, pool_)                            # drawn either way, so the next slot is unmoved
+            if slot_ == "beard" and (gender == "female" or beard_pick) or not got_ or slot_ in race_txt \
+                    or re.search(rf"\b{re.escape(str(slot_))}\b", spr_said_):
+                continue
+            race_txt = f"{race_txt}, {got_}"
+    for part_ in ("skin", "ears", "face"):                         # the sprite's skin, ears, face - not the race's
+        if race_txt and re.search(rf"\b{part_}\b", spr_said_):    # usual ones (an orog is red, not orc-green,
+            race_txt = re.sub(rf",\s*[^,]*\b{part_}\b[^,]*", "", race_txt)   # its ears on top of its head)
+    if race_txt and (sprite(anim, settings) or {}).get("bald"):     # a bald sprite: the race's hair goes too
+        race_txt = re.sub(r",\s*[^,]*\bhair\b[^,]*", "", race_txt)
+    if beard_pick and gender != "female" and race_txt:              # picked by hand: with the race, said early
+        race_txt = re.sub(r",\s*[^,]*\bbeard\b[^,]*", "", race_txt)   # instead of the race's own
+        race_txt = f"{race_txt}, {beard_pick}"
     if not race_txt and rkey:                                        # a race nobody has written a line for: the
         race_txt = (f"{rkey}, with the head and face of a {rkey} and not of a person"   # model paints a human
                     if rkey not in _HUMANOID else rkey)              # unless it is told plainly not to
     if rkey and rkey not in _HUMANOID and rkey not in races and not gender:
         subject = anim.lower() or rkey                               # a wolf, a golem...: say what it is
         return subject, subject
-    age_txt = (settings.get("age_terms") or {}).get(age, age.lower()) if age else \
+    age_txt = "child" if child else (settings.get("age_terms") or {}).get(age, age.lower()) if age else \
         ("young" if aw & {"boy", "girl", "child"} else "")       # a grown person is what it paints anyway:
     #                                                            only an age that is not the default is worth saying
     subject = " ".join(x for x in (gender, race_txt.split(",")[0]) if x) or "person"
     lead, _, extra = age_txt.partition(",")                          # "old, lined face" -> "old male human, lined face"
-    parts = [" ".join(x for x in (lead.strip(), gender, race_txt) if x)]
+    parts = [" ".join(x for x in (lead.strip(), gender, race_txt) if x) or "person"]   # a name and nothing else
     if extra.strip():
         parts.append(extra.strip())
     manlike = rkey in ("", "human", "elf", "half elf", "dwarf", "halfling", "gnome", "half orc", "tiefling",
                        "drow", "aasimar", "duergar", "genasi")
     col = row.get("colors") or {} if settings.get("use_creature_colors", True) else {}
-    bald = bool(aw & {str(w).lower() for w in (settings.get("bald_animations") or [])
-                      if not str(w).startswith("_")})            # the sprite is bald; the file does not know it
+    spr = sprite(anim, settings)
+    bald = bool(spr.get("bald"))                                 # the sprite is bald; the file does not know it
+    spr_txt = str(spr.get("text") or "")
+    if spr_txt and spr.get("front"):                             # what the body is goes with the race itself,
+        head, _, tail = spr_txt.partition(":")                   # "very fat, bald male human: a huge round face"
+        parts[0] = f"{head.strip()} {parts[0]}" + (f": {tail.strip()}" if tail.strip() else "")
+    elif spr_txt:                                                # a helmet: with the race, so the hair under it
+        parts[0] = f"{parts[0]}, {spr_txt}"                      # goes unsaid
     feat = features(face_key(row), settings, bool(col.get("hair")), bald) if manlike else ""
+    if child and feat:                                              # a child has no battle scars or broken nose
+        feat = ", ".join(c for c in feat.split(", ") if not re.search(
+            r"\b(scar|burn|pockmark\w*|missing|notched|cauliflower|broken|crooked jaw|receding|balding|bald|graying)\b", c))
+    if gender == "female" and feat:                                # a bald head under a peasant woman's headscarf
+        feat = ", ".join(c for c in feat.split(", ")               # came out a bearded old man
+                         if not re.search(r"\b(bald|balding|receding|widow's peak)\b", c))
     #                                                            a neat side parting on a gnoll helps nobody
+    if feat:                                                     # the race says it already: a halfling's button
+        said_r = race_txt.lower()                                # nose and curls, a dwarf's broad face - the
+        covered = {"face": "face" in said_r, "nose": "nose" in said_r,   # face draw must not argue with them
+                   "hair": bool(re.search(r"\b(hair|curls|braids|topknot|bald|beard|mane)\b", said_r))}
+        terms_ = settings.get("feature_terms") or {}
+        feat = ", ".join(c for c in feat.split(", ")
+                         if not any(covered[k] and c in (terms_.get(k) or []) for k in covered))
     hair_said = False
     if col.get("hair"):
         feat = _HAIR_COLOR.sub("", feat)                        # the file says what color it is; the draw only
         at = re.search(r"\bhair\b", feat)                      # says what it does. One clause, not two: "short
         if at and not any(w in feat.lower() for w in _BALD):     # neat hair, silver-white hair" is the same hair
             adj = re.sub(r"\s*hair\s*$", "", str(col["hair"])).strip()
-            if adj:
+            if adj and "hair" not in adj:                         # "hair dyed green" stays a clause of its own
                 feat = feat[:at.start()] + adj + " " + feat[at.start():]
                 hair_said = True
     said = parts[0].lower()                                      # what the race already covers
@@ -625,35 +1147,44 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "") -> Tuple[
             continue
         if not col.get(slot) or slot in said or covered:
             continue
-        if slot == "hair" and (any(w in feat.lower() for w in _BALD)     # no hair color on a bald head, nor
+        if slot == "hair" and (bald or any(w in feat.lower() for w in _BALD)     # no hair color on a bald head, nor
                                or any(w in said for w in _COVERED_HEAD)):   # under a helm the sprite never takes off
             continue
         parts.append(col[slot])
-    took_role = any(w in race_txt.lower() for w in ("ghostly", "translucent", "mist", "darkness"))
+    spirit = any(w in race_txt.lower() for w in ("ghostly", "translucent", "mist", "darkness"))
     #                                                            nothing is wearing armor inside a spirit, and the
     #                                                            sprite's class says only which BAM was borrowed
     bare = {str(x).lower().replace("-", " ") for x in (settings.get("bare_races") or []) if not str(x).startswith("_")}
-    for word, phrase in settings.get("animation_terms", {}).items():
-        if word.startswith("_") or word not in aw or phrase in parts or rkey in bare:
-            continue                                             # a sahuagin's class says which BAM it borrowed,
-        #                                                        not that it is wearing a soldier's kit
-        if word in _ROLES:                                       # PEASANT_WOMAN_FIGHTER is one person, not two:
-            if took_role:                                        # the class is said before the station, so it wins
-                continue
-            took_role = True
-        parts.append(phrase)
-    if feat:
+    beast = rkey in bare                                         # a sahuagin's class says which BAM it borrowed,
+    #                                                              not that it is wearing a soldier's kit
+    dressed = "outfit" in spr                                   # the sprite says what it wears
+    role = "" if spirit or beast or (dressed and not spr.get("outfit")) else find_role(anim, settings)
+    if role:
+        parts.append(str(roles(settings)[role].get("who") or role.lower()))
+    if feat and not (bald and "bald" in " ".join(parts[:3]).lower()):
         parts.append(feat)
-    if col:
-        major, minor = col.get("major", ""), col.get("minor", "")
-        if major:
-            parts.append(f"dressed in {major} with {minor} trim" if minor and minor != major
-                         else f"dressed in {major}")
-        if col.get("metal") and col["metal"] not in ("dark iron",):
-            parts.append(col["metal"] + " fittings")
+    outfits = settings.get("outfit_terms") or {}
+    picked = outfit if outfit in outfits and outfit != BY_ROLE else ""
+    wear = picked or (str(spr.get("outfit") or "") if dressed else
+                      str(roles(settings)[role].get("outfit") or "") if role else "")
+    major, minor = (col.get("major", ""), col.get("minor", "")) if col else ("", "")
+    if not wear and major and not (spirit or beast or dressed):  # no role, but the sprite has colored clothes:
+        wear = "Plain"                                           # a bare color is painted as a modern shirt
+    if wear and (picked or not (spirit or beast)):
+        parts.append(outfit_text(settings, wear, gender, major, minor if minor != major else ""))
+    if col.get("metal") and col["metal"] not in ("dark iron",):
+        parts.append(col["metal"] + " buckles and clasps")       # "fittings" painted plate armor
     look_txt = (settings.get("look_terms") or {}).get(look, "") if look else ""
-    if look_txt:
-        parts.append(look_txt)
+    if gender == "female" and look_txt:                      # the looks were written for men: a woman keeps
+        look_txt = _no_facial_hair(look_txt)                 # the lines and the gray, not the beard
+    mood_txt = str((settings.get("mood_terms") or {}).get(mood, "")) if mood else ""
+    scar_txt = str((settings.get("scar_terms") or {}).get(scars or ("" if child else str(settings.get("scar_default") or "")), ""))
+    grime_txt = str((settings.get("grime_terms") or {}).get(grime, "")) if grime else ""
+    if not manlike and covered:                              # a gnoll's fur, a spectre's mist: no skin to mark
+        scar_txt = grime_txt = ""
+    for t in (mood_txt, grime_txt, scar_txt, look_txt):                           # right after the race, not at the end: Flux
+        if t:                                                # weighs the front of a prompt hardest, and a scar
+            parts.insert(1, t)                               # said last is mostly not painted at all
     return subject, ", ".join(p for p in parts if p)
 
 
@@ -694,6 +1225,29 @@ def baseline_text(style: str = "") -> Optional[Tuple[str, str]]:
     if style in ("", CURRENT_LOOK, str(DEFAULTS["style"])):
         return str(DEFAULTS["prompt"]), str(DEFAULTS["negative_prompt"])
     return None
+
+
+def save_background(settings: dict, style: str, background: str) -> None:
+    """Keep an edited background, and nothing else, in settings.json: in the style when the style has a
+    background of its own, otherwise the one every look shares."""
+    try:
+        raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8")) if SETTINGS_FILE.exists() else {}
+    except (OSError, ValueError) as e:
+        raise GeneratorError(f"generator/settings.json could not be read: {e}") from e
+    if not isinstance(raw, dict):
+        raw = {}
+    look = (settings.get("styles") or {}).get(style)
+    if isinstance(look, dict) and look.get("background"):
+        look["background"] = background
+        rl = raw.setdefault("styles", {}).setdefault(style, {})
+        if isinstance(rl, dict):
+            rl["background"] = background
+    else:
+        raw["background"] = settings["background"] = background
+    try:
+        SETTINGS_FILE.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    except OSError as e:
+        raise GeneratorError(f"generator/settings.json could not be written: {e}") from e
 
 
 def save_style(settings: dict, style: str, prompt: str, negative: str, zoom: float = 0, background: str = "") -> None:
@@ -773,6 +1327,131 @@ def build_prompt(settings: dict, subject: str, character: str, extra: str = "", 
 
 
 # ------------------------------------------------------------------------------------------- engine
+_DECK_LOCK = threading.Lock()
+_FACE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+
+def bank_root(settings: dict) -> Path:
+    """The face bank folder: beside Portrait Scout unless the settings give a full path."""
+    fb = settings.get("face_bank") or {}
+    p = Path(str(fb.get("folder") or "faces"))
+    return p if p.is_absolute() else Path(__file__).resolve().parent.parent / p
+
+
+def bank_strength(settings: dict) -> float:
+    try:
+        return max(0.05, min(1.0, float((settings.get("face_bank") or {}).get("strength", 0.68))))
+    except (TypeError, ValueError):
+        return 0.68
+
+
+def bank_steps(settings: dict) -> int:
+    try:
+        return max(1, min(60, int((settings.get("face_bank") or {}).get("steps", 6))))
+    except (TypeError, ValueError):
+        return 6
+
+
+_CHILDISH = re.compile(r"\b(nine years old|(?<!not )a (?:small )?child\b|boy|girl|kid)\b")   # not "not a child"
+
+
+_NOT_A_FACE = re.compile(r"\b(were\w*|lycanthrope|muzzle|snout|beak|tentacles?|mandibles|hyena|gnoll|lizard\w*|"
+                         r"insect\w*|not of a person|skeleton|undead spirit|mind flayer|beholder|golem|elemental|"
+                         r"slime|ooze|dragon|wyvern|animal|beast|kobold|ghoul|ghast|zombie|mummy|lich|revenant|"
+                         r"wight|corpse|undead|spectre|specter|ghost|wraith)\b")
+#   narrower than _BEASTLY: a fur-trimmed cloak or a raven brooch is still a person's face
+
+
+def bank_fits(text: str, race: str = "") -> bool:
+    """Whether a person's photo is a fair start: not for beasts, monsters, the undead or ghosts, whose faces the
+    words have to make on their own."""
+    low, rc = text.lower(), str(race or "").lower()
+    if rc and (_BEASTLY.search(rc) or _MONSTROUS.search(rc) or _UNDEAD.search(rc) or _NOT_A_FACE.search(rc)):
+        return False
+    if _BANK_LOOK.search(low):                                     # a photo's hair, shirt and clean chin win over
+        return False                                                 # the words: a bald, bearded, bare-chested
+    return not (_NOT_A_FACE.search(low) or _MONSTROUS.search(low) or incorporeal(low))   # beggar came out combed
+
+
+_BANK_LOOK = re.compile(r"\b(bald|shaven head|smooth shaven head|beard|bearded|bare-chested|shirtless|no shirt|"
+                        r"shoulders bare|bare shoulders|ponytail)\b")
+
+
+def bank_pick(settings: dict, race: str = "", text: str = "") -> Optional[Path]:
+    """The next face from the bank for this race: its own folder if there is one, else human (a child only from a
+    child folder). Dealt like cards from a shuffled deck, so no face comes back until all have been used.
+    None when nothing fits."""
+    root = bank_root(settings)
+    if not bank_fits(text, race):
+        return None
+    child = bool(_CHILDISH.search(text.lower())) if text else False
+    race_ = re.sub(r"[^a-z\-]", "", str(race or "").lower())
+    names = ["child"] if child else [n for n in (race_, "human") if n]
+    low = text.lower()
+    sex = "female" if re.search(r"\b(female|woman|girl|lady)\b", low) else \
+          "male" if re.search(r"\b(male|man|boy)\b", low) else random.choice(("male", "female"))
+    skip_ = {str(x).lower() for x in ((settings.get("face_bank") or {}).get("skip") or [])}
+    if race_ in skip_ and not (root / race_).is_dir():
+        return None
+    for nm in dict.fromkeys(names):
+        d = root / nm
+        if (d / sex).is_dir():                                       # a face of the picture's own gender: the
+            d, nm = d / sex, f"{nm}_{sex}"                           # start face's gender is the one painted
+        if not d.is_dir():
+            continue
+        with _DECK_LOCK:
+            deck_f = root / f"deck_{nm}.json"
+            try:
+                deck = [str(x) for x in json.loads(deck_f.read_text(encoding="utf-8"))]
+            except (OSError, ValueError, TypeError):
+                deck = []
+            for _ in range(2):
+                if not deck:                                         # all dealt (or a new bank): shuffle again
+                    deck = [f.name for f in d.iterdir() if f.is_file() and f.suffix.lower() in _FACE_EXT]
+                    random.shuffle(deck)
+                while deck:
+                    name = deck.pop()
+                    if (d / name).is_file():
+                        try:
+                            deck_f.write_text(json.dumps(deck), encoding="utf-8")
+                        except OSError:
+                            pass
+                        return d / name
+    return None
+
+
+def edit_prompt(settings: dict, expression: str = "", change: str = "") -> str:
+    """The words for an edit of a finished picture: its expression changed (a name from edit_terms'
+    expressions, or words), or any change in words, with everything else kept."""
+    et = settings.get("edit_terms") or {}
+    keep = str(et.get("keep") or "Keep everything else exactly the same.")
+    if expression:
+        words = str((et.get("expressions") or {}).get(expression) or expression)
+        return f"Change the person's facial expression to {words}. {keep}"
+    change = change.strip().rstrip(".")
+    return f"{change[:1].upper()}{change[1:]}. {keep}"
+
+
+def fit_init(data: bytes, width: int, height: int) -> bytes:
+    """A start picture made the size being painted (cut to the same shape, not stretched), as PNG. A portrait
+    from the game is far smaller and a little narrower; the bank's faces are already the right size."""
+    try:
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:  # noqa: BLE001 - no PIL, or not a picture: send it as it is
+        return data
+    if im.size == (width, height):
+        return data
+    k = max(width / im.width, height / im.height)
+    im = im.resize((max(width, round(im.width * k)), max(height, round(im.height * k))), Image.LANCZOS)
+    x, y = (im.width - width) // 2, (im.height - height) // 4
+    im = im.crop((x, y, x + width, y + height))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 class Engine:
     """An image generator behind the Automatic1111 / Forge web API. Started on demand, stopped at exit."""
 
@@ -895,12 +1574,23 @@ class Engine:
 
     def generate(self, prompt: str, negative: str, count: int,
                  on_image: Callable[[int, bytes], None] = lambda i, b: None,
-                 seed: Optional[int] = None) -> List[bytes]:
-        """`count` candidate images (PNG bytes), one request each so they can be shown as they arrive."""
+                 seed: Optional[int] = None, init: Optional[bytes] = None,
+                 strength: float = 0.77, steps: Optional[int] = None) -> List[bytes]:
+        """`count` candidate images (PNG bytes), one request each so they can be shown as they arrive. With `init`
+        (an image's bytes) each one starts from that picture instead of from noise (img2img), `strength` being how
+        far it may move away from it."""
         self.start()
         self.canceled.clear()
         payload = {k: v for k, v in self.s.get("payload", {}).items() if not k.startswith("_")}
         payload.update(prompt=prompt, negative_prompt=negative, n_iter=1)
+        route = "/sdapi/v1/txt2img"
+        if init:
+            payload.update(init_images=[base64.b64encode(fit_init(init, int(payload.get("width") or 656),
+                                                                   int(payload.get("height") or 1024))).decode("ascii")],
+                           denoising_strength=max(0.05, min(1.0, float(strength))), resize_mode=0)
+            route = "/sdapi/v1/img2img"
+            if steps:
+                payload["steps"] = int(steps)
         base = int(seed) if seed is not None else -1                 # the creature's own seed, so a re-run matches
         out: List[bytes] = []
         count = max(1, int(count))
@@ -933,7 +1623,7 @@ class Engine:
                         self.progress(i / count, f"Candidate {i + 1} of {count}: loading the model... {int(time.time() - began)} s")
             threading.Thread(target=watch, daemon=True).start()
             try:
-                res = self._call("/sdapi/v1/txt2img", payload, timeout=float(self.e.get("image_timeout_seconds", 900)))
+                res = self._call(route, payload, timeout=float(self.e.get("image_timeout_seconds", 900)))
             except urllib.error.HTTPError as e:
                 stop.set()
                 detail = e.read().decode("utf-8", "replace")[:400]
@@ -1047,6 +1737,11 @@ GLOW_TINTS = {                           # name: (the hot middle, the light it t
     "Cold white": ((255, 255, 255), (198, 220, 236)),
     "Shadow": ((8, 6, 10), (26, 20, 30)),                        # the other way: eye sockets as pits
 }
+PAINT_TINTS = {                          # face paint: woad, ochre, ash - what a tribe has to hand
+    "Woad blue": (44, 72, 142), "Red ochre": (152, 52, 32), "Black": (26, 23, 23), "White": (226, 220, 204),
+    "Green": (52, 98, 52), "Yellow ochre": (192, 150, 62), "Ash": (150, 146, 140),
+}
+PAINT_STYLES = ("None", "Cheek stripes", "Eye band", "Slash", "Center line", "Dots", "Chin lines")
 BLOOD_TINTS = {                          # name: (deep in the cut, raw at its edge, the bruise around it)
     "Blood": ((104, 18, 16), (178, 52, 40), (96, 44, 74)),
     "Dark blood": ((62, 12, 12), (120, 30, 26), (70, 34, 58)),
@@ -1182,6 +1877,51 @@ def warp_image(data: bytes, points: Optional[List[Tuple[float, float]]] = None, 
         return data
 
 
+def _scar_path(cx: float, cy: float, ang: float, half: float, rnd: object, bend: float = 0.10,
+               rough: float = 0.025, n: int = 28) -> Tuple[List[Tuple[float, float, float]], Tuple[float, float]]:
+    """The line a scar or a cut follows: never ruler-straight - a slight bow one way, and a little wander along
+    it, the way a blade drags over a cheekbone. Points are (x, y, t) with t running -1 .. 1 along it."""
+    import math
+    dx, dy = math.cos(ang), math.sin(ang)
+    nx, ny = -dy, dx
+    k = (1 if rnd.random() < 0.5 else -1) * bend * rnd.uniform(0.5, 1.0)        # type: ignore[attr-defined]
+    pts, wob = [], 0.0
+    for i in range(n + 1):
+        t = -1.0 + 2.0 * i / n
+        wob = wob * 0.6 + rnd.uniform(-1.0, 1.0) * rough                          # type: ignore[attr-defined]
+        off = (k * (1.0 - t * t) + wob) * half
+        pts.append((cx + dx * t * half + nx * off, cy + dy * t * half + ny * off, t))
+    return pts, (nx, ny)
+
+
+def _taper(draw: object, pts: List[Tuple[float, float, float]], width: float, fill: int = 255,
+           shift: Tuple[float, float] = (0.0, 0.0), ends: float = 0.25) -> None:
+    """Draw along a path, full width in the middle and thinning to the ends."""
+    sx, sy = shift
+    for (x0, y0, t0), (x1, y1, t1) in zip(pts, pts[1:]):
+        tm = (t0 + t1) / 2
+        wd = max(1.0, width * (ends + (1.0 - ends) * max(0.0, 1.0 - tm * tm) ** 0.5))
+        draw.line([x0 + sx, y0 + sy, x1 + sx, y1 + sy], fill=fill, width=max(1, int(round(wd))))   # type: ignore[attr-defined]
+        r = wd / 2
+        draw.ellipse([x1 + sx - r, y1 + sy - r, x1 + sx + r, y1 + sy + r], fill=fill)            # type: ignore[attr-defined]
+
+
+def _skin_near(img: object, cx: float, cy: float, rad: float) -> Tuple[int, int, int]:
+    """The skin's color around a point: the lighter part of what is there, so a brow, a lash or a shadow the
+    point happens to land on does not decide it."""
+    w, h = img.size                                                                   # type: ignore[attr-defined]
+    r = max(3, int(rad))
+    box = (int(max(0, cx - r)), int(max(0, cy - r)), int(min(w, cx + r + 1)), int(min(h, cy + r + 1)))
+    px = list(img.crop(box).getdata()) or [(150, 120, 100)]                           # type: ignore[attr-defined]
+    px.sort(key=lambda c: c[0] * 3 + c[1] * 6 + c[2])
+    mid = px[len(px) // 2: max(len(px) // 2 + 1, len(px) * 85 // 100)]                # the lighter half, not the glare
+    return tuple(int(sum(c[i] for c in mid) / len(mid)) for i in range(3))            # type: ignore[return-value]
+
+
+def _mix(a: Tuple[int, int, int], b: Tuple[int, int, int], k: float) -> Tuple[int, int, int]:
+    return tuple(int(round(x + (y - x) * k)) for x, y in zip(a, b))                  # type: ignore[return-value]
+
+
 def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.3, catch: float = 0.6,
              light: float = 0.0, lip_hue: float = 6, lip_amount: float = 0.0, lip_sat: float = 1.7,
              spots: Optional[List[Tuple[float, float]]] = None, eye_hue: float = 35, eye_amount: float = 0.0,
@@ -1194,7 +1934,11 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
              speckle_size: float = 0.16, speckle_depth: float = 0.6,   # -1 lighter than the skin .. +1 darker
              speckle_amount: float = 0.75,                       # and how strongly they are laid on
              glow: str = "None", glow_tint: str = "Fire", glow_amount: float = 0.0,
-             glow_size: float = 0.035, glow_spill: float = 0.5, glow_round: float = 0.42) -> bytes:
+             glow_size: float = 0.035, glow_spill: float = 0.5, glow_round: float = 0.42,
+             soot: float = 0.0, mud: float = 0.0, spatter: float = 0.0, sweat: float = 0.0,
+             dirt_size: float = 1.0, paint: str = "None", paint_color: str = "Woad blue",
+             paint_amount: float = 0.0, paint_size: float = 1.0,
+             paint_eyes: Optional[List[Tuple[float, float]]] = None) -> bytes:
     """Work on the skin of a finished picture: its color, how dark it is, and the lips on their own.
 
     The engine paints a person it recognizes whatever the description says, so this is done afterwards. Skin is
@@ -1207,7 +1951,8 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
     lights = spots if (glow in ("Glow", "Flame") and glow_amount > 0) else None
     if (amount <= 0 and lip_amount <= 0 and abs(light) < 0.01 and grime <= 0 and creases <= 0 and speckles <= 0
             and not (scar_points and (scars > 0 or wounds > 0)) and not (spots and eye_amount > 0)
-            and not lights):
+            and not lights and soot <= 0 and mud <= 0 and spatter <= 0 and sweat <= 0
+            and not (paint != "None" and paint_amount > 0)):
         return data
     try:
         import io
@@ -1284,9 +2029,24 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
                 px = max(1, int(rad * 0.22))
                 patch = im.crop((int(cx - px), int(cy - px), int(cx + px + 1), int(cy + px + 1))).convert("HSV")
                 hs, ss, vs = (sum(c[i] for c in patch.getdata()) / max(1, len(patch.getdata())) for i in range(3))
+                # A click in the middle of an eye lands on the pupil, which is black: matching that took the
+                # pupil and the lashes and left the iris alone. So the iris is looked for around the click too -
+                # the colored, middling-bright pixels - and used whenever the middle is that dark.
+                pr_ = max(2, int(rad * 0.6))
+                near_ = im.crop((int(cx - pr_), int(cy - pr_), int(cx + pr_ + 1), int(cy + pr_ + 1))).convert("HSV")
+                col_ = [c for c in near_.getdata() if c[1] >= 45 and 40 <= c[2] <= 235]
+                if vs < 45 and len(col_) >= 8:
+                    import math as _m
+                    ang_ = [c[0] / 256 * 2 * _m.pi for c in col_]   # hue is a circle: average it as one
+                    hs = (_m.degrees(_m.atan2(sum(map(_m.sin, ang_)), sum(map(_m.cos, ang_)))) % 360) / 360 * 256
+                    ss = sorted(c[1] for c in col_)[len(col_) // 2]
+                    vs = sorted(c[2] for c in col_)[len(col_) // 2]
                 near_v = vc.point(lambda x: 255 if abs(x - vs) <= 62 else 0)
                 near_h = hc.point(lambda x: 255 if abs(((x - hs + 128) % 256) - 128) <= 40 else 0)
                 gray_ = sc.point(lambda x: 255 if x < 36 else 0)     # a gray iris has no hue worth matching
+                if ss >= 60:                                     # a colored iris is far more colored than the
+                    near_h = ImageChops.multiply(near_h, sc.point(lambda x: 255 if x >= ss * 0.6 else 0))
+                #                                                  lid beside it, so a pale warm lid drops out
                 iris = ImageChops.multiply(ImageChops.multiply(ring, near_v),
                                            ImageChops.lighter(near_h, gray_ if ss < 60 else gray_.point(lambda x: 0)))
                 iris = iris.filter(ImageFilter.GaussianBlur(max(1, int(rad * 0.12))))   # no hard speckled edges
@@ -1334,97 +2094,93 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
             lay = lay.filter(ImageFilter.GaussianBlur(max(1, int(w / 700))))
             out = Image.composite(out.point(lambda x: int(x * 0.40)), out, lay.point(lambda x: min(255, int(x * a_c))))
         if scars > 0 and scar_points:
-            # A scar is painted, not shaded: darkening what is already there only shows on pale skin, and
-            # these portraits are drow, dragons and green hags as often as farmhands. So the skin's own color
-            # is read where the scar goes, and the groove, the healed ridge and the light it catches are mixed
-            # from it. The swell under the scar comes from warp_image, called before this.
+            # A healed scar, the way the game's own portraits paint one: a pale, slightly pink line, thinning to
+            # nothing at both ends, bowed a little and never ruler-straight, with a dark edge on the side away
+            # from the light and a thin glint on the other. Its colors are mixed from the skin it crosses, so it
+            # works on a drow or a green hag as well as a farmhand. The swell under it comes from warp_image.
             import math as _m
             import random as _r
             a_s = min(1.0, scars)
             rs = _r.Random(w * 104729 + h)
             far = min(0.40, max(0.05, reach))
-            lw_s = max(1, round(w / 200 * (0.6 + far * 2.4) * max(0.4, line)))   # a longer scar is heavier too
-            b_g, b_p = max(1, int(w / 900)), max(1, int(w / 700))
+            lw_s = max(1.0, w / 200 * (0.6 + far * 2.4) * max(0.4, line))     # a longer scar is heavier too
             lit, rim_s = max(0.0, min(1.0, ridge)), max(0.0, min(1.0, edge))
-            grow = 5 if lw_s > 1 else 3                          # how far the dark line reaches outside the groove
+            pucker = Image.effect_noise(im.size, 60).filter(ImageFilter.GaussianBlur(max(1, w // 300)))
+            pucker = ImageChops.multiply(pucker.point(lambda x: max(0, min(255, 90 + x))),   # healed skin is
+                                         Image.effect_noise((max(4, w // 40), max(4, h // 40)), 90)   # never even,
+                                         .resize((w, h), Image.BICUBIC).point(lambda x: min(255, 70 + x)))  # nor whole
             for fx, fy in scar_points[:8]:
                 cx, cy = fx * w, fy * h
                 ang = _m.radians(angle + rs.uniform(-8, 8) if angle is not None else   # a set angle, give or take
                                  (rs.uniform(-80, -35) if rs.random() < 0.7 else rs.uniform(35, 80)))
                 half = w * far * rs.uniform(0.30, 0.50)          # Reach is how long it runs
-                dx, dy = _m.cos(ang) * half, _m.sin(ang) * half
-                near = max(2, lw_s * 2)                          # the skin right where it was clicked, not the
-                x0, y0 = int(max(0, min(cx - near, w - 2))), int(max(0, min(cy - near, h - 2)))   # whole sweep of
-                x1, y1 = int(min(w, max(x0 + 1, cx + near))), int(min(h, max(y0 + 1, cy + near)))  # the line, which
-                skin = out.crop((x0, y0, x1, y1)).resize((1, 1), Image.BOX).getpixel((0, 0))       # can run off a face
-                groove, heal = _shade(skin, 0.42, 0.75), _shade(skin, 1.14, 0.55, 18)
-                shine = _shade(skin, 1.45, 0.30, 46)
-                ink, pale, lip = (Image.new("L", im.size, 0) for _ in range(3))
-                di, dp, dl = ImageDraw.Draw(ink), ImageDraw.Draw(pale), ImageDraw.Draw(lip)
-                di.line([cx - dx, cy - dy, cx + dx, cy + dy], fill=255, width=lw_s + 1)
-                dp.line([cx - dx + lw_s, cy - dy, cx + dx + lw_s, cy + dy], fill=255, width=lw_s)
-                dl.line([cx - dx - lw_s * 0.8, cy - dy - lw_s * 0.6,  # the lit edge, on the far side of the groove
-                         cx + dx - lw_s * 0.8, cy + dy - lw_s * 0.6], fill=255, width=max(1, lw_s - 1))
-                ink = ink.filter(ImageFilter.GaussianBlur(b_g))
-                pale = pale.filter(ImageFilter.GaussianBlur(b_p))
-                lip = lip.filter(ImageFilter.GaussianBlur(max(1, int(w / 1400))))
-                out = Image.composite(Image.new("RGB", im.size, groove), out, ink.point(lambda x: int(x * a_s)))
-                out = Image.composite(Image.new("RGB", im.size, heal), out, pale.point(lambda x: int(x * a_s * 0.8)))
-                if rim_s > 0:                                    # the dark line the shipped portraits draw round
-                    ring = ImageChops.subtract(ink.filter(ImageFilter.MaxFilter(grow)), ink).filter(
-                        ImageFilter.GaussianBlur(1))             # a feature, so it sits in the face, not on it
-                    out = Image.composite(Image.new("RGB", im.size, _shade(skin, 0.22, 0.55)), out,
-                                          ring.point(lambda x: int(x * a_s * rim_s * 0.55)))
+                pts, (nx, ny) = _scar_path(cx, cy, ang, half, rs, 0.10, 0.03)
+                skin = _skin_near(out, cx, cy, half * 0.5)        # the skin it crosses, not the brow it may cross
+                heal = _mix(_shade(skin, 1.20, 0.80, 14), (222, 170, 158), 0.12)   # paler, a touch of pink
+                groove, shine = _shade(skin, 0.40, 0.85), _shade(skin, 1.5, 0.30, 50)
+                core, dark, glint = (Image.new("L", im.size, 0) for _ in range(3))
+                _taper(ImageDraw.Draw(core), pts, lw_s * 1.3)
+                _taper(ImageDraw.Draw(dark), pts, lw_s * 1.3 + 1, shift=(nx * lw_s * 0.5, ny * lw_s * 0.5))
+                _taper(ImageDraw.Draw(glint), pts, max(1.0, lw_s * 0.45), shift=(-nx * lw_s * 0.4, -ny * lw_s * 0.4),
+                       ends=0.1)
+                dark = ImageChops.subtract(dark, core).filter(ImageFilter.GaussianBlur(max(0.8, lw_s * 0.35)))
+                core = ImageChops.multiply(core.filter(ImageFilter.GaussianBlur(max(0.7, lw_s * 0.30))), pucker)
+                glint = glint.filter(ImageFilter.GaussianBlur(max(0.6, lw_s * 0.25)))
+                out = Image.composite(Image.new("RGB", im.size, groove), out,
+                                      dark.point(lambda x: int(x * a_s * (0.25 + 0.45 * rim_s))))
+                out = Image.composite(Image.new("RGB", im.size, heal), out, core.point(lambda x: int(x * a_s * 0.65)))
                 if lit > 0:
                     out = Image.composite(Image.new("RGB", im.size, shine), out,
-                                          lip.point(lambda x: int(x * a_s * lit)))
+                                          glint.point(lambda x: int(x * a_s * lit * 0.6)))
         if wounds > 0 and scar_points:
-            # A wound is not a scar: raw and red rather than pale and healed, with the skin around it bruised.
+            # A fresh wound: a ragged dark cut with raw red lips, the skin round it swollen and reddened along
+            # the cut (not a round bruise stamped on), and a little of it run down the face.
             import math as _mw
             import random as _rw
             a_w = min(1.0, wounds)
             rw = _rw.Random(w * 15485863 + h)
-            bruise, cut, wet = (Image.new("L", im.size, 0) for _ in range(3))
-            db, dc, dw = (ImageDraw.Draw(x) for x in (bruise, cut, wet))
             far = min(0.40, max(0.05, reach))                    # Reach is how long the cut runs
-            lw_w = max(1, round(w / 170 * (0.6 + far * 2.4) * max(0.4, line)))
+            lw_w = max(1.0, w / 170 * (0.6 + far * 2.4) * max(0.4, line))
+            deep, raw, bruised = BLOOD_TINTS.get(blood) or BLOOD_TINTS["Blood"]
             for fx, fy in scar_points[:8]:
                 cx, cy = fx * w, fy * h
-                rr = w * far * 0.5
-                db.ellipse([cx - rr, cy - rr * 0.8, cx + rr, cy + rr * 0.8], fill=255)
                 ang = _mw.radians(angle + rw.uniform(-8, 8) if angle is not None else
                                   (rw.uniform(-75, -30) if rw.random() < 0.6 else rw.uniform(30, 75)))
                 half = w * far * rw.uniform(0.24, 0.44)
-                dx, dy = _mw.cos(ang) * half, _mw.sin(ang) * half
-                dc.line([cx - dx, cy - dy, cx + dx, cy + dy], fill=255, width=lw_w + 1)
-                dw.line([cx - dx * 0.8, cy - dy * 0.8 + lw_w, cx + dx * 0.8, cy + dy * 0.8 + lw_w],
-                        fill=255, width=max(1, lw_w - 1))
-                for _d in range(1 + int(3 * a_w)):               # a little of it has run
-                    sx = cx + rw.uniform(-half * 0.7, half * 0.7)
-                    sy = cy + rw.uniform(-half * 0.3, half * 0.3)
-                    dc.line([sx, sy, sx + rw.uniform(-2, 2), sy + w * far * rw.uniform(0.12, 0.32)],
-                            fill=200, width=max(1, lw_w - 1))
-            rim = ImageChops.subtract(cut.filter(ImageFilter.MaxFilter(5 if lw_w > 1 else 3)), cut)   # just outside
-            rim = ImageChops.lighter(rim, ImageChops.subtract(wet.filter(ImageFilter.MaxFilter(3)), wet))
-            bruise = bruise.filter(ImageFilter.GaussianBlur(max(2, int(w / 60))))
-            cut = cut.filter(ImageFilter.GaussianBlur(max(1, int(w / 900))))
-            wet = wet.filter(ImageFilter.GaussianBlur(max(1, int(w / 700))))
-            deep, raw, bruised = BLOOD_TINTS.get(blood) or BLOOD_TINTS["Blood"]
-            out = Image.composite(Image.new("RGB", im.size, bruised), out,           # the bruise around it
-                                  bruise.point(lambda x: int(x * a_w * 0.55)))
-            out = Image.composite(Image.new("RGB", im.size, deep), out,              # the cut itself
-                                  cut.point(lambda x: int(x * a_w)))
-            out = Image.composite(Image.new("RGB", im.size, raw), out,               # raw at its edge
-                                  wet.point(lambda x: int(x * a_w * 0.75)))
-            if edge > 0:                                                             # drawn round, like the shipped
-                rim_w = max(0.0, min(1.0, edge))                                     # portraits draw every feature
-                rim = rim.filter(ImageFilter.GaussianBlur(1))
-                out = Image.composite(Image.new("RGB", im.size, _shade(deep, 0.26, 0.70)), out,
-                                      rim.point(lambda x: int(x * a_w * rim_w * 0.95)))
-            if ridge > 0:                                                            # wet, so it catches the light
-                lit_w = max(0.0, min(1.0, ridge))
-                out = Image.composite(Image.new("RGB", im.size, _shade(raw, 1.5, 0.35, 60)), out,
-                                      wet.point(lambda x: int(x * a_w * lit_w * 0.45)))
+                pts, (nx, ny) = _scar_path(cx, cy, ang, half, rw, 0.08, 0.025)
+                skin = _skin_near(out, cx, cy, half * 0.5)
+                swell, cut, lips, drip = (Image.new("L", im.size, 0) for _ in range(4))
+                _taper(ImageDraw.Draw(swell), pts, lw_w * 7, ends=0.45)
+                _taper(ImageDraw.Draw(lips), pts, lw_w * 2.6)
+                _taper(ImageDraw.Draw(cut), pts, lw_w * 1.4, ends=0.15)
+                dd_ = ImageDraw.Draw(drip)
+                for _d in range(1 + int(3 * a_w)):               # a little of it has run, downwards
+                    px_, py_, _t = pts[rw.randrange(len(pts) // 5, len(pts) - len(pts) // 5)]
+                    ln_ = w * far * rw.uniform(0.10, 0.30)
+                    wd_ = max(1.0, lw_w * rw.uniform(0.5, 0.9))
+                    run_ = [(px_ + rw.uniform(-1, 1) * i_ * 0.4, py_ + ln_ * i_ / 8, -1 + i_ / 8) for i_ in range(9)]
+                    _taper(dd_, run_, wd_, ends=0.5)
+                    dd_.ellipse([run_[-1][0] - wd_, run_[-1][1] - wd_ * 0.6, run_[-1][0] + wd_,
+                                 run_[-1][1] + wd_ * 1.2], fill=255)  # the bead at the end
+                swell = swell.filter(ImageFilter.GaussianBlur(max(2, lw_w * 2.5)))
+                lips = ImageChops.subtract(lips, cut).filter(ImageFilter.GaussianBlur(max(0.8, lw_w * 0.4)))
+                cut = cut.filter(ImageFilter.GaussianBlur(max(0.6, lw_w * 0.25)))
+                drip = drip.filter(ImageFilter.GaussianBlur(max(0.6, lw_w * 0.2)))
+                inflamed = _mix(_shade(skin, 0.92, 1.1), raw, 0.38)
+                out = Image.composite(Image.new("RGB", im.size, _mix(inflamed, bruised, 0.25)), out,
+                                      swell.point(lambda x: int(x * a_w * 0.65)))
+                out = Image.composite(Image.new("RGB", im.size, _mix(raw, deep, 0.25)), out,
+                                      lips.point(lambda x: int(x * a_w * 0.85)))
+                out = Image.composite(Image.new("RGB", im.size, deep), out, cut.point(lambda x: int(x * a_w)))
+                out = Image.composite(Image.new("RGB", im.size, _mix(deep, raw, 0.35)), out,
+                                      drip.point(lambda x: int(x * a_w * 0.9)))
+                if ridge > 0:                                    # wet, so it catches the light
+                    glint = Image.new("L", im.size, 0)
+                    _taper(ImageDraw.Draw(glint), pts, max(1.0, lw_w * 0.35),
+                           shift=(-nx * lw_w * 0.6, -ny * lw_w * 0.6), ends=0.05)
+                    glint = glint.filter(ImageFilter.GaussianBlur(0.8))
+                    out = Image.composite(Image.new("RGB", im.size, _shade(raw, 1.5, 0.35, 60)), out,
+                                          glint.point(lambda x: int(x * a_w * min(1.0, ridge) * 0.5)))
         if speckles > 0:
             # Freckles, a gith's markings, the spatter on a pox-scarred face. The engine paints none of them:
             # at this size a freckle is two pixels, and two pixels never survive the model's idea of a face.
@@ -1453,6 +2209,8 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
             for _k in range(int(30 + 260 * a_p)):
                 fx, fy, rr = where[rp.randrange(len(where))]
                 ox, oy = rp.gauss(0, rr * 0.5) * w, rp.gauss(0, rr * 0.42) * w
+                if (ox * ox + (oy / 0.84) ** 2) ** 0.5 > rr * w:   # inside the ring that was marked, never past it
+                    continue
                 cx, cy = fx * w + ox, fy * h + oy
                 r_ = max(0.6, w * rp.uniform(0.0030, 0.0080))
                 dd.ellipse([cx - r_, cy - r_ * 0.9, cx + r_, cy + r_ * 0.9], fill=rp.randrange(150, 256))
@@ -1478,18 +2236,155 @@ def touch_up(data: bytes, hue: float = 110, amount: float = 0.0, sat: float = 1.
                                             for c in out.split()])
             lay = max(0.0, min(1.0, speckle_amount))             # Strength does this and nothing else
             out = Image.composite(shade, out, dots.point(lambda x: int(x * lay)))
+        try:
+            _paint_ok = paint != "None" and paint_amount > 0 and bool(paint_eyes) and len(paint_eyes) >= 2   # type: ignore[arg-type]
+        except TypeError:
+            _paint_ok = False
+        if _paint_ok:
+            # Face paint, laid on like paint: following the face it is on (placed from the two eyes - marked, or
+            # where these portraits put them), dry-brushed at the edges, and mixed so the skin's texture still
+            # shows through. It stays off the whites of the eyes and out of the hair.
+            import random as _rq
+            a_q = min(1.0, paint_amount)
+            rq = _rq.Random(w * 7907 + h * 31)
+            ey = sorted(paint_eyes[:2])                          # type: ignore[index]  where it goes: from the eyes
+            (lx, ly), (rx, ry) = (ey[0][0] * w, ey[0][1] * h), (ey[1][0] * w, ey[1][1] * h)
+            d = max(8.0, ((rx - lx) ** 2 + (ry - ly) ** 2) ** 0.5)
+            mx, my = (lx + rx) / 2, (ly + ry) / 2
+            k = max(0.5, min(2.0, paint_size))
+            m = Image.new("L", im.size, 0)
+            dm = ImageDraw.Draw(m)
+
+            def bar(x0: float, y0: float, x1: float, y1: float, wd: float) -> None:
+                _taper(dm, [(x0 + (x1 - x0) * i / 10, y0 + (y1 - y0) * i / 10, -1 + i / 5) for i in range(11)],
+                       wd * k, ends=0.55)
+            if paint == "Cheek stripes":
+                for ex, sd in ((lx, -1), (rx, 1)):
+                    for i in range(3):
+                        yy = my + d * (0.42 + 0.20 * i * k)
+                        bar(ex + sd * d * 0.30, yy, ex - sd * d * 0.12, yy + d * 0.05, d * 0.075)
+            elif paint == "Eye band":
+                pts = [(lx - d * 0.62, my - d * 0.10), (mx, my - d * 0.26 * k), (rx + d * 0.62, my - d * 0.10),
+                       (rx + d * 0.55, my + d * 0.22 * k), (mx, my + d * 0.20 * k), (lx - d * 0.55, my + d * 0.22 * k)]
+                dm.polygon(pts, fill=255)
+            elif paint == "Slash":
+                bar(lx - d * 0.45, my - d * 0.85, rx + d * 0.05, my + d * 1.25, d * 0.16)
+            elif paint == "Center line":
+                bar(mx, my - d * 1.05, mx, my + d * 1.95, d * 0.13)
+            elif paint == "Dots":
+                for ex, sd in ((lx, -1), (rx, 1)):
+                    for i in range(5):
+                        cx_, cy_ = ex + sd * d * (-0.22 + 0.13 * i), my + d * (0.38 + 0.05 * i * i * 0.3)
+                        r_ = d * 0.045 * k
+                        dm.ellipse([cx_ - r_, cy_ - r_, cx_ + r_, cy_ + r_], fill=255)
+            elif paint == "Chin lines":
+                for i in (-1, 0, 1):
+                    bar(mx + i * d * 0.16, my + d * 1.55, mx + i * d * 0.18, my + d * 2.10 * min(1.15, k), d * 0.07)
+            brush = Image.effect_noise(im.size, 70).filter(ImageFilter.GaussianBlur(max(1, w // 350)))
+            ragged = ImageChops.multiply(m.filter(ImageFilter.GaussianBlur(max(1.5, d * 0.035))),
+                                         brush.point(lambda x: max(0, min(255, (x - 40) * 2))))
+            ragged = ragged.point(lambda x: 255 if x > 110 else int(x * 2.2))  # solid inside, broken at the edge
+            ragged = ImageChops.multiply(ragged.filter(ImageFilter.GaussianBlur(0.8)),
+                                         vc.point(lambda x: 255 if 16 <= x <= 238 else 0)   # not eye-whites or
+                                         .filter(ImageFilter.GaussianBlur(1)))               # dark hair and lashes
+            tint = PAINT_TINTS.get(paint_color) or PAINT_TINTS["Woad blue"]
+            flat = Image.new("RGB", im.size, tint)
+            if sum(tint) > 500:                                  # white and ash: a chalky layer over the skin
+                painted = Image.blend(out, flat, 0.58)
+            else:                                                # dark paint: stained into it, texture kept
+                painted = Image.blend(ImageChops.multiply(out, flat.point(lambda x: min(255, x + 70))), flat, 0.45)
+            out = Image.composite(painted, out, ragged.point(lambda x: int(x * a_q * 0.92)))
+        if soot > 0 or mud > 0 or spatter > 0 or sweat > 0:
+            # Dirt of different kinds, each on the skin only: soot smeared as if wiped with a hand, mud in
+            # cracked patches, dried blood flecked over it, and the shine of sweat.
+            import random as _rd
+            rd = _rd.Random(w * 4111 + h * 17)
+            on_skin = face.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(max(1, w // 90)))
+            ds = max(0.4, min(2.5, dirt_size))
+
+            def blots(sx: int, sy: int, sharp: float, lo: int, soft: int = 160) -> Image.Image:
+                n1 = Image.effect_noise((max(4, int(w / sx / ds)), max(4, int(h / sy / ds))), 90).resize(
+                    (w, h), Image.BICUBIC)
+                n2 = Image.effect_noise((max(6, int(w / 5 / ds)), max(6, int(h / 5 / ds))), 70).resize(
+                    (w, h), Image.BICUBIC)
+                b_ = ImageChops.multiply(n1, n2).filter(ImageFilter.GaussianBlur(max(1, w // soft)))
+                return ImageChops.multiply(b_.point(lambda x: max(0, min(255, int((x - lo) * sharp)))), on_skin)
+            if soot > 0:                                         # wiped: smears longer than they are tall
+                a_ = min(1.0, soot)
+                sm = blots(6, 22, 3.4 * a_, 18, 55)
+                dark_ = Image.merge("RGB", [c.point(lambda x: int(x * 0.30)) for c in out.split()])
+                out = Image.composite(Image.blend(dark_, Image.new("RGB", im.size, (38, 36, 36)), 0.4), out,
+                                      sm.point(lambda x: int(x * 0.85)))
+            if mud > 0:                                          # caked: harder edges, earth brown
+                a_ = min(1.0, mud)
+                sm = blots(10, 12, 3.6 * a_, 52)
+                crack = Image.effect_noise(im.size, 60).point(lambda x: 0 if x > 200 else 255)
+                sm = ImageChops.multiply(sm, crack)
+                mudc = Image.blend(Image.merge("RGB", [c.point(lambda x: int(x * 0.45)) for c in out.split()]),
+                                   Image.new("RGB", im.size, (96, 70, 44)), 0.55)
+                out = Image.composite(mudc, out, sm.point(lambda x: int(x * 0.9)))
+            if spatter > 0:                                      # dried blood: flecks round a few centres
+                a_ = min(1.0, spatter)
+                fl = Image.new("L", im.size, 0)
+                df = ImageDraw.Draw(fl)
+                bb_ = on_skin.point(lambda x: 255 if x > 128 else 0).getbbox() or (0, 0, w, h)
+                for _c in range(2 + int(2 * a_)):
+                    cx_ = rd.uniform(bb_[0] + (bb_[2] - bb_[0]) * 0.25, bb_[0] + (bb_[2] - bb_[0]) * 0.75)
+                    cy_ = rd.uniform(h * 0.30, h * 0.58)
+                    spread = w * 0.07 * ds
+                    for _k in range(int(25 + 70 * a_)):
+                        ox, oy = rd.gauss(0, spread), rd.gauss(0, spread * 0.8)
+                        r_ = max(0.6, w * rd.uniform(0.0015, 0.006) * (1.6 if rd.random() < 0.1 else 1.0))
+                        if rd.random() < 0.15:                   # a drop that flew: drawn out one way
+                            ln_ = r_ * rd.uniform(2, 5)
+                            df.line([cx_ + ox, cy_ + oy, cx_ + ox + ox / max(1, abs(ox)) * ln_,
+                                     cy_ + oy + oy / max(1, abs(oy)) * ln_ * 0.6], fill=230, width=max(1, int(r_)))
+                        df.ellipse([cx_ + ox - r_, cy_ + oy - r_, cx_ + ox + r_, cy_ + oy + r_], fill=255)
+                fl = ImageChops.multiply(fl.filter(ImageFilter.GaussianBlur(0.6)), on_skin)
+                dried = Image.blend(Image.merge("RGB", [c.point(lambda x: int(x * 0.5)) for c in out.split()]),
+                                    Image.new("RGB", im.size, (92, 22, 16)), 0.7)
+                out = Image.composite(dried, out, fl.point(lambda x: int(x * min(1.0, 0.45 + 0.55 * a_))))
+            if sweat > 0:                                        # beads and a sheen where the light falls
+                a_ = min(1.0, sweat)
+                bead = Image.new("L", im.size, 0)
+                db_ = ImageDraw.Draw(bead)
+                for _k in range(int(30 + 110 * a_)):
+                    x_, y_ = rd.uniform(0, w), rd.uniform(h * 0.15, h * 0.62)
+                    r_ = w * rd.uniform(0.0008, 0.0022)
+                    db_.ellipse([x_ - r_, y_ - r_, x_ + r_, y_ + r_], fill=255)
+                lightish = out.convert("L").point(lambda x: 255 if x > 95 else int(x * 2.4))  # sweat shines in light
+                bead = ImageChops.multiply(ImageChops.multiply(bead.filter(ImageFilter.GaussianBlur(0.7)), on_skin),
+                                           lightish)
+                sheen = ImageChops.multiply(blots(8, 8, 2.0, 40), lightish)
+                out = ImageChops.screen(out, Image.composite(Image.new("RGB", im.size, (120, 110, 100)),
+                                                             Image.new("RGB", im.size, (0, 0, 0)),
+                                                             sheen.point(lambda x: int(x * a_ * 0.45))))
+                out = Image.composite(Image.new("RGB", im.size, (250, 246, 236)), out,
+                                      bead.point(lambda x: int(x * a_ * 0.55)))
         if grime > 0:
             # The engine washes everybody: a peasant comes out as clean as a prince, and no wording stops it.
-            # Dirt is a thing done to a picture - soft smudges where sweat and soot gather, and a little grain
-            # over the whole of it to break up skin the engine has airbrushed.
+            # Dirt is laid on the skin only - not the hair, the clothes or the background - in blotches where
+            # it gathers, mixed from the skin's own color made darker and browner, with fine grit over it.
+            from PIL import ImageStat
             a_g = min(1.0, grime)
-            big = Image.effect_noise((max(8, w // 14), max(8, h // 14)), 90).resize((w, h), Image.BICUBIC)
-            mid = Image.effect_noise((max(8, w // 5), max(8, h // 5)), 70).resize((w, h), Image.BICUBIC)
-            blot = ImageChops.multiply(big, mid).filter(ImageFilter.GaussianBlur(max(1, w // 120)))
-            smear = blot.point(lambda x: max(0, min(255, int((x - 96) * 2.4 * a_g))))
-            out = Image.composite(Image.new("RGB", im.size, (74, 58, 40)), out, smear)
+            on_skin = face.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(max(1, w // 90)))
+            avg = tuple(int(c) for c in ImageStat.Stat(out, face).mean[:3]) if face.getbbox() else (150, 120, 100)
+            dirt = _mix(_shade(avg, 0.42, 0.75), (70, 54, 38), 0.5)            # type: ignore[arg-type]
+            big = Image.effect_noise((max(8, w // 12), max(8, h // 12)), 90).resize((w, h), Image.BICUBIC)
+            mid = Image.effect_noise((max(8, w // 4), max(8, h // 4)), 70).resize((w, h), Image.BICUBIC)
+            blot = ImageChops.multiply(big, mid).filter(ImageFilter.GaussianBlur(max(1, w // 90)))
+            smear = ImageChops.multiply(blot.point(lambda x: max(0, min(255, int((x - 60) * 2.6 * a_g)))), on_skin)
+            soiled = Image.blend(Image.merge("RGB", [c.point(lambda x: int(x * 0.52)) for c in out.split()]),
+                                 Image.new("RGB", im.size, dirt), 0.35)   # darker than whatever it lies on, and
+            out = Image.composite(soiled, out, smear.point(lambda x: int(x * 0.75)))   # browner
+
+            grit = Image.effect_noise(im.size, 40).point(lambda x: 255 if x > 232 - int(10 * a_g) else 0)
+            grit = ImageChops.multiply(grit.filter(ImageFilter.GaussianBlur(0.6)), on_skin)
+            out = Image.composite(Image.new("RGB", im.size, _shade(dirt, 0.7, 1.0)), out,
+                                  grit.point(lambda x: int(x * a_g * 0.6)))
             grain = Image.effect_noise(im.size, 13 * a_g)
-            out = Image.blend(out, ImageChops.overlay(out, Image.merge("RGB", (grain, grain, grain))), 0.28 * a_g)
+            rough_ = Image.blend(out, ImageChops.overlay(out, Image.merge("RGB", (grain, grain, grain))), 0.35 * a_g)
+            out = Image.composite(rough_, out, on_skin)
         if lights:
             # Light, last of all, because light falls on whatever is already there. A glow that is only a bright
             # disc looks stuck on; what sells it is the spill - a wide, faint wash of the same color over the

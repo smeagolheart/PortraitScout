@@ -39,13 +39,13 @@ It only **reads** your game folder. Nothing there is installed, changed or delet
 Creatures merged only because they share a name and look alike - a mod's 27 "Commoner" - can be **listed one by one** (decloned), so each gets its own portrait from a button on the gallery card, in the lines window and in the portrait's right-click menu; remembered per creature. Creatures sharing a single creature file are never split. It works both ways round now: reading the mod's own files, a bunch the mod can only name (the game's own commoners) splits one creature per dialog.
 
 Two creatures **of the same name** become one row when they share a creature file or the same portrait file, or do not differ in race, gender and animation - so two different "Guard" creatures stay apart. Creatures with different names are never merged, however alike they look.
-**Merge same names** forces it by name alone - leave it off when different creatures share a name.
+(The command line's `--merge-names` still forces it by name alone.)
 
-A `<ModName>-creatures.txt` report is written next to the script each time, and **Save as text file...** saves that same report elsewhere: the table, plus a list of portraits used by several creatures and a count of how many have none. **Save as CSV...** writes more per creature instead - the small portrait on its own, the pixel size of each, the dialog files, and a `notes` column saying how an uncertain speaker was worked out.
+A `<ModName>-creatures.txt` report is written next to the script each time, and **Save list...** on the Proposals tab saves it elsewhere. As text it is that same report: the table, plus a list of portraits used by several creatures and a count of how many have none. As `.csv` (pick the type in the save window) it writes more per creature instead - the small portrait on its own, the pixel size of each, the dialog files, and a `notes` column saying how an uncertain speaker was worked out.
 
 ## Reading the mod's own files
 
-Tick **Read the mod's own files** (*install not needed*) to work from the mod's `.d`, `.tra`, `.tp2`, `.cre`, `.baf` and `.are` files instead of matching its text against the installed game.
+When the mod is not installed in the game folder you picked, **Analyze** works from the mod's own `.d`, `.tra`, `.tp2`, `.cre`, `.baf` and `.are` files by itself, instead of matching its text against the installed game. (From the command line: `--source`.)
 
 - The mod need not be installed, all components get counted.
 - Every line comes with its speaker (Stock lines ("Yes.") are not credited to the wrong creature).
@@ -55,7 +55,7 @@ Tick **Read the mod's own files** (*install not needed*) to work from the mod's 
 
 ## Generating portraits (optional) (**No image generator and no models come with Portrait Scout**)
 
-The **Propose** tab works on the selected creature, or can be used to freely generate images - pick Race, Gender and Class and it writes the description for you.
+The **Propose** tab works on the selected creature, or can be used to freely generate images - pick Race, Gender and Role and it writes the description for you.
 
 Image Generators are large files and separately licensed. 
 
@@ -67,8 +67,16 @@ Download [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-dif
  Typically, 16 GB of disk and an 8 GB card are comfortable; 6 GB of graphics RAM works, though slower.
 
 - **Description** comes from the creature's gender, race and animation, plus a face drawn from its own file - shape, nose, hair, sometimes a scar. The same creature always gets the same face, and creatures sharing a portrait share it, so a decloned crowd comes out as different people. Edit it freely; what you type wins.
-- **Race**, **Gender** and **Class** start from the creature's own file and do nothing until you change one, which rewrites the description. With no creature selected they are the whole description.
-- **Age** and **Look** shade that face. Flux paints clean young skin unless told otherwise, so *Weathered* and *Blotchy and freckled* might help if aiming for something different.
+- **Race**, **Gender** and **Role** start from the creature's own file and do nothing until you change one, which rewrites the description. With no creature selected they are the whole description.
+- Each picker says one thing:
+  - **Role** is who they are, one for each kind of person the games have a sprite for: Fighter, Cleric, Mage, Thief, Monk, Soldier, Noble, Peasant, Beggar, Sailor, Courtesan. It also picks what they wear.
+  - **Age**.
+  - **Look** is the skin. Flux paints clean young skin unless told otherwise, so *Weathered* and *Blotchy and freckled* might help.
+  - **Scars** goes None, Few (the default), Scarred, Heavy, Wounded. **Grime** goes Clean, Smudged, Dirty, Filthy.
+  - **Mood** is the expression. *Neutral* asks for a calm one. *Any* lets Vary faces pick one for each picture, mostly calm: neutral, a faint smile, thoughtful, the odd grin. Angry and Fierce are never picked for you; choose them as the Mood.
+  - **Outfit** is what they wear. *By role* takes the role's own: padded armor for a fighter, a homespun tunic or kirtle for a peasant, a velvet doublet or gown for a noble. Pick one to put a fighter in mail or a peasant in rags. The creature's colors go into it.
+  - Sprites with a look of their own keep it: the Fat Man is drawn very fat, bald and clean-shaven, and the Ogre, Half Ogre and Hobgoblin in their horned helmets.
+  - The lists live in `role_terms`, `outfit_terms`, `look_terms`, `scar_terms`, `grime_terms`, `mood_terms` and `sprite_terms` in `generator/settings.json`.
 - **Background** is what is behind the creature in the image. `{random}` picks one of the muted earth schemes in `background_palettes` for generating a generic Baldur's Gate style background.
 - **LoRA** off drops the `<lora:...>` part - worth it for creatures with features of their own, like horns or green skin, that a LoRA might paint away.
 - **Select image...** takes a picture you already have. With no generator set up, **Generate** is grayed and a notice offers **Set it up...**; choosing a file still works. **Hide generator settings** folds away the description, the pickers, the background and that notice, for when you are only working from files.
@@ -92,6 +100,49 @@ Pictures that come from baseline game installed files aren't included.  Hand-pic
 Any picture will do - **Create mod...** cuts each one to the portrait's shape, shrinks it to the selected size and saves it as a 24-bit BMP named after the creature file, so a square photo is cropped rather than squeezed. BMP and PNG work on their own; `pip install pillow` adds JPG and the rest.
 
 **Save to-do list...** writes one, one line per creature file, without creating a WeiDU mod.
+
+### Start from: the face bank
+
+The model paints nearly the same face for the same words, whatever the seed. **Start from** fixes that: each
+picture starts from a real face, which the words then turn into the character.
+
+- **Face bank** (default): a new face from the `faces` folder for every picture, of the picture's own gender
+  (`faces\human\male`, `faces\human\female`). `faces\human` is used for any race without a folder of its own
+  (`faces\elf`...), except dwarves, duergar and gnomes, which are left to their words; children only use
+  `faces\child`. Faces are
+  dealt like a shuffled deck, so none comes back until all have been used. Beasts, monsters and the undead are
+  left to the words.
+- **Its portrait**: starts from the creature's own portrait (the face bank if it has none).
+- **Nothing**: plain, as before.
+
+The number beside it is the strength (0.68): about 0.6-0.72 works; lower keeps more of the start face. Bank
+pictures are painted in 6 steps (`face_bank` in generator/settings.json), which at 0.68 costs the same as 4 plain
+ones. Any picture can be added to a bank folder (656x1024 is best; others are cut to fit).
+
+### A portrait for every creature (the gallery's Expanded view)
+
+The **Gallery** opens on its **Expanded view** (called the Auto view before), which makes pictures for every creature listed in one go. The filters above (search, chips, party NPCs) decide which creatures are listed. Untick **Expanded**, beside the Gallery button, for the usual cards. The choice is remembered.
+
+**What it makes:**
+- Each creature gets **2** candidates (set by **Each**), made exactly as the Propose tab would make them: the creature's own description, role, sprite look, colors and face, with Vary faces on.
+- A description you've already edited in Propose is used as it is.
+- Animals get the Animal style, and ghosts are faded.
+- Generating takes about 2-3 seconds a picture on a fast engine. **Stop** stops after the picture in hand, and **Generate** again carries on where it left off.
+
+**Choosing:**
+- The candidates show two creatures to a row, and the whole page scrolls.
+- **Click** a picture to pick it: it turns blue, **● Picked A**. Click it again to take the pick back. Right-click opens a picture full size.
+- A creature that already had a portrait or a proposal also shows it, first, as **Keep**. Pick that to keep it and use none of the new ones. A kept creature isn't made again.
+- **Apply picks** proposes everything picked in one go: each picture is cut to the portrait size and head zoom set in Propose (169x266 by default), just like **Use this**, and turns green, **✔ Proposed A**. Picks wait until you apply them, between sessions too.
+- **Crop**, above Reroll, moves the yellow box on a creature's pictures, which shows what the portrait keeps: − and + zoom, the arrows move it, and **Mid** goes back to the crop Propose uses. A picture already proposed is cut again to match.
+- **Reroll** throws away a creature's candidates and makes new ones. **Open in Propose** lets you work on it by hand. **Discard** deletes its pictures and takes it off the list.
+- **Discard unchosen** deletes the leftover candidates of every creature you've picked for. **Hide picked** shows only the ones with nothing picked or proposed.
+
+**Which creatures are left out:**
+- Creatures that already have a proposal, unless **Redo proposed** is ticked. Picking a new picture then replaces the proposal.
+- Party NPCs, unless **Party NPCs** is ticked.
+- Creatures with a portrait of their own are *included* by default, so the whole mod comes out in one look. Tick **Skip if has one** to leave them alone.
+- Creatures known only by a name are drawn from their race and gender.
 
 ### Touching a portrait up
 

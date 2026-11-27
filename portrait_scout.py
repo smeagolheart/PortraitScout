@@ -22,10 +22,12 @@ Run:   python portrait_scout.py                      (window)
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import io
 import json
 import os
+import random
 import re
 import shutil
 from fractions import Fraction
@@ -90,7 +92,27 @@ class Game:
         self.res: Dict[Tuple[str, int], Tuple[int, int]] = {}     # (NAME, type) -> (bif index, locator)
         self.bifs: List[str] = []
         self._bif_cache: Dict[int, Dict[int, Tuple[int, int, int]]] = {}
+        self._bif_path: Dict[int, Optional[Path]] = {}             # resolved once, not on every read
+        self._handles: Dict[int, object] = {}                      # open BIFs while an analysis runs
+        self._hold = True                                          # close() turns this off: one open per read
+        self._lock = threading.Lock()                              # a shared handle is seek + read: one at a time
         self._load_key()
+
+    def _bif_file(self, idx: int) -> Optional[Path]:
+        if idx not in self._bif_path:
+            self._bif_path[idx] = self._path_ci(self.bifs[idx]) if idx < len(self.bifs) else None
+        return self._bif_path[idx]
+
+    def close(self) -> None:
+        """Close the BIFs kept open for the analysis; later reads open and close the file each time."""
+        with self._lock:
+            self._hold = False
+            for f in self._handles.values():
+                try:
+                    f.close()                                      # type: ignore[attr-defined]
+                except OSError:
+                    pass
+            self._handles.clear()
 
     @staticmethod
     def _ci(base: Path, name: str) -> Optional[Path]:
@@ -137,7 +159,7 @@ class Game:
         if idx in self._bif_cache:
             return self._bif_cache[idx]
         ents: Optional[Dict[int, Tuple[int, int, int]]] = None
-        p = self._path_ci(self.bifs[idx]) if idx < len(self.bifs) else None
+        p = self._bif_file(idx)
         if p and p.is_file():
             with open(p, "rb") as f:
                 h = f.read(20)
@@ -150,7 +172,7 @@ class Game:
                         _l, o, s, _t, _u = struct.unpack_from("<IIIHH", raw, 16 * k)
                         ents[k] = (o, s, _t)
         self._bif_cache[idx] = ents or {}
-        return ents
+        return self._bif_cache[idx]
 
     def get(self, name: str, typ: int, limit: int = -1) -> Optional[bytes]:
         fn = (name + EXT[typ]).lower()
@@ -167,10 +189,20 @@ class Game:
         if not ents or loc[1] not in ents:
             return None
         o, s, _t = ents[loc[1]]
-        p = self._path_ci(self.bifs[loc[0]])
-        with open(p, "rb") as f:                                    # type: ignore[arg-type]
-            f.seek(o)
-            return f.read(min(s, limit) if limit > 0 else s)
+        p = self._bif_file(loc[0])
+        if p is None:
+            return None
+        n = min(s, limit) if limit > 0 else s
+        with self._lock:
+            if not self._hold:
+                with open(p, "rb") as f:
+                    f.seek(o)
+                    return f.read(n)
+            f = self._handles.get(loc[0])
+            if f is None:
+                f = self._handles[loc[0]] = open(p, "rb")
+            f.seek(o)                                               # type: ignore[attr-defined]
+            return f.read(n)                                        # type: ignore[attr-defined]
 
     def has(self, name: str, typ: int) -> bool:
         return (name + EXT[typ]).lower() in self.over or (name.upper(), typ) in self.res
@@ -378,6 +410,10 @@ def _join_row(g: dict, r: dict) -> None:
     g["via"].update(r["via"])
 
 
+class NotInstalled(ValueError):
+    """The mod's text is not in the game's dialog.tlk: it is not installed there."""
+
+
 def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Progress = lambda s: None) -> dict:
     progress("Opening the game folder...")
     game = Game(game_dir)
@@ -408,7 +444,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
             if n in texts:
                 hits[i] = n
         if not hits:
-            raise ValueError("None of this mod's text was found in dialog.tlk - is the mod installed in this game folder?")
+            raise NotInstalled("None of this mod's text was found in dialog.tlk - is the mod installed in this game folder?")
     else:
         progress("Whole install: reading every dialog...")
 
@@ -519,13 +555,13 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
                 return r, ("related" if cur in cre_by_dlg else "guess"), cur
         for cand in (cur, dlg[:-1], dlg, dlg[1:], dlg[2:]):                 # VALYGARJ -> VALYGA, BDYNAH -> DYNAH -> DYNAHE ...
             base = re.sub(r"\d+$", "", cand)
-            pre = [cn for cn in cre_names_sorted if len(cn) >= 4 and base.startswith(cn)]
-            if pre:
-                return [cre_by_name[max(pre, key=len)]], "guess", ""
-            if len(base) >= 4:
-                for cn in cre_names_sorted:
-                    if cn.startswith(base):
-                        return [cre_by_name[cn]], "guess", ""
+            for ln in range(len(base), 3, -1):                       # the longest creature name base starts with
+                if base[:ln] in cre_by_name:
+                    return [cre_by_name[base[:ln]]], "guess", ""
+            if len(base) >= 4:                                       # else the first creature name starting with base
+                k = bisect.bisect_left(cre_names_sorted, base)
+                if k < len(cre_names_sorted) and cre_names_sorted[k].startswith(base):
+                    return [cre_by_name[cre_names_sorted[k]]], "guess", ""
         return [], "", ""
 
     def resolve(dlg: str) -> Tuple[List[dict], str, str]:
@@ -973,7 +1009,8 @@ def read_mod_cre(path: str) -> Optional[dict]:
             "small": _r8(b, CRE_PORTRAIT_SMALL), "large": _r8(b, CRE_PORTRAIT_LARGE), "race": b[CRE_RACE], "sex": b[CRE_SEX],
             "scripts": {_r8(b, o).upper() for o in CRE_SCRIPTS} - {"", "NONE"},
             "dv": b[CRE_DV:CRE_DV + 0x20].split(b"\0", 1)[0].decode("latin1").strip().upper(), "dialog": _r8(b, CRE_DIALOG).upper(),
-            "long": struct.unpack_from("<i", b, CRE_NAME_LONG)[0], "file": path}
+            "long": struct.unpack_from("<i", b, CRE_NAME_LONG)[0], "file": path,
+            "colors": list(b[CRE_COLOR_RGB:CRE_COLOR_RGB + 7])}      # metal, minor, major, skin, leather, armor, hair
 
 
 def detect_eet(game_dir: str) -> bool:
@@ -1526,6 +1563,11 @@ def analyze_source(game_dir: str, mod_dir: str, merge_names: bool = False, progr
     game: Optional[Game] = src["game"]
     files = SourceFiles(mod_dir, game)
     race_ids, anim_ids = (game.read_ids("RACE"), game.read_ids("ANIMATE")) if game else ({}, {})
+    try:                                                             # the colors a creature's sprite is painted in,
+        pal_ = palette_rgb(game) if game else {}                     # as the install analysis has them: reading the
+        rsets_ = random_color_sets(game) if game else {}             # mod's own files left them out, so its portraits
+    except Exception:  # noqa: BLE001 - a half-read install: no colors   # got no clothes or hair color
+        pal_, rsets_ = {}, {}
     # the same NPC with several creature files is one row. Same name is not enough on its own (two different "Guard"
     # creatures stay apart): the rows must also share a portrait or script name, or not differ in race/gender/animation.
     keys: Dict[int, str] = {}
@@ -1559,6 +1601,10 @@ def analyze_source(game_dir: str, mod_dir: str, merge_names: bool = False, progr
         r["_lines"] += sr["texts"]
         r["_infos"] += infos
         r["found"] = r["found"] or bool(infos) or sr["kind"] == "game"
+        # lines added to a creature the game already has (an EXTEND, or a patched game creature file), as opposed
+        # to a creature of the mod's own: Shandalar with more to say is still Shandalar, in his own portrait
+        r["patched"] = bool(r.get("patched", True)) and (sr["kind"] == "game" or
+                                                        (bool(infos) and all(c.get("game_cre") for c in infos)))
         r["cres"] += [c for c in sr["cres"] if c not in r["cres"]]
         for c in infos:
             for f in ("large", "small"):
@@ -1574,6 +1620,8 @@ def analyze_source(game_dir: str, mod_dir: str, merge_names: bool = False, progr
             r["sex"] = SEX_NAMES.get(c["sex"], "")
             an = (anim_ids.get(c["anim"]) or anim_ids.get(c["anim"] & 0xFF00) or "") if c["anim"] else ""
             r["anim"] = nice(an) or (f"0x{c['anim']:04X}" if c["anim"] else "")
+            if pal_ and c.get("colors"):
+                r["colors"] = creature_colors(c.get("colors") or [], pal_, rsets_)
         for c in infos:
             was = c.get("mod_large") or c.get("mod_small") or ""
             now = c["large"] or c["small"]
@@ -1989,6 +2037,8 @@ def creature_colors(raw: List[int], pal: Dict[int, Tuple[int, int, int]],
             low = name.lower()
             for key, kind in _SET_KIND.items():                      # DrowSkin, HobgoblinSkin, OgreSkin...
                 if low.startswith(key) and (slot in ("skin", "hair") or "kind" not in out):
+                    if kind == "elf" and out.get("kind") not in (None, "elf"):
+                        break                                        # elf hair on drow skin is still a drow
                     out["kind"] = kind
                     break
             continue
@@ -2551,6 +2601,146 @@ def save_settings(d: dict) -> None:
         pass
 
 
+POOL_EXT = (".png", ".jpg", ".jpeg", ".webp", ".tga", ".gif", ".bmp")
+POOL_MADE = re.compile(r"^(.*?)_([A-Za-z0-9#!-]{1,8})_(?:[ce]\d+_\d{8}-\d{6}|[fp]\d+|gnow)", re.I)
+
+
+def _pool_rank(q: Path) -> Tuple[int, float]:
+    """Which member of a family the pool shows: one that was worked on, else the newest."""
+    try:
+        when = q.stat().st_mtime
+    except OSError:
+        when = 0.0
+    return (1 if q.stem.endswith(("_touch", "_skin", "_ghost")) else 0, when)
+
+
+def spare_pictures(made_in: str, used: Set[str]) -> List[Path]:
+    """Every generated picture nothing proposes: what is left over each time one of four is chosen.
+
+    One entry per picture, not per version of it - a touched-up copy stands for the one it was made from."""
+    best: Dict[str, Path] = {}
+    base = Path(made_in)
+    if not base.is_dir():
+        return []
+    try:
+        walk = list(base.rglob("*"))
+    except OSError:
+        return []
+    for q in walk:
+        try:
+            if not q.is_file() or q.suffix.lower() not in POOL_EXT:
+                continue
+            if "_touch_tmp" in q.stem:
+                continue
+            if q.suffix.lower() == ".bmp" and CUT_MARK.search(q.name):
+                continue                                             # a crop cut from one of the pictures
+            if "_gnow_" in q.stem:                                   # the portrait a creature wears in the game,
+                continue                                             # copied out of it - not a spare of ours
+            if os.path.normcase(str(q)) in used:
+                continue
+            fam = os.path.normcase(str(plain_of(str(q))))            # the plain picture and anything made from it
+            now = best.get(fam)                                      # a worked-on copy stands for the family,
+            if now is None or _pool_rank(q) > _pool_rank(now):       # otherwise the newest of them
+                best[fam] = q
+        except OSError:
+            continue
+    return sorted(best.values(), key=lambda q: (q.parent.name.lower(), q.name.lower()))
+
+
+def proposed_pictures(every: Dict[str, Dict[str, str]],
+                      from_map: Optional[Dict[str, str]] = None) -> Set[str]:
+    """Every picture a proposal rests on, across all the mods analyzed: the game portrait that was cut, the
+    picture it was cut from, the plain one behind that, and - when the picture was taken out of the pool -
+    the spare it was copied from. Anything else in the folder is spare."""
+    out: Set[str] = set()
+    for pr in (every or {}).values():
+        for v in (pr or {}).values():
+            if not isinstance(v, str) or not v:
+                continue
+            q = Path(v)
+            for x in (q, plain_of(str(q))):
+                out.add(os.path.normcase(str(x)))
+            stem = CUT_MARK.sub("", q.name)                          # "Bob_169x266_z11.bmp" -> "Bob"
+            if stem != q.name:
+                for e in POOL_EXT:
+                    was = q.with_name(stem + e)
+                    out.add(os.path.normcase(str(was)))
+                    out.add(os.path.normcase(str(plain_of(str(was)))))
+    for _ in range(4):                                               # a copy of a copy, up to a sane depth
+        more = {v for k, v in (from_map or {}).items() if k in out} - out
+        if not more:
+            break
+        out |= more
+        for w in list(more):
+            out.add(os.path.normcase(str(plain_of(w))))
+    return out
+
+
+def made_for(name: str) -> str:
+    """The creature a generated picture was made for, read back out of its file name."""
+    m = POOL_MADE.match(name)
+    return (m.group(1).replace("_", " ").strip() if m else Path(name).stem.replace("_", " ")) or "?"
+
+
+def made_from(name: str) -> str:
+    """The creature file a generated picture was made for, which is what says who is in it."""
+    m = POOL_MADE.match(name)
+    return m.group(2).upper() if m else ""
+
+
+def esc_closes(w: object) -> None:
+    """Esc closes this window. The keyboard has to be put on it as well, or Esc goes to whatever had it."""
+    def gone(_e: object = None) -> None:
+        try:
+            w.destroy()                                              # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - already closed
+            pass
+
+    def take() -> None:                                              # once it is on screen, not before
+        try:
+            if w.winfo_exists():                                     # type: ignore[attr-defined]
+                w.focus_set()          # focus_set, not focus_force: that takes the keyboard off other programs
+        except Exception:  # noqa: BLE001 - closed before it was ever shown
+            pass
+    try:
+        w.bind("<Escape>", gone)                                     # type: ignore[attr-defined]
+        w.after(1, take)                                             # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - not a window
+        pass
+
+
+def image_seed(path: str) -> Optional[int]:
+    """The seed a generated picture was painted from, read from what the engine wrote into the PNG
+    ("Seed: 2238394058"). A touched-up copy or a game-size .bmp asks the picture it was made from."""
+    q = plain_of(path)
+    if q.suffix.lower() == ".bmp":                               # Name_c1_..._169x266_z12_m0_1.bmp -> its .png
+        base = CUT_MARK.sub("", q.name)
+        if base != q.name:
+            cand = q.with_name(base + ".png")
+            if cand.is_file():
+                q = cand
+    try:
+        from PIL import Image
+        with Image.open(q) as im:
+            info = str(im.info.get("parameters") or "")
+    except Exception:  # noqa: BLE001 - no Pillow, not a PNG, or no text in it
+        return None
+    m = re.search(r"\bSeed:\s*(\d+)", info)
+    return int(m.group(1)) if m else None
+
+
+def inherited_thumb(game: object, imgs: dict, name: str, thumb: Callable[[bytes], object]) -> object:
+    """The game's own portrait a copied creature keeps, as a thumbnail (cached with the gallery's)."""
+    key_ = "inherit:" + name.upper()
+    if key_ not in imgs:
+        try:
+            data = game.get(name, T_BMP)                             # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            data = None
+        imgs[key_] = thumb(data) if data else None
+    return imgs[key_]
+
+
 def plain_of(path: str) -> Path:
     """The picture as it came out of the engine, whatever has been done to it since."""
     q = Path(path)
@@ -2562,6 +2752,9 @@ def plain_of(path: str) -> Path:
                  if x.is_file()), q)
 
 
+_TIP_NOW: Dict[str, object] = {"win": None}
+
+
 def tooltip(widget: object, text: str) -> None:
     """Show `text` in a small box while the mouse rests on the widget."""
     import tkinter as tk
@@ -2569,12 +2762,26 @@ def tooltip(widget: object, text: str) -> None:
 
     def show() -> None:
         tip["job"] = None
+        try:                                                     # the widget may be gone or hidden by now (a card
+            if not widget.winfo_exists() or not widget.winfo_ismapped():   # redrawn under the mouse)
+                return                                           # type: ignore[attr-defined]
+        except tk.TclError:
+            return
+        old = _TIP_NOW.get("win")                                # one tooltip on screen at a time
+        if old is not None:
+            try:
+                old.destroy()                                    # type: ignore[attr-defined]
+            except tk.TclError:
+                pass
         w = tk.Toplevel(widget.winfo_toplevel())   # type: ignore[attr-defined]
+        #   not esc_closes(w): that puts the keyboard on the window it closes, and a tooltip that takes the
+        #   keyboard leaves the keys going nowhere once it is gone (the Pool's arrow keys stopped dead)
         w.wm_overrideredirect(True)
         w.wm_geometry(f"+{widget.winfo_rootx() + 12}+{widget.winfo_rooty() + widget.winfo_height() + 4}")   # type: ignore[attr-defined]
         tk.Label(w, text=text, justify="left", wraplength=420, bg="#ffffe0", relief="solid", bd=1,
                  padx=6, pady=4).pack()
         tip["win"] = w
+        _TIP_NOW["win"] = w
 
     def enter(_e: object) -> None:
         leave(_e)
@@ -2585,9 +2792,15 @@ def tooltip(widget: object, text: str) -> None:
             widget.after_cancel(tip["job"])                      # type: ignore[attr-defined,arg-type]
             tip["job"] = None
         if tip["win"]:
-            tip["win"].destroy()                                 # type: ignore[attr-defined]
+            try:
+                tip["win"].destroy()                             # type: ignore[attr-defined]
+            except tk.TclError:
+                pass
+            if _TIP_NOW.get("win") is tip["win"]:
+                _TIP_NOW["win"] = None
             tip["win"] = None
     widget.bind("<Enter>", enter, add="+")                       # type: ignore[attr-defined]
+    widget.bind("<Destroy>", leave, add="+")                     # type: ignore[attr-defined]  never left behind
     widget.bind("<Leave>", leave, add="+")                       # type: ignore[attr-defined]
     widget.bind("<ButtonPress>", leave, add="+")                 # type: ignore[attr-defined]
 
@@ -2635,6 +2848,25 @@ def cre_portrait(game: object, name: str) -> Tuple[str, int]:
     return "", ref
 
 
+ANIMAL_WORDS = {"cat", "dog", "wolf", "warg", "jackal", "hound", "mastiff", "fox", "horse", "pony", "mule", "bear",
+                "rat", "bird", "chicken", "hen", "cow", "ox", "deer", "stag", "boar", "pig", "goat", "sheep", "rabbit",
+                "squirrel", "badger", "bat", "raven", "crow", "owl", "hawk", "eagle", "snake", "spider", "beetle",
+                "panther", "leopard", "tiger", "lion", "ape", "baboon", "monkey"}
+
+
+def is_animal(row: dict) -> bool:
+    """A real animal, going by its race, its animation and its name: a cat, a dog, a wolf..."""
+    words = set(re.findall(r"[a-z]+", " ".join(str(row.get(k) or "") for k in ("race", "anim", "name")).lower()))
+    return bool(words & ANIMAL_WORDS)
+
+
+def animal_style(name: str) -> bool:
+    """A generator style meant for animals rather than people."""
+    return "animal" in str(name).lower()
+
+
+MAX_CANDIDATES = 100                                                 # how many pictures one Generate may paint
+#                                                                      (generator/settings.json max_candidates wins)
 CUT_MARK = re.compile(r"_\d+x\d+_z\d+(_m-?\d+_-?\d+)?\.bmp$", re.I)   # what "Use this" adds to a crop
 
 
@@ -2681,9 +2913,12 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
     eyeset = dict(getattr(pg, "SPOT_TINTS", None) or getattr(pg, "EYE_TINTS", {}) or {})
     bloods = dict(getattr(pg, "BLOOD_TINTS", {}) or {"Blood": ()})
     glows = dict(getattr(pg, "GLOW_TINTS", {}) or {"Fire": ()})
+    paints = dict(getattr(pg, "PAINT_TINTS", {}) or {"Woad blue": ()})
+    pstyles = list(getattr(pg, "PAINT_STYLES", ("None",)))
     if not skins or not lipset:
         return
     win = tk.Toplevel(dlg)
+    esc_closes(win)
     win.title(f"Touch up - {r['name']}")
     win.transient(dlg)
     # the picture at its own size, with scrollbars when the screen has no room for it
@@ -2822,7 +3057,54 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
     angle_v = tk.DoubleVar(value=float(mem.get("angle", -55.0)))
     edge_v = tk.DoubleVar(value=float(mem.get("edge", 0.5)))
     blood_v = tk.StringVar(value=mem.get("blood", next(iter(bloods), "Blood")))
+    soot_v = tk.DoubleVar(value=float(mem.get("soot", 0.0)))
+    mud_v = tk.DoubleVar(value=float(mem.get("mud", 0.0)))
+    spat_v = tk.DoubleVar(value=float(mem.get("spatter", 0.0)))
+    sweat_v = tk.DoubleVar(value=float(mem.get("sweat", 0.0)))
+    dsize_v = tk.DoubleVar(value=float(mem.get("dirtsize", 1.0)))
+    paint_v = tk.StringVar(value=mem.get("paint", "None"))
+    paintclr = tk.StringVar(value=mem.get("paintclr", next(iter(paints), "Woad blue")))
+    paintamt = tk.DoubleVar(value=float(mem.get("paintamt", 0.8)))
+    paintsize = tk.DoubleVar(value=float(mem.get("paintsize", 1.0)))
+    peyes: List[Tuple[float, float]] = list(mem.get("peyes", []))
+    erases: List[Tuple[float, float, float]] = []          # (x, y, radius) as shares of the width: rubbed out
+    erase_on = tk.BooleanVar(value=False)
+    erase_size = tk.DoubleVar(value=0.025)
 
+    def rub_out(before: bytes, after: bytes) -> bytes:
+        """Put back what was under the eraser: this pass's changes are taken off there, nothing else."""
+        if not erases:
+            return after
+        a_ = Image.open(io.BytesIO(after)).convert("RGB")
+        b_ = Image.open(io.BytesIO(before)).convert("RGB")
+        if b_.size != a_.size:
+            b_ = b_.resize(a_.size, Image.BILINEAR)
+        from PIL import ImageDraw as _ID, ImageFilter as _IF
+        m_ = Image.new("L", a_.size, 0)
+        d_ = _ID.Draw(m_)
+        ww_ = a_.width
+        for fx, fy, rr in erases:
+            r_ = max(1.0, rr * ww_)
+            d_.ellipse([fx * ww_ - r_, fy * a_.height - r_, fx * ww_ + r_, fy * a_.height + r_], fill=255)
+        m_ = m_.filter(_IF.GaussianBlur(max(0.8, ww_ * 0.003)))   # soft edged, so no ring shows
+        out_ = io.BytesIO()
+        Image.composite(b_, a_, m_).save(out_, "PNG")
+        return out_.getvalue()
+    DIRT_VARS = ((soot_v, "soot"), (mud_v, "mud"), (spat_v, "spatter"), (sweat_v, "sweat"), (dsize_v, "dirtsize"),
+                 (paintamt, "paintamt"), (paintsize, "paintsize"))
+
+    def extra() -> Dict[str, object]:
+        """The dirt and the face paint, handed to touch_up by name."""
+        return {"soot": round(float(soot_v.get()), 2), "mud": round(float(mud_v.get()), 2),
+                "spatter": round(float(spat_v.get()), 2), "sweat": round(float(sweat_v.get()), 2),
+                "dirt_size": round(float(dsize_v.get()), 2), "paint": paint_v.get(), "paint_color": paintclr.get(),
+                "paint_amount": round(float(paintamt.get()), 2) if paint_v.get() != "None" else 0.0,
+                "paint_size": round(float(paintsize.get()), 2), "paint_eyes": list(peyes)}
+
+    def extra_set() -> bool:
+        x_ = extra()
+        return bool(erases) or (any(float(x_[k]) > 0 for k in ("soot", "mud", "spatter", "sweat"))   # type: ignore[arg-type]
+                or (x_["paint"] != "None" and len(peyes) >= 2))
     hist: List[dict] = []                                # one entry per step taken
     prev: Dict[str, object] = {}                         # how things stood after the last redraw
 
@@ -2838,7 +3120,9 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
                 "glowtint": glowclr.get(), "glowamt": glowamt.get(), "glowsize": glowsize.get(),
                 "glowspill": glowspill.get(), "glowround": glowround.get(),
                 "spots": list(spots), "shapes": list(shapes), "blots": list(blots),
-                "spkarea": spkarea.get(), "spkdeep": spkdeep.get(), "spkamt": spkamt.get()}
+                "spkarea": spkarea.get(), "spkdeep": spkdeep.get(), "spkamt": spkamt.get(),
+                "paint": paint_v.get(), "paintclr": paintclr.get(), "peyes": list(peyes), "erases": list(erases),
+                **{k_: v_.get() for v_, k_ in DIRT_VARS}}
 
     def remember() -> None:
         """Put the state as it was before this change on the pile."""
@@ -2876,6 +3160,14 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         spkarea.set(float(d.get("spkarea", spkarea.get())))
         spkdeep.set(float(d.get("spkdeep", spkdeep.get())))
         spkamt.set(float(d.get("spkamt", spkamt.get())))
+        for v_, k_ in DIRT_VARS:
+            v_.set(float(d.get(k_, v_.get())))                # type: ignore[arg-type]
+        paint_v.set(str(d.get("paint", paint_v.get())))
+        paintclr.set(str(d.get("paintclr", paintclr.get())))
+        peyes.clear()
+        peyes.extend(d.get("peyes") or [])                   # type: ignore[arg-type]
+        erases.clear()
+        erases.extend(d.get("erases") or [])                 # type: ignore[arg-type]
         prev.clear()
         prev.update(d)
         tab_marks(redraw=False)                              # the tab, not the undone step, says where
@@ -2935,6 +3227,14 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         lpct.config(text=f"{int(lam * 100)}%")
         cpct.config(text=f"{int(cat * 100)}%")
         spkpct.config(text=f"{int(spk * 100)}%")
+        for w_, v_ in ((sopct, soot_v), (mupct, mud_v), (sppct, spat_v), (swpct, sweat_v), (papct, paintamt)):
+            w_.config(text=f"{int(float(v_.get()) * 100)}%")
+        dzpct.config(text=f"{float(dsize_v.get()):.1f}x")
+        pzpct.config(text=f"{float(paintsize.get()):.1f}x")
+        peyelab.config(text=(f"Eyes marked. Click twice more to place them again." if len(peyes) >= 2 else
+                             "Click the two eyes on the picture: the paint is placed from them."
+                             if not peyes else "One eye marked - click the other."),
+                       foreground="#666" if len(peyes) >= 2 or paint_v.get() == "None" else "#b5452f")
         for w_, on_ in ((pct, skin_v.get() != "Leave"), (lpct, lips_v.get() != "Leave"),
                         (epct, eyes_v.get() != "Leave"), (arpct, spk > 0), (dppct, spk > 0), (smpct, spk > 0)):
             sc__ = keep.get(f"sc_{id(w_)}")              # a strength with nothing to be strong about
@@ -2982,7 +3282,8 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
                                      max(0.03, sln * 0.32))
             done_ = pg.touch_up(src_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
                                 spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
-                                glw, gtn, gam, gsz, gsp, grd)
+                                glw, gtn, gam, gsz, gsp, grd, **extra())
+            done_ = rub_out(src_, done_)
             im = Image.open(io.BytesIO(pg.ghost_image(done_, fad)))   # type: ignore[attr-defined]
             sw_, sh_ = shown()                               # the rough pass is half size: back up to the
             if (im.width, im.height) != (sw_, sh_):          # shown size too, so nothing jumps about
@@ -3007,6 +3308,15 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
                     x_, y_ = fx * sw_, fy * sh_
                     rr = max(3.0, esz * sw_)
                     lab.create_oval(x_ - rr, y_ - rr * 0.8, x_ + rr, y_ + rr * 0.8, outline="#ffd000", width=1)
+            if erase_on.get():
+                for fx, fy, rr in erases[-200:]:
+                    x_, y_, r_ = fx * sw_, fy * sh_, max(2.0, rr * sw_)
+                    lab.create_oval(x_ - r_, y_ - r_, x_ + r_, y_ + r_, outline="#bbbbbb", width=1)
+            if paint_v.get() != "None" or mark_kind.get() == "paint":
+                for fx, fy in peyes:
+                    x_, y_ = fx * sw_, fy * sh_
+                    lab.create_line(x_ - 6, y_, x_ + 6, y_, fill="#ff5fd2")
+                    lab.create_line(x_, y_ - 6, x_, y_ + 6, fill="#ff5fd2")
             if spk > 0:
                 for fx, fy in blots:
                     x_, y_ = fx * sw_, fy * sh_
@@ -3018,16 +3328,36 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
                     rr = max(4.0, wsz * sw_)
                     lab.create_oval(x_ - rr, y_ - rr, x_ + rr, y_ + rr, outline="#36a0ff", width=1)
 
+    def rub(e: "tk.Event", drag: bool = False) -> None:
+        """The eraser: a click rubs out one spot, a drag a stroke."""
+        sw_, sh_ = shown()
+        fx, fy = lab.canvasx(e.x) / sw_, lab.canvasy(e.y) / sh_
+        rr = float(erase_size.get())
+        if drag and erases:
+            lx_, ly_, _r = erases[-1]
+            if ((fx - lx_) ** 2 + ((fy - ly_) * sh_ / max(1, sw_)) ** 2) ** 0.5 < rr * 0.35:
+                return                                       # not moved far enough to be worth a new dab
+        else:
+            remember()                                       # one undo step per stroke
+        erases.append((fx, fy, rr))
+        del erases[:-600]
+        later()
+
     def mark(e: "tk.Event") -> None:
         """Click an eye: two marks, then a third starts over."""
+        if erase_on.get():
+            rub(e)
+            return
         remember()
-        here = {"color": spots, "shape": shapes}.get(mark_kind.get(), blots)
-        if len(here) >= 8:                               # eight is plenty; the ninth starts over
+        here = {"color": spots, "shape": shapes, "paint": peyes}.get(mark_kind.get(), blots)
+        if len(here) >= (2 if here is peyes else 8):     # eight is plenty; the ninth starts over (paint: two eyes)
             here.clear()
         sw_, sh_ = shown()
         here.append((min(1.0, max(0.0, lab.canvasx(e.x) / sw_)),
                      min(1.0, max(0.0, lab.canvasy(e.y) / sh_))))
-        if mark_kind.get() == "skin" and float(speckle.get()) < 0.01:
+        if mark_kind.get() == "paint" and paint_v.get() == "None" and len(peyes) == 2:
+            paint_v.set(next((k for k in pstyles if k != "None"), "None"))   # both eyes marked: show something
+        elif mark_kind.get() == "skin" and float(speckle.get()) < 0.01:
             speckle.set(0.6)                             # a patch marked with nothing to put in it
         elif mark_kind.get() == "color" and eyes_v.get() == "Leave" and glow_v.get() == "None":
             eyes_v.set(next((k for k in eyeset if k != "Leave"), "Leave"))
@@ -3036,6 +3366,7 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
             warp.set(0.35)
         draw()
     lab.bind("<Button-1>", mark)
+    lab.bind("<B1-Motion>", lambda e: rub(e, True) if erase_on.get() else None)
     lab.bind("<Button-3>", lambda e: clear_eyes())
 
     def later(*_a: object) -> None:
@@ -3068,15 +3399,15 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
 
     nb = ttk.Notebook(side)                              # a tab each, rather than one long column
     nb.pack(fill="both", expand=True)
-    t_skin, t_lips, t_spot, t_shape, t_pic = (ttk.Frame(nb, padding=(6, 4)) for _ in range(5))
+    t_skin, t_lips, t_spot, t_shape, t_pic, t_paint = (ttk.Frame(nb, padding=(6, 4)) for _ in range(6))
     for f_, nm_ in ((t_skin, "Skin"), (t_lips, "Lips"), (t_spot, "Spots"), (t_shape, "Shape"),
-                    (t_pic, "Picture")):
+                    (t_pic, "Picture"), (t_paint, "Paint")):
         nb.add(f_, text=nm_)
 
     def tab_marks(_e: object = None, redraw: bool = True) -> None:
         """Clicks on the picture land where you are working: spots on Spots, shape points on Shape."""
         now = nb.index(nb.select())
-        want = {0: "skin", 2: "color", 3: "shape"}.get(now)
+        want = {0: "skin", 2: "color", 3: "shape", 5: "paint"}.get(now)
         if want and mark_kind.get() != want:
             mark_kind.set(want)
             if redraw:
@@ -3168,6 +3499,7 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
 
     def clear_eyes() -> None:
         remember()
+        erases.clear()
         spots.clear()
         shapes.clear()
         blots.clear()
@@ -3184,6 +3516,17 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
     ttk.Label(erow_, text="Clicks land on the tab you are on.", foreground="#888").pack(side="right")
     mk_ = ttk.Checkbutton(erow_, text="Show marks", variable=marks_v, command=draw)
     mk_.pack(side="left", padx=(8, 0))
+    erow2_ = ttk.Frame(side)
+    erow2_.pack(fill="x", pady=(2, 0))
+    er_ = ttk.Checkbutton(erow2_, text="Erase", variable=erase_on, command=draw)
+    er_.pack(side="left")
+    tooltip(er_, "Ticked: clicking or dragging on the picture rubs out what this pass did there - speckles "
+                 "that strayed off the face, a bit of dirt in the hair. Untick to place marks again. Undo takes "
+                 "back a stroke; Paint these in keeps the result.")
+    ttk.Label(erow2_, text="Size", width=5).pack(side="left", padx=(8, 0))
+    es_ = ttk.Scale(erow2_, from_=0.008, to=0.08, variable=erase_size)
+    es_.pack(side="left", fill="x", expand=True, padx=(4, 0))
+    tooltip(es_, "How big the eraser is.")
     tooltip(mk_, "The yellow rings are only there to show where you clicked. Turn them off to see the "
                  "picture as it will be - the color stays either way.")
     shapelab = ttk.Label(t_shape, text="Click a nose, a jaw, an eye - tick 'clicks mark these' first.",
@@ -3244,6 +3587,35 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
     fpct = slider(fs_, "Ghostly", fade, 0.0, 1.5)
     cpct2 = slider(fs_, "Creases", creases, 0.0, 1.0)
     gpct2 = slider(fs_, "Grime", grime, 0.0, 1.0)
+    t_dirt = group(t_pic, "Dirty it")
+    sopct = slider(t_dirt, "Soot", soot_v, 0.0, 1.0)
+    mupct = slider(t_dirt, "Mud", mud_v, 0.0, 1.0)
+    sppct = slider(t_dirt, "Blood", spat_v, 0.0, 1.0)
+    swpct = slider(t_dirt, "Sweat", sweat_v, 0.0, 1.0)
+    dzpct = slider(t_dirt, "Size", dsize_v, 0.5, 2.0)
+    tooltip(sopct, "Soot, wiped across the skin as if by a hand: a smith, a fire, a burnt village.")
+    tooltip(mupct, "Caked mud in patches with broken edges.")
+    tooltip(sppct, "Dried blood flecked over the face - someone else's, mostly.")
+    tooltip(swpct, "Beads of sweat and a sheen where the light falls.")
+    tooltip(dzpct, "How big the smudges and the spatter are. Applies to Soot, Mud and Blood.")
+    t_pnt = group(t_paint, "Face paint")
+    pgrid = ttk.Frame(t_pnt)
+    pgrid.pack(fill="x")
+    for i, nm_ in enumerate(pstyles):
+        ttk.Radiobutton(pgrid, text=nm_, value=nm_, variable=paint_v,
+                        command=lambda: (remember(), draw())).grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 8))
+    t_pcl = group(t_paint, "Color")
+    cgrid_ = ttk.Frame(t_pcl)
+    cgrid_.pack(fill="x")
+    for i, nm_ in enumerate(paints):
+        ttk.Radiobutton(cgrid_, text=nm_, value=nm_, variable=paintclr,
+                        command=lambda: (remember(), draw())).grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 8))
+    papct = slider(t_paint, "Strength", paintamt, 0.1, 1.0)
+    pzpct = slider(t_paint, "Size", paintsize, 0.5, 2.0)
+    peyelab = ttk.Label(t_paint, text="", wraplength=260)
+    peyelab.pack(anchor="w", pady=(6, 0))
+    tooltip(papct, "How solid the paint is. Low lets the skin show through, like paint half worn off.")
+    tooltip(pzpct, "How big the marks are: thicker stripes, a wider band, bigger dots.")
     fl_ = ttk.Checkbutton(fs_, text="Mirror the picture", variable=flip_v,
                           command=lambda: (remember(), draw()))
     fl_.pack(anchor="w", pady=(2, 0))
@@ -3265,7 +3637,8 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
          cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
         if (not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0 and gri <= 0 and cre <= 0
-                and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
+                and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01
+                and not extra_set()):
             say("Nothing set to paint in yet.")
             return
         try:
@@ -3275,9 +3648,11 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
             if (scr > 0 or wnd > 0) and shapes:
                 cur = pg.warp_image(cur, shapes, 0.20 * max(scr, wnd * 0.6),   # type: ignore[attr-defined]
                                     max(0.03, sln * 0.32))
+            pre_ = cur
             cur = pg.touch_up(cur, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
                               spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
-                                glw, gtn, gam, gsz, gsp, grd)
+                                glw, gtn, gam, gsz, gsp, grd, **extra())
+            cur = rub_out(pre_, cur)
             cur = pg.ghost_image(cur, fad)                   # type: ignore[attr-defined]
         except Exception as e:  # noqa: BLE001 - say so rather than losing the picture
             say(f"Could not paint that in ({e}).")
@@ -3291,8 +3666,11 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         cut_v.set("None")
         glow_v.set("None")
         for v_, z_ in ((warp, 0.0), (stretch, 0.0), (fade, 0.0), (grime, 0.0), (creases, 0.0),
-                       (light, 0.0)):
+                       (light, 0.0), (soot_v, 0.0), (mud_v, 0.0), (spat_v, 0.0), (sweat_v, 0.0),
+                       (speckle, 0.0)):                      # once in the picture, never laid on a second time
             v_.set(z_)
+        erases.clear()
+        paint_v.set("None")                                  # the eyes stay marked for the next paint
         flip_v.set(False)
         spots.clear()
         shapes.clear()
@@ -3305,10 +3683,13 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         (hue, amt, sat, cat, lig, lh, lam, ls, eh, eam, es, esz, ev, fad, gri, wrp, wsz,
          cre, scr, wnd, flp, rdg, bld, lnw, agl, edg, sln, glw, gtn, gam, gsz, gsp, grd, stc, spk, spa, spd, spm) = values()
         if (not keep.get("baked") and not flp and amt <= 0 and lam <= 0 and eam <= 0 and fad <= 0
-                and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01):
+                and gri <= 0 and cre <= 0 and scr <= 0 and wnd <= 0 and gam <= 0 and spk <= 0 and abs(lig) < 0.01 and abs(wrp) < 0.01 and abs(stc) < 0.01
+                and not extra_set()):
             win.destroy()
             return
-        touch_memory[str(q)] = {"skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(),
+        touch_memory[str(q)] = {"paint": paint_v.get(), "paintclr": paintclr.get(), "peyes": list(peyes),
+                                **{k_: float(v_.get()) for v_, k_ in DIRT_VARS},
+                                "skin": skin_v.get(), "lips": lips_v.get(), "eyes": eyes_v.get(),
                                 "amount": float(amount.get()), "lipamt": float(lipamt.get()),
                                 "eyeamt": float(eyeamt.get()), "eyesize": float(eyesize.get()),
                                 "light": float(light.get()), "catch": float(catch.get()),
@@ -3341,7 +3722,8 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
                                      max(0.03, sln * 0.32))
             out_ = pg.touch_up(was_, hue, amt, sat, cat, lig, lh, lam, ls,   # type: ignore[attr-defined]
                                spots, eh, eam, es, esz, ev, gri, cre, scr, shapes, wnd, sln, rdg, bld, lnw, agl, edg, spk, blots, spa, spd, spm,
-                                glw, gtn, gam, gsz, gsp, grd)
+                                glw, gtn, gam, gsz, gsp, grd, **extra())
+            out_ = rub_out(was_, out_)
             done_ = pg.ghost_image(out_, fad)                # type: ignore[attr-defined]
             if as_bmp:                                       # back to a 24-bit BMP the game can read
                 tmp_ = q.with_name(q.stem + "_touch_tmp.png")
@@ -3374,6 +3756,8 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
                 f"{eyes_v.get().lower()} on {len(spots)} spot(s)" if eam > 0 else "",
                 f"faded to {int(fad * 100)}%" if fad > 0 else "",
                 f"{int(gri * 100)}% grime" if gri > 0 else "",
+                ", ".join(f"{int(float(v_.get()) * 100)}% {k_}" for v_, k_ in DIRT_VARS[:4] if float(v_.get()) > 0),
+                f"{paintclr.get().lower()} {paint_v.get().lower()}" if paint_v.get() != "None" and len(peyes) >= 2 else "",
                 f"{int(cre * 100)}% creases" if cre > 0 else "",
                 f"{len(shapes)} scar(s)" if scr > 0 and shapes else "",
                 f"{len(shapes)} wound(s)" if wnd > 0 and shapes else "",
@@ -3420,6 +3804,11 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         glowspill.set(0.6)
         glowround.set(0.40)
         blood_v.set(next(iter(bloods), "Blood"))
+        for v_, z_ in zip((soot_v, mud_v, spat_v, sweat_v, dsize_v, paintamt, paintsize), (0, 0, 0, 0, 1.0, 0.8, 1.0)):
+            v_.set(z_)
+        paint_v.set("None")
+        peyes.clear()
+        erases.clear()
         shapes.clear()
         light.set(0.0)
         catch.set(float(gs.get("skin_catch", 0.6)))
@@ -3446,7 +3835,7 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
     tooltip(rb_, "Put every slider back where it started, without closing this window.")
     draw()
     win.bind("<Return>", lambda e: apply_())
-    win.bind("<Escape>", lambda e: win.destroy())
+    esc_closes(win)
     win.update_idletasks()
     try:
         x = dlg.winfo_rootx() + max(0, (dlg.winfo_width() - win.winfo_width()) // 2)
@@ -3474,8 +3863,6 @@ def run_gui() -> None:
     # start from the current folder when it is a game folder (run it from the game folder), else the last one used
     game_var = tk.StringVar(value=here if (Path(here) / "chitin.key").exists() else (st.get("game") or ""))
     mod_var = tk.StringVar(value=st.get("mod", ""))
-    merge_var = tk.BooleanVar(value=False)
-    source_var = tk.BooleanVar(value=bool(st.get("source", False)))
     modpic_var = tk.BooleanVar(value=bool(st.get("modpic_only", False)))
     status = tk.StringVar(value="Pick the game folder and the mod folder, then press Analyze. "
                           "(Leave the mod folder empty, or pick the game folder itself, to list every creature in the install.)")
@@ -3483,8 +3870,8 @@ def run_gui() -> None:
 
     top = ttk.Frame(root, padding=8)
     top.pack(fill="x")
-    top.columnconfigure(1, weight=1)
-    top.columnconfigure(3, minsize=420)                              # room for the two checkboxes beside the folders
+    top.columnconfigure(1, weight=1)                                  # game and mod folder share a row,
+    top.columnconfigure(4, weight=1)                                  # each path box taking half the width
 
     def browse(var: tk.StringVar, title: str, start: str) -> None:
         d = filedialog.askdirectory(title=title, initialdir=start if start and os.path.isdir(start) else os.getcwd())
@@ -3496,6 +3883,7 @@ def run_gui() -> None:
     def path_box(var: tk.StringVar, title: str) -> None:
         """The whole path, in a box big enough to read it."""
         w = tk.Toplevel(root)
+        esc_closes(w)
         w.title(title)
         w.geometry("760x150")
         t = tk.Text(w, wrap="char", height=3, font=("TkDefaultFont", 10))
@@ -3515,25 +3903,13 @@ def run_gui() -> None:
     ttk.Button(gb_, text="Browse...", command=lambda: browse(game_var, "Game folder (has chitin.key)",
                                                              game_var.get())).pack(side="left")
     ttk.Button(gb_, text="\u2922", width=3, command=lambda: path_box(game_var, "Game folder")).pack(side="left", padx=(3, 0))
-    chk1 = ttk.Frame(top)                                            # both are about the mod: they sit on its row
-    chk1.grid(row=1, column=3, sticky="w", padx=(12, 0), pady=(6, 0))
-    ttk.Label(top, text="Mod folder:").grid(row=1, column=0, sticky="w", pady=(6, 0))
-    ttk.Entry(top, textvariable=mod_var, width=34).grid(row=1, column=1, sticky="ew", padx=6, pady=(6, 0))
+    ttk.Label(top, text="Mod folder:").grid(row=0, column=3, sticky="w", padx=(14, 0))
+    ttk.Entry(top, textvariable=mod_var, width=34).grid(row=0, column=4, sticky="ew", padx=6)
     mb_ = ttk.Frame(top)
-    mb_.grid(row=1, column=2, sticky="w", pady=(6, 0))
+    mb_.grid(row=0, column=5, sticky="w")
     ttk.Button(mb_, text="Browse...", command=lambda: browse(mod_var, "Mod folder (has the .tp2 / .tra / .d files)",
                                                              mod_var.get() or game_var.get())).pack(side="left")
     ttk.Button(mb_, text="\u2922", width=3, command=lambda: path_box(mod_var, "Mod folder")).pack(side="left", padx=(3, 0))
-
-    src_chk = ttk.Checkbutton(chk1, text="Read Mod Files", variable=source_var,
-                              command=lambda: merge_chk.config(state="disabled" if source_var.get() else "normal"))
-    src_chk.pack(side="left")
-    src_note = ttk.Label(chk1, text="(install not needed)", foreground="#777")
-    src_note.pack(side="left", padx=(4, 0))
-    for w_ in (src_chk, src_note):
-        tooltip(w_, "Work the speakers out from the mod's own files (.d, .tra, .tp2, .cre, .are) rather than by matching text"
-                " against the game. The mod need not be installed, every line comes with its speaker, and uninstalled "
-                "components count too.\n\nExperimental.")
 
     def mod_bmp_index() -> Dict[str, str]:
         """NAME -> the mod folder's own .bmp, and CRE NAME -> the portraits the mod's own creature file asks for.
@@ -3576,35 +3952,36 @@ def run_gui() -> None:
         save_settings(st)
         if state["res"]:
             refresh()
-    pic_chk = ttk.Checkbutton(chk1, text="Mod's portraits only", variable=modpic_var, command=modpic_changed)
-    pic_chk.pack(side="left", padx=(14, 0))
-    tooltip(pic_chk, "Gallery only, and only with a mod folder chosen.\n\nOff: each NPC as it looks in the game now, "
+    pic_tip = ( "Gallery only, and only with a mod folder chosen.\n\nOff: each NPC as it looks in the game now, "
             "which includes pictures another mod or the installer replaced.\nOn: only the .bmp files the mod folder "
             "itself holds; an NPC the mod ships no picture for shows none.")
     btns = ttk.Frame(top)
-    btns.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+    btns.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(8, 0))
     go_btn = tk.Button(btns, text="Analyze", bg="#2e9e4f", fg="white", activebackground="#25803f",
                        activeforeground="white", font=("TkDefaultFont", 10, "bold"), padx=14, pady=3, relief="raised")
     go_btn.pack(side="left")
-    save_btn = ttk.Button(btns, text="Save as text...", state="disabled")
-    save_btn.pack(side="right")
-    csv_btn = ttk.Button(btns, text="Save as CSV...", state="disabled")
-    csv_btn.pack(side="right", padx=6)
-    merge_chk = ttk.Checkbutton(btns, text="Merge same names", variable=merge_var,
-                                state="disabled" if source_var.get() else "normal")
-    merge_chk.pack(side="right", padx=12)
-    tooltip(merge_chk, "Treat every dialog whose creature has the same name as one NPC.\n\nOff (usual): they are "
-            "merged only when they also share a creature file or portrait, or do not differ in race, gender and "
-            "animation - so two different \"Guard\" creatures stay apart.")
     view_var = tk.StringVar(value="gallery")                     # the portraits are what this is for
     sty.configure("View.Toolbutton", padding=(12, 4))
     ttk.Radiobutton(btns, text="Gallery", value="gallery", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(16, 0))
+    auto_mode_var = tk.BooleanVar(value=st.get("gallery_mode", "auto") != "plain")
+
+    def auto_mode_changed() -> None:
+        st["gallery_mode"] = "auto" if auto_mode_var.get() else "plain"
+        save_settings(st)
+        view_var.set("gallery")                                      # ticking it shows the gallery either way
+        show_view()
+    am_cb = ttk.Checkbutton(btns, text="Expanded", variable=auto_mode_var, command=auto_mode_changed)
+    am_cb.pack(side="left", padx=(2, 6))
+    tooltip(am_cb, "Expanded: each creature's card opened out, with its new pictures to pick from, the crop and "
+                   "the batch tools (Generate for every creature listed). Off: the usual cards. Remembered.")
     ttk.Radiobutton(btns, text="Table", value="table", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(2, 0))
     gen_tab_btn = ttk.Radiobutton(btns, text="Propose", value="generate", variable=view_var, style="View.Toolbutton",
                                   command=lambda: show_view())
     gen_tab_btn.pack(side="left", padx=(2, 0))
+    ttk.Radiobutton(btns, text="Pool", value="pool", variable=view_var, style="View.Toolbutton",
+                    command=lambda: show_view()).pack(side="left")
     ttk.Radiobutton(btns, text="Proposals", value="export", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(2, 0))
     search_var = tk.StringVar(value="")
@@ -3619,10 +3996,14 @@ def run_gui() -> None:
     ttk.Label(btns, textvariable=loading_var, foreground="#b45309",
               font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=14)
 
+    fbar = ttk.Frame(root, padding=(8, 0, 8, 0))                     # what is listed: the same for Gallery, Table
+    fbar.pack(fill="x")                                              # and Proposals, so it sits above all three
     content = ttk.Frame(root)
     content.pack(fill="both", expand=True, padx=8, pady=4)
     tab_table, tab_gal = ttk.Frame(content), ttk.Frame(content)
     tab_gen, tab_exp = ttk.Frame(content), ttk.Frame(content)
+    tab_pool = ttk.Frame(content)                                    # pictures made and not used
+    tab_auto = ttk.Frame(content)                                    # a batch for every creature listed
 
     cols = [k for k, _ in COLUMNS]
     tmid = ttk.Frame(tab_table)                                      # the table is wider than most windows, so it
@@ -3647,10 +4028,12 @@ def run_gui() -> None:
 
     SORTS = [("Lines, most first", ("lines", True)), ("Lines, fewest first", ("lines", False)),
              ("Name, A to Z", ("name", False)), ("Name, Z to A", ("name", True)),
-             ("Portrait", ("portrait", False)), ("Area", ("area", False))]
+             ("Portrait", ("portrait", False)), ("Area", ("area", False)),
+             ("Borrowed face", ("borrowed", False))]
 
     props: Dict[str, str] = {}                      # proposed portrait image per creature (key = its dialogs)
     skip: set = set()                               # creatures marked as not wanting a portrait, same key
+    kept: Dict[str, bool] = {}                      # borrowed faces judged by hand: keep it, or it wants its own
     prop_label = tk.StringVar(value="Proposed portraits: 0")
     prop_where = tk.StringVar(value="")
     gbar = ttk.Frame(tab_gal, padding=(0, 0, 0, 4))
@@ -3662,12 +4045,12 @@ def run_gui() -> None:
     sort_var = tk.StringVar(value=SORTS[0][0])
     sort_box = ttk.Combobox(gbar, textvariable=sort_var, values=[lbl for lbl, _k in SORTS], state="readonly", width=18)
     sort_box.pack(side="left")
+    tooltip(sort_box, "Borrowed face: creatures wearing a face copied from another creature come first, "
+            "grouped by that face, most lines first.")
     show_skip_var = tk.BooleanVar(value=False)
     party_var = tk.BooleanVar(value=bool(st.get("party_npcs", True)))
-    party_cb = ttk.Checkbutton(gbar, text="Party NPCs", variable=party_var)
-    party_cb.pack(side="left", padx=(12, 0))
-    skip_cb = ttk.Checkbutton(gbar, text="Ignored", variable=show_skip_var)
-    skip_cb.pack(side="left", padx=(12, 0))
+    party_cb = ttk.Checkbutton(fbar, text="Party NPCs", variable=party_var)
+    skip_cb = ttk.Checkbutton(fbar, text="Ignored", variable=show_skip_var)
     tooltip(skip_cb, "Creatures marked with 'Ignore this creature' on the right-click menu.\n\nOff: left out of the table, the"
             " gallery and the proposals.\nOn: listed with everybody else, marked (ignored), so you can let one back "
             "in.")
@@ -3683,11 +4066,47 @@ def run_gui() -> None:
     tooltip(pick_cb, "Put a tick box on every card, so a whole set of creatures can be dealt with at once.")
     pick_count = tk.StringVar(value="")
 
+    # narrow the gallery to the creatures worth looking at next
+    CHIPS: List[Tuple[str, Callable[[dict], bool]]] = [
+        ("No portrait", lambda r: not (r.get("large") or r.get("small")) and rowkey(r) not in props),
+        ("Proposed", lambda r: rowkey(r) in props or (bool(r.get("copy_port")) and face_kept(r))),
+        #   a copy keeping the face it was copied with has its portrait settled too: it is listed with them
+        ("Missing", lambda r: bool(props.get(rowkey(r))) and not os.path.isfile(str(props.get(rowkey(r))))),
+        ("Borrowed", lambda r: bool(r.get("copy_port"))),
+        ("Face kept", lambda r: face_kept(r)),
+        ("10+ lines", lambda r: int(r.get("lines", 0) or 0) >= 10),
+    ]
+    chip_vars: Dict[str, tk.BooleanVar] = {}
+    keep_vars: List[tk.BooleanVar] = []             # the cards' keep-this-face ticks, while they are on screen
+    ttk.Label(fbar, text="Also show:", foreground="#666").pack(side="left")
+    party_cb.pack(side="left", padx=(6, 0))
+    skip_cb.pack(side="left", padx=(10, 0))
+    ttk.Label(fbar, text="Show only:", foreground="#666").pack(side="left", padx=(24, 0))
+    for _lbl, _fn in CHIPS:
+        chip_vars[_lbl] = tk.BooleanVar(value=False)
+        _c = ttk.Checkbutton(fbar, text=_lbl, variable=chip_vars[_lbl], command=lambda: chip_changed())
+        _c.pack(side="left", padx=(10, 0))
+        tooltip(_c, "Show only creatures this is true of. Tick as many as you like; a creature has to match "
+                    "all of them.")
+    pic_chk = ttk.Checkbutton(fbar, text="Mod's portraits only", variable=modpic_var, command=modpic_changed)
+    pic_chk.pack(side="left", padx=(24, 0))
+    tooltip(pic_chk, pic_tip)
+
+    def chip_changed(*_a: object) -> None:
+        state["page"] = 0
+        refresh()
+        if view_var.get() == "export":
+            fill_export()
+
     ebar = ttk.Frame(tab_exp, padding=(0, 0, 0, 6))                  # the Proposals tab: what you have chosen so far
     ebar.pack(side="top", fill="x")
     sty.configure("Export.TButton", font=("TkDefaultFont", 9, "bold"))
     export_btn = ttk.Button(ebar, text="Save to-do list...", style="Export.TButton")
     export_btn.pack(side="left")
+    list_btn = ttk.Button(ebar, text="Save list...", state="disabled")
+    list_btn.pack(side="left", padx=(6, 0))
+    tooltip(list_btn, "Save the list of creatures as shown in Gallery and Table, as text or as a spreadsheet "
+                      "(.csv) - pick the type in the save window. Analyze also saves it as text next to the program.")
     mod_btn = ttk.Button(ebar, text="Create mod...")
     mod_btn.pack(side="left", padx=(6, 0))
     clear_btn = ttk.Button(ebar, text="Clear all proposals")
@@ -3744,26 +4163,32 @@ def run_gui() -> None:
 
     def on_gal_resize(e: object) -> None:
         fix_scrollregion()
-        if view_var.get() == "gallery" and state["res"] and per_row_now() != state.get("per_row"):
+        if view_var.get() == "gallery" and tab_gal.winfo_ismapped() and state["res"] and per_row_now() != state.get("per_row"):
             if state.get("resize_job"):
                 root.after_cancel(state["resize_job"])                   # type: ignore[arg-type]
             state["resize_job"] = root.after(150, lambda: build_gallery(sorted_rows()))
 
     gcanvas.bind("<Configure>", on_gal_resize)
-    root.bind("<MouseWheel>", lambda e: gcanvas.yview_scroll(int(-e.delta / 120), "units") if view_var.get() == "gallery" else None)
+    def gal_target() -> object:
+        """What the wheel and the keys scroll in the gallery: the cards, or the Auto view when that is showing."""
+        cv_ = auto_ui.get("canvas")
+        return cv_ if cv_ is not None and tab_auto.winfo_ismapped() else gcanvas
+    root.bind("<MouseWheel>", lambda e: gal_target().yview_scroll(int(-e.delta / 120), "units")   # type: ignore[attr-defined]
+              if view_var.get() == "gallery" else None)
 
     def gal_key(what: str, n: int = 1) -> None:
         if view_var.get() == "gallery":
+            cv_ = gal_target()
             if what == "page":
-                gcanvas.yview_scroll(n, "pages")
+                cv_.yview_scroll(n, "pages")                         # type: ignore[attr-defined]
             elif what == "home":
-                gcanvas.yview_moveto(0)
+                cv_.yview_moveto(0)                                  # type: ignore[attr-defined]
             else:
-                gcanvas.yview_moveto(1)
+                cv_.yview_moveto(1)                                  # type: ignore[attr-defined]
 
     def gal_arrow(e: object, n: int) -> None:
         if view_var.get() == "gallery" and e.widget.winfo_class() not in ("TEntry", "Entry"):   # type: ignore[attr-defined]
-            gcanvas.yview_scroll(n, "units")
+            gal_target().yview_scroll(n, "units")                    # type: ignore[attr-defined]
 
     root.bind("<Up>", lambda e: gal_arrow(e, -3))
     root.bind("<Down>", lambda e: gal_arrow(e, 3))
@@ -3771,10 +4196,646 @@ def run_gui() -> None:
     root.bind("<Next>", lambda e: gal_key("page", 1))
     root.bind("<Control-Home>", lambda e: gal_key("home"))
     root.bind("<Control-End>", lambda e: gal_key("end"))
+    for key_, what_ in (("<Left>", "left"), ("<Right>", "right"), ("<Up>", "up"), ("<Down>", "down"),
+                        ("<space>", "space"), ("<Home>", "home"), ("<End>", "end"), ("<Prior>", "prior"),
+                        ("<Next>", "next"), ("<Delete>", "delete")):
+        root.bind(key_, lambda e, w=what_: pool_key(e, w), add="+")  # the pool's keys (only on the Pool tab)
+
+    def pool_refocus(e: object) -> None:
+        """A click on a button leaves the keys on it, and Space would press it again: give them back to the
+        pictures."""
+        try:
+            if view_var.get() == "pool" and e.widget.winfo_class() in (   # type: ignore[attr-defined]
+                    "TButton", "TRadiobutton", "TCheckbutton", "Button", "Radiobutton", "Checkbutton"):
+                root.after_idle(pool_canvas.focus_set)
+        except (tk.TclError, AttributeError, NameError):
+            pass
+    root.bind("<ButtonRelease-1>", pool_refocus, add="+")
+
+    # ------------------------------------------------------------------ the pool: pictures made, not used
+    pool_bar = ttk.Frame(tab_pool, padding=(0, 0, 0, 4))
+    pool_bar.pack(side="top", fill="x")
+    pool_navtop = tk.Frame(tab_pool)                                 # < Previous  Page [n] of N  Next >
+    pool_navtop.pack(side="top", anchor="w", pady=(0, 4))
+    pool_sel: Set[str] = set()                                       # which of them are ticked
+    pool_find = tk.StringVar()
+    pool_race, pool_sex = tk.StringVar(value="any"), tk.StringVar(value="any")
+    pool_count = tk.StringVar(value="")
+    POOL_SORTS = ["Newest", "Oldest", "Creature", "Folder"]
+    POOL_PER = 200                                                   # pictures to a page, as the gallery
+    pool_sort = tk.StringVar(value=str(st.get("pool_sort") or "Newest") if str(st.get("pool_sort") or "") in POOL_SORTS
+                             else "Newest")
+    pool_hidewait = tk.BooleanVar(value=bool(st.get("pool_hidewait", True)))
+
+    def pool_waiting() -> Set[str]:
+        """Pictures still on an Auto card that has no pick applied yet: not spare until it does."""
+        out_: Set[str] = set()
+        for runs_ in (st.get("auto_runs") or {}).values():             # type: ignore[union-attr]
+            for ent_ in (runs_ or {}).values():
+                if not ent_.get("chosen"):
+                    out_.update(os.path.normcase(str(p_)) for p_ in ent_.get("paths", []))
+        return out_
+
+    def pool_folder() -> str:
+        """Where the generator puts what it makes."""
+        try:
+            pg_ = generator_module()
+            out_ = str((pg_.load_settings() or {}).get("output_folder") or "generated") if pg_ else "generated"
+        except Exception:  # noqa: BLE001 - the generator may not be there
+            out_ = "generated"
+        return str(Path(__file__).resolve().parent / out_)
+
+    def pool_used() -> Set[str]:
+        """Every picture a proposal rests on, the spares taken out of the pool for one included."""
+        got = st.get("pool_from")
+        return proposed_pictures(st.get("proposals") or {}, got if isinstance(got, dict) else None)
+
+    def pool_who() -> Dict[str, Tuple[str, str]]:
+        """Creature file -> (race, sex), from the analysis on screen. A picture made for a creature shows
+        that creature, so this is what is in it."""
+        if state.get("pool_who") is None:
+            by: Dict[str, Tuple[str, str]] = {}
+            for o in (all_rows() if state["res"] else []):
+                for c_ in (o.get("cre_list") or []):
+                    by[str(c_).upper()] = (str(o.get("race") or ""), str(o.get("sex") or ""))
+            state["pool_who"] = by
+        return state["pool_who"]                                     # type: ignore[return-value]
+
+    def pool_list() -> List[Path]:
+        """Everything spare, narrowed by the search box and the two pickers."""
+        if state.get("pool_files") is None:
+            state["pool_files"] = spare_pictures(pool_folder(), pool_used())
+        out = list(state["pool_files"])                              # type: ignore[arg-type]
+        look = pool_find.get().strip().casefold()
+        if look:
+            out = [q for q in out if look in q.name.casefold() or look in made_for(q.name).casefold()
+                   or look in q.parent.name.casefold()]
+        who = pool_who()
+        for pick, at in ((pool_race.get(), 0), (pool_sex.get(), 1)):
+            if pick and pick != "any":
+                out = [q for q in out if who.get(made_from(q.name), ("", ""))[at] == pick]
+        if pool_hidewait.get():
+            wait_ = pool_waiting()
+            out = [q for q in out if os.path.normcase(str(q)) not in wait_]
+        how = pool_sort.get()
+        if how in ("Newest", "Oldest"):
+            mt_: Dict[str, float] = state.setdefault("pool_mtime", {})   # type: ignore[assignment]
+            def age(q: Path) -> float:
+                k_ = str(q)
+                if k_ not in mt_:
+                    try:
+                        mt_[k_] = q.stat().st_mtime
+                    except OSError:
+                        mt_[k_] = 0.0
+                return mt_[k_]
+            out.sort(key=age, reverse=how == "Newest")
+        elif how == "Creature":
+            out.sort(key=lambda q: (made_for(q.name).lower(), q.name.lower()))
+        return out
+
+    def pool_choices() -> None:
+        """Fill the two pickers with the races and sexes actually in the pool."""
+        who = pool_who()
+        got = [who.get(made_from(q.name), ("", "")) for q in (state.get("pool_files") or [])]
+        for box, at in ((race_box, 0), (sex_box, 1)):
+            vals = ["any"] + sorted({x[at] for x in got if x[at]})
+            box.config(values=vals)
+            if box.get() not in vals:
+                box.set("any")
+
+    def pool_again() -> None:
+        """Read the folder again: something was proposed, deleted or generated."""
+        state["pool_files"] = None
+        state["pool_who"] = None
+        for x_ in [x_ for x_ in pool_sel if not os.path.isfile(x_)]:   # ticks stay, for what is still there
+            pool_sel.discard(x_)
+        build_pool()
+
+    def pool_cols() -> int:
+        """As many cards per row as the window has room for, the same width a gallery card is given - 170
+        fitted one card too many in, so the last one was cut off at the edge."""
+        w = pool_canvas.winfo_width()
+        return max(2, (w if w > 100 else 1000) // CARD_W)
+
+    def wheel_over(w: object, cv: object) -> None:
+        """The wheel scrolls a canvas wherever the pointer is over it. Tk sends the wheel to the one widget
+        under the pointer, so every card and label on it has to pass it on."""
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            w.bind(ev, lambda e: cv.yview_scroll(                             # type: ignore[attr-defined]
+                (-1 if getattr(e, "num", 0) == 4 else 1) if getattr(e, "num", 0) in (4, 5)
+                else int(-e.delta / 120), "units"))
+        for kid in w.winfo_children():                               # type: ignore[attr-defined]
+            wheel_over(kid, cv)
+
+    def pool_wheel(w: object) -> None:
+        wheel_over(w, pool_canvas)
+
+    def pool_resize(_e: object) -> None:
+        """Lay the cards out again when the window is a different number of cards wide."""
+        pool_canvas.configure(scrollregion=pool_canvas.bbox("all"))
+        if view_var.get() == "pool" and pool_cols() != state.get("pool_row"):
+            if state.get("pool_job"):
+                root.after_cancel(state["pool_job"])                 # type: ignore[arg-type]
+            state["pool_job"] = root.after(150, build_pool)
+
+    def build_pool() -> None:
+        for w_ in pool_grid.winfo_children():
+            w_.destroy()
+        pool_choices()
+        files = pool_list()
+        per = POOL_PER
+        pages = max(1, -(-len(files) // per))
+        page = max(0, min(int(state.get("pool_page") or 0), pages - 1))
+        state["pool_page"] = page
+        shown = files[page * per:(page + 1) * per]
+        state["pool_page_files"] = shown
+        state["pool_cur"] = max(0, min(int(state.get("pool_cur") or 0), len(shown) - 1))
+        pool_count.set(f"{len(files):,} spare picture(s)" + (f", page {page + 1} of {pages}" if pages > 1 else "")
+                       + (f"   -   {len(pool_sel):,} ticked" if pool_sel else ""))
+        cols = pool_cols()
+        state["pool_row"] = cols
+        keep: List[object] = []
+        cells_: Dict[str, Tuple[object, object]] = {}
+        state["pool_cells"] = cells_
+        for i, q in enumerate(shown):
+            cell = tk.Frame(pool_grid, bg=CARD, padx=4, pady=4, highlightthickness=3,
+                            highlightbackground=CARD if str(q) not in pool_sel else "#2e9e4f")
+            cell.grid(row=i // cols, column=i % cols, padx=4, pady=4, sticky="n")
+            img = load_thumb(str(q))
+            lab = tk.Label(cell, image=img, bg=CARD, cursor="hand2") if img else \
+                tk.Label(cell, text="(no preview)", bg=CARD, width=18, height=6)
+            if img:
+                keep.append(img)
+            lab.pack()
+            lab.bind("<Button-1>", lambda e, w=str(q): pool_tick(w))
+            nm_ = tk.Label(cell, text=made_for(q.name), bg=CARD, font=("TkDefaultFont", 9, "bold"),
+                           wraplength=150)
+            nm_.pack()
+            fo_ = tk.Label(cell, text=q.parent.name, bg=CARD, fg="#888", font=("TkDefaultFont", 8))
+            fo_.pack()
+            on_ = str(q) in pool_sel
+            tk_ = tk.Label(cell, text="\u2611 Ticked" if on_ else "\u2610 Tick", bg=CARD,
+                           fg="#2e9e4f" if on_ else "#555", cursor="hand2")
+            tk_.pack()
+            tk_.bind("<Button-1>", lambda e, w=str(q): pool_tick(w))
+            cells_[str(q)] = (cell, tk_)
+            for w_ in (cell, nm_, fo_):                               # a click beside the picture: just go there
+                w_.bind("<Button-1>", lambda e, w=str(q): pool_goto(w))
+            for w_ in (cell, lab, nm_, fo_, tk_):                     # right click: what to do with this one
+                w_.bind("<Button-3>", lambda e, x=q: pool_menu(e, x))
+            tooltip(lab, f"{q.name}\nClick to tick it, right-click for what to do with it.")
+        state["pool_keep"] = keep                                    # Tk drops a picture nothing holds
+        pool_nav(pool_navtop, page, pages, per, len(files))
+        root.after_idle(pool_marks)                                  # the keyboard's place
+        if pages > 1:                                                # and the same at the bottom
+            nb_ = tk.Frame(pool_grid)
+            nb_.grid(row=(len(shown) + cols - 1) // cols, column=0, columnspan=cols, sticky="w", padx=4, pady=(8, 12))
+            pool_nav(nb_, page, pages, per, len(files))
+        pool_wheel(pool_grid)
+        pool_grid.update_idletasks()
+        pool_canvas.configure(scrollregion=pool_canvas.bbox("all"))
+
+    def pool_touch(q: Path) -> None:
+        """Work on a spare picture. What comes out of it is a new spare beside it, so the one you had is kept."""
+        pg_ = generator_module()
+        if pg_ is None:
+            return
+        try:
+            gs_ = pg_.load_settings()                                # type: ignore[attr-defined]
+        except Exception as e:  # noqa: BLE001 - the generator may be half installed
+            status.set(f"The generator settings could not be read ({e}).")
+            return
+
+        def took(_old: str, new_: str, _drop: str = "") -> None:
+            pool_again()
+            status.set(f"{Path(new_).name} is in the pool.")
+        touch_up_window(root, str(q), pg=pg_, gs=gs_, r={"name": made_for(q.name)}, desc="",
+                        say=status.set, on_done=took, touch_memory=TOUCH_MEMORY, generic=True)
+
+    def pool_menu(event: object, q: Path) -> None:
+        """The right-click menu of a spare picture."""
+        menu = tk.Menu(root, tearoff=0)
+        ticked = [x for x in pool_list() if str(x) in pool_sel]
+        menu.add_command(label=f"Use {q.name} for...", command=lambda: pool_give([q]))
+        menu.add_command(label=f"Open in Propose ({made_for(q.name)})", command=lambda: pool_propose(q))
+        if len(ticked) > 1 and str(q) in pool_sel:
+            menu.add_command(label=f"Use the {len(ticked):,} ticked for...", command=lambda: pool_give())
+        menu.add_separator()
+        menu.add_command(label="Touch up...", command=lambda: pool_touch(q))
+        menu.add_command(label="Save a copy as...", command=lambda: save_image(root, q.name, None, str(q)))
+        menu.add_command(label="Open the folder", command=lambda: open_path(str(q.parent)))
+        menu.add_separator()
+        menu.add_command(label="Untick" if str(q) in pool_sel else "Tick", command=lambda: pool_tick(str(q)))
+        menu.add_command(label="Tick this page", command=pool_tick_page)
+        if pool_sel:
+            menu.add_command(label=f"Untick all ({len(pool_sel):,})",
+                             command=lambda: (pool_sel.clear(), pool_marks()))
+        menu.add_command(label="Delete this picture", command=lambda: pool_drop([q]))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)                # type: ignore[attr-defined]
+        finally:
+            menu.grab_release()
+
+    def pool_propose(q: Path) -> None:
+        """Open the creature the picture was made for in Propose, with the picture among its candidates."""
+        cre_ = made_from(q.name)
+        if not state["res"]:                                         # nothing analyzed yet (just started): do it,
+            status.set("Analyzing first...")                         # then open it
+            try:
+                analyze_clicked()
+            except Exception:  # noqa: BLE001
+                return
+            tries_ = [0]
+
+            def again() -> None:
+                tries_[0] += 1
+                if state["res"]:
+                    pool_propose(q)
+                elif tries_[0] < 600 and str(go_btn.cget("state")) != "normal" or tries_[0] < 4:
+                    root.after(500, again)
+            root.after(500, again)
+            return
+        has_ = lambda o: cre_ and cre_ in [str(c).upper() for c in (o.get("cre_list") or [])]   # noqa: E731
+        r_ = next((o for o in all_rows() if has_(o)), None)
+        if r_ is None:                                               # one of a merged row's creatures
+            r_ = next((o for o in all_rows() if any(has_(p_) for p_ in (o.get("parts") or []))), None)
+        if r_ is None:
+            status.set(f"{made_for(q.name)} ({cre_ or 'no creature file in the name'}) is not in the mod analyzed, "
+                       "so it cannot be opened in Propose. Use for... gives the picture to anyone.")
+            return
+        state["propose_take"] = str(q)                               # the Propose tab takes it in once it is built
+        view_var.set("generate")
+        state["gen_built"] = True
+        show_view()
+        generate_dialog(r_)
+
+    def pool_turn(step: int, to: Optional[int] = None) -> None:
+        state["pool_page"] = max(0, (to if to is not None else int(state.get("pool_page") or 0) + step))
+        build_pool()
+        pool_canvas.yview_moveto(0)
+
+    def pool_nav(bar: object, page: int, pages: int, per: int, total: int) -> None:
+        """< Previous, Page [n] of N, Next >: as the gallery has them. Type a page number and press Enter."""
+        for w_ in bar.winfo_children():                              # type: ignore[attr-defined]
+            w_.destroy()
+        if pages <= 1:
+            bar.config(highlightthickness=0)                         # type: ignore[attr-defined]
+            return
+        bar.config(highlightthickness=2, highlightbackground="#8a8f98", highlightcolor="#8a8f98", padx=4, pady=2)   # type: ignore[attr-defined]
+        tk.Button(bar, text=f"< Previous {per}", command=lambda: pool_turn(-1),
+                  state="normal" if page > 0 else "disabled").pack(side="left", padx=6)
+        bg_ = bar.cget("bg")                                         # type: ignore[attr-defined]
+        tk.Label(bar, text="Page", bg=bg_, fg="#555").pack(side="left", padx=(6, 2))
+        pv_ = tk.StringVar(value=str(page + 1))
+        pe_ = tk.Entry(bar, textvariable=pv_, width=4, justify="center")
+        pe_.pack(side="left")
+
+        def jump(_e: object = None) -> None:
+            try:
+                pool_turn(0, int(pv_.get().strip()) - 1)
+            except ValueError:
+                pass
+        pe_.bind("<Return>", jump)
+        pe_.bind("<KP_Enter>", jump)
+        first = page * per
+        tk.Label(bar, text=f"of {pages}  ({first + 1:,}-{min(first + per, total):,} of {total:,})", bg=bg_,
+                 fg="#555").pack(side="left", padx=(2, 6))
+        tk.Button(bar, text=f"Next {per} >", command=lambda: pool_turn(1),
+                  state="normal" if page < pages - 1 else "disabled").pack(side="left", padx=6)
+
+    def pool_tick_page() -> None:
+        """Tick everything on this page - or untick it, when it is all ticked already."""
+        here = [str(q) for q in state.get("pool_page_files") or []]
+        if here and all(x in pool_sel for x in here):
+            pool_sel.difference_update(here)
+        else:
+            pool_sel.update(here)
+        pool_marks()
+
+    def pool_tick_all() -> None:
+        """Tick every picture listed (all pages, as narrowed above) - or untick them, when all are ticked."""
+        every_ = [str(q) for q in pool_list()]
+        if every_ and all(x in pool_sel for x in every_):
+            pool_sel.difference_update(every_)
+        else:
+            pool_sel.update(every_)
+        pool_marks()
+
+    def pool_marks() -> None:
+        """Show the ticks as they are now, on the pictures already drawn: no redraw of the page."""
+        for path_, (cell_, lab_) in (state.get("pool_cells") or {}).items():   # type: ignore[union-attr]
+            on_ = path_ in pool_sel
+            try:
+                cell_.config(highlightbackground="#2e9e4f" if on_ else CARD)   # type: ignore[attr-defined]
+                lab_.config(text="\u2611 Ticked" if on_ else "\u2610 Tick", fg="#2e9e4f" if on_ else "#555")   # type: ignore[attr-defined]
+            except tk.TclError:
+                pass
+        here_ = [str(q) for q in state.get("pool_page_files") or []]
+        cur_ = int(state.get("pool_cur") or 0)
+        for i_, path_ in enumerate(here_):                           # the keyboard's place: a blue card
+            got_ = (state.get("pool_cells") or {}).get(path_)        # type: ignore[union-attr]
+            if not got_:
+                continue
+            bg_ = "#cfe0f5" if i_ == cur_ and state.get("pool_keys") else CARD
+            try:
+                got_[0].config(bg=bg_)                               # type: ignore[attr-defined]
+                for ch_ in got_[0].winfo_children():                 # type: ignore[attr-defined]
+                    ch_.config(bg=bg_)
+            except tk.TclError:
+                pass
+        txt_ = pool_count.get().split("   -   ")[0]
+        pool_count.set(txt_ + (f"   -   {len(pool_sel):,} ticked" if pool_sel else ""))
+
+    def pool_tick(path: str) -> None:
+        pool_sel.discard(path) if path in pool_sel else pool_sel.add(path)
+        here_ = [str(q) for q in state.get("pool_page_files") or []]
+        if path in here_:                                            # a click moves the keyboard's place there too
+            state["pool_cur"] = here_.index(path)
+            state["pool_keys"] = True                                # and shows it, so the arrows go on from it
+        try:
+            pool_canvas.focus_set()                                  # the keys go to the pictures from here on
+        except tk.TclError:
+            pass
+        pool_marks()
+
+    def pool_goto(path: str) -> None:
+        """Put the keyboard's place on this picture without ticking it."""
+        here_ = [str(q) for q in state.get("pool_page_files") or []]
+        if path in here_:
+            state["pool_cur"] = here_.index(path)
+            state["pool_keys"] = True
+        try:
+            pool_canvas.focus_set()
+        except tk.TclError:
+            pass
+        pool_marks()
+
+    def pool_see(i: int) -> None:
+        """Scroll so picture i of the page is in view."""
+        got_ = (state.get("pool_cells") or {}).get(                  # type: ignore[union-attr]
+            str((state.get("pool_page_files") or [])[i]))            # type: ignore[index]
+        if not got_:
+            return
+        try:
+            cell_ = got_[0]
+            total_ = max(1, pool_grid.winfo_height())
+            top_, bot_ = cell_.winfo_y(), cell_.winfo_y() + cell_.winfo_height()   # type: ignore[attr-defined]
+            v0, v1 = pool_canvas.yview()
+            if top_ < v0 * total_:
+                pool_canvas.yview_moveto(max(0.0, (top_ - 8) / total_))
+            elif bot_ > v1 * total_:
+                pool_canvas.yview_moveto(max(0.0, (bot_ + 8) / total_ - (v1 - v0)))
+        except (tk.TclError, IndexError):
+            pass
+
+    def pool_key(e: object, what: str) -> Optional[str]:
+        """Arrows move along the pictures, Space ticks, Page Up / Down turn the page, Delete deletes the ticked."""
+        if view_var.get() != "pool":
+            return None
+        if e.widget.winfo_class() in ("TEntry", "Entry", "TCombobox", "TSpinbox", "Spinbox"):   # type: ignore[attr-defined]
+            return None
+        if e.widget is not pool_canvas:                              # a button had the keys: Space has pressed
+            try:                                                     # it already, so take them back, and leave
+                pool_canvas.focus_set()                              # this one press be
+            except tk.TclError:
+                pass
+            if what == "space":
+                return "break"
+        here_ = state.get("pool_page_files") or []
+        if not here_:
+            return "break"
+        cols_ = int(state.get("pool_row") or 1)
+        cur_ = int(state.get("pool_cur") or 0)
+        state["pool_keys"] = True
+        if what == "space":
+            pool_tick(str(here_[min(cur_, len(here_) - 1)]))          # type: ignore[index]
+            return "break"
+        if what in ("prior", "next"):
+            pool_turn(-1 if what == "prior" else 1)
+            state["pool_cur"] = 0
+            pool_marks()
+            return "break"
+        if what == "delete":
+            pool_drop()
+            return "break"
+        step_ = {"left": -1, "right": 1, "up": -cols_, "down": cols_}.get(what, 0)
+        new_ = 0 if what == "home" else len(here_) - 1 if what == "end" else cur_ + step_   # type: ignore[arg-type]
+        state["pool_cur"] = max(0, min(len(here_) - 1, new_))         # type: ignore[arg-type]
+        pool_marks()
+        pool_see(int(state["pool_cur"]))                             # type: ignore[arg-type]
+        return "break"
+
+    def pool_page(by: int) -> None:
+        state["pool_page"] = max(0, int(state.get("pool_page") or 0) + by)
+        build_pool()
+
+    def pool_drop(only: "Optional[List[Path]]" = None) -> None:
+        """Delete pictures that came out wrong: the ticked ones, or the one right-clicked. They go for good."""
+        gone = list(only) if only else [q for q in pool_list() if str(q) in pool_sel]
+        if not gone:
+            status.set("Tick the pictures to delete first.")
+            return
+        if not messagebox.askyesno("Portrait Scout", f"Delete {len(gone):,} picture(s) from the disk?\n\n"
+                                   + "\n".join(q.name for q in gone[:10])
+                                   + (f"\n...and {len(gone) - 10:,} more" if len(gone) > 10 else "")
+                                   + "\n\nThis cannot be undone.", parent=root):
+            return
+        went = bad = 0
+        for q in gone:
+            for f in {str(q)} | {str(x) for x in q.parent.glob(plain_of(str(q)).stem + "_*")
+                                 if x.is_file() and x.suffix.lower() in POOL_EXT}:
+                try:
+                    os.remove(f)
+                    went += 1
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    bad += 1
+        dead_ = {os.path.normcase(str(q)) for q in gone if not q.exists()}
+        for runs_ in (st.get("auto_runs") or {}).values():             # type: ignore[union-attr]
+            for ent_ in (runs_ or {}).values():                       # off the Auto cards too
+                if any(os.path.normcase(str(p_)) in dead_ for p_ in ent_.get("paths", [])):
+                    ent_["paths"] = [p_ for p_ in ent_.get("paths", []) if os.path.normcase(str(p_)) not in dead_]
+                    if os.path.normcase(str(ent_.get("sel") or "")) in dead_:
+                        ent_.pop("sel", None)
+        pool_sel.difference_update(str(q) for q in gone)
+        save_settings(st)
+        pool_again()
+        status.set(f"Deleted {went:,} file(s)." + (f" {bad:,} could not be deleted." if bad else ""))
+
+    def pool_groups(every: List[dict]) -> "Dict[str, List[dict]]":
+        """Creatures gathered into the groups worth filling in one go: everything, the ones with no face yet,
+        and the ones a mod copied from the same creature, which are usually the same kind of person."""
+        bare = [o for o in every if rowkey(o) not in props]
+        out: Dict[str, List[dict]] = {}
+        if bare:
+            out[f"No face yet ({len(bare):,})"] = bare
+        out[f"Everything ({len(every):,})"] = every
+        by: Dict[str, List[dict]] = {}
+        for o in bare:
+            was = str(o.get("copy_of") or "")
+            if was:
+                by.setdefault(was, []).append(o)
+        for was, lot in sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            if len(lot) > 1:
+                out[f"Copied from {was} ({len(lot):,})"] = lot
+        return out
+
+    def pool_give(only: "Optional[List[Path]]" = None) -> None:
+        """Hand pictures to creatures: the ticked ones, or the one right-clicked."""
+        picks = list(only) if only else [q for q in pool_list() if str(q) in pool_sel]
+        if not picks:
+            status.set("Tick a picture first.")
+            return
+        every = [o for o in all_rows() if rowkey(o) not in skip]
+        if not every:
+            messagebox.showinfo("Portrait Scout", "Analyze a mod first.", parent=root)
+            return
+        groups = pool_groups(every)
+        w = tk.Toplevel(root)
+        w.title("Propose these pictures")
+        w.transient(root)
+        esc_closes(w)
+        bx = ttk.Frame(w, padding=12)
+        bx.pack(fill="both", expand=True)
+        ttk.Label(bx, text=(f"{len(picks):,} picture(s) ticked. Pick a group to tick its creatures, or pick them "
+                            "below. The pictures are dealt out in order."), wraplength=560,
+                  justify="left").pack(anchor="w")
+        gv, reuse_v = tk.StringVar(value=next(iter(groups))), tk.BooleanVar(value=False)
+        top_ = ttk.Frame(bx)
+        top_.pack(fill="x", pady=(8, 0))
+        ttk.Label(top_, text="Group:").pack(side="left")
+        gb_ = ttk.Combobox(top_, textvariable=gv, width=44, state="readonly", values=list(groups))
+        gb_.pack(side="left", padx=(4, 10))
+        tooltip(gb_, "Creatures that belong together: the ones with no face yet, or the ones a mod copied from "
+                     "the same creature, which are usually the same kind of person.")
+        rb_ = ttk.Checkbutton(top_, text="Reuse pictures", variable=reuse_v)
+        rb_.pack(side="left")
+        tooltip(rb_, "Off: each picture goes to one creature and the rest are left alone. On: the pictures go "
+                     "round again, so a face can repeat.")
+        lb = tk.Listbox(bx, selectmode="multiple", width=86, height=min(20, max(5, len(every))),
+                        exportselection=False)
+        lb.pack(fill="both", expand=True, pady=(8, 0))
+        rows: List[dict] = []
+
+        def fill(*_a: object) -> None:
+            """Show the chosen group and tick all of it."""
+            rows[:] = groups.get(gv.get()) or []
+            lb.delete(0, "end")
+            for o in rows:
+                has = " [has one]" if rowkey(o) in props else ""
+                lb.insert("end", f"{o['name']}  -  {o.get('race', '')} {o.get('sex', '')}"
+                                 f"  -  {', '.join(o.get('cre_list') or [])}{has}")
+            lb.select_set(0, "end")
+        gb_.bind("<<ComboboxSelected>>", fill)
+        fill()
+
+        def give() -> None:
+            picked = [rows[i] for i in lb.curselection()]
+            if not picked:
+                w.destroy()
+                return
+            if not reuse_v.get():
+                picked = picked[:len(picks)]
+            for i, o in enumerate(picked):
+                props[rowkey(o)] = os.path.normpath(str(picks[i % len(picks)]))
+                crop_store().pop(rowkey(o), None)
+            persist_props()
+            if view_var.get() == "gallery":
+                rebuild_keep_scroll()
+            refresh_table_only()
+            w.destroy()
+            pool_again()
+            status.set(f"{len(picked):,} creature(s) proposed from the pool.")
+        row_ = ttk.Frame(bx)
+        row_.pack(anchor="e", pady=(10, 0))
+        ttk.Button(row_, text="Use for these", command=give).pack(side="left")
+        ttk.Button(row_, text="Pick all", command=lambda: lb.select_set(0, "end")).pack(side="left", padx=(6, 0))
+        ttk.Button(row_, text="Pick none", command=lambda: lb.select_clear(0, "end")).pack(side="left", padx=6)
+        ttk.Button(row_, text="Cancel", command=w.destroy).pack(side="left")
+        w.grab_set()
+
+    ttk.Label(pool_bar, textvariable=pool_count, foreground="#555").pack(side="left")
+    ttk.Label(pool_bar, text="   Search:").pack(side="left")
+    pf_ = ttk.Entry(pool_bar, textvariable=pool_find, width=22)
+    pf_.pack(side="left", padx=(4, 0))
+    pf_.bind("<KeyRelease>", lambda e: (state.__setitem__("pool_page", 0), build_pool()))
+    ttk.Button(pool_bar, text="x", width=2,
+               command=lambda: (pool_find.set(""), build_pool())).pack(side="left", padx=(2, 10))
+    race_box = ttk.Combobox(pool_bar, textvariable=pool_race, width=13, state="readonly", values=["any"])
+    race_box.pack(side="left")
+    sex_box = ttk.Combobox(pool_bar, textvariable=pool_sex, width=9, state="readonly", values=["any"])
+    sex_box.pack(side="left", padx=(4, 10))
+    for _b in (race_box, sex_box):
+        _b.bind("<<ComboboxSelected>>", lambda e: (state.__setitem__("pool_page", 0), build_pool()))
+        tooltip(_b, "What the picture is of, taken from the creature it was made for. Pictures made for a mod "
+                    "that is not the one analyzed are not narrowed by these.")
+    pg_btn = ttk.Button(pool_bar, text="Use for...", command=pool_give)
+    pg_btn.pack(side="left")
+    tooltip(pg_btn, "Give the ticked pictures to creatures you pick. One picture goes to all of them; several "
+                    "are dealt out in order, so twenty commoners can be handed twenty faces at once.")
+    pd_btn = tk.Button(pool_bar, text="Delete", bg="#b5452f", fg="white", activebackground="#8f3524",
+                       activeforeground="white", relief="raised", bd=1, command=pool_drop)
+    pd_btn.pack(side="left", padx=(6, 0))
+    tooltip(pd_btn, "Delete the ticked pictures from the disk, with anything made from them. They are the ones "
+                    "that came out wrong, so this cannot be undone.")
+    un_btn = ttk.Button(pool_bar, text="Untick all", width=10,
+                        command=lambda: (pool_sel.clear(), pool_marks()))
+    un_btn.pack(side="right")
+    tooltip(un_btn, "Untick everything, on this page and the others.")
+    ta_btn = ttk.Button(pool_bar, text="Tick all", width=9, command=lambda: pool_tick_all())
+    ta_btn.pack(side="right", padx=(0, 4))
+    tooltip(ta_btn, "Tick every picture listed, on every page (as narrowed by search and the pickers). "
+                    "Again unticks them.")
+    tk_btn = ttk.Button(pool_bar, text="Tick page", width=10, command=lambda: pool_tick_page())
+    tk_btn.pack(side="right", padx=(0, 4))
+    tooltip(tk_btn, "Tick every picture on this page. The ones on the other pages are left as they are.")
+    hw_ = ttk.Checkbutton(pool_bar, text="Hide Auto's", variable=pool_hidewait,
+                          command=lambda: (st.__setitem__("pool_hidewait", bool(pool_hidewait.get())),
+                                           save_settings(st), state.__setitem__("pool_page", 0), build_pool()))
+    hw_.pack(side="right", padx=(0, 10))
+    tooltip(hw_, "Leave out pictures still on an Auto card with no pick applied, so a mass delete cannot take "
+                 "them. Once a card's pick is applied, the others on it show here as spare.")
+    so_ = ttk.Combobox(pool_bar, textvariable=pool_sort, values=POOL_SORTS, state="readonly", width=9)
+    so_.pack(side="right", padx=(0, 4))
+    so_.bind("<<ComboboxSelected>>", lambda e: (st.__setitem__("pool_sort", pool_sort.get()), save_settings(st),
+                                                state.__setitem__("pool_page", 0), build_pool()))
+    tooltip(so_, "Sort: newest or oldest first, by creature, or by folder.")
+    ttk.Label(pool_bar, text="Sort:").pack(side="right", padx=(10, 2))
+    pool_canvas = tk.Canvas(tab_pool, highlightthickness=0, bg=PANEL)
+    pool_sb = ttk.Scrollbar(tab_pool, orient="vertical", command=pool_canvas.yview)
+    pool_canvas.configure(yscrollcommand=pool_sb.set)
+    pool_sb.pack(side="right", fill="y")
+    pool_canvas.pack(side="left", fill="both", expand=True)
+    pool_grid = tk.Frame(pool_canvas, bg=PANEL)
+    pool_canvas.create_window((0, 0), window=pool_grid, anchor="nw")
+    pool_grid.bind("<Configure>", lambda e: pool_canvas.configure(scrollregion=pool_canvas.bbox("all")))
+    pool_canvas.bind("<Configure>", pool_resize)
+    pool_wheel(pool_canvas)
 
     def show_view() -> None:
-        for t in (tab_table, tab_gal, tab_gen, tab_exp):
+        for t in (tab_table, tab_gal, tab_gen, tab_exp, tab_pool, tab_auto):
             t.pack_forget()
+        if view_var.get() in ("gallery", "table", "export", "auto"):        # the filters: what is listed in these three
+            fbar.pack(fill="x", before=content)
+        else:
+            fbar.pack_forget()
+        if view_var.get() == "auto":                                 # what the Auto tab was: the gallery's own view
+            view_var.set("gallery")
+            st["gallery_mode"] = "auto"
+            auto_mode_var.set(True)
+        if view_var.get() == "gallery" and st.get("gallery_mode", "auto") == "auto":
+            tab_auto.pack(fill="both", expand=True)                  # the gallery opens on the batch: two pictures
+            build_auto()                                             # a creature, pick one; Plain gallery for the cards
+            return
+        if view_var.get() == "pool":
+            tab_pool.pack(fill="both", expand=True)
+            state["pool_files"] = None                               # pictures may have been made since last time
+            state["pool_who"] = None
+            root.update_idletasks()                                  # so the canvas knows how wide it is
+            build_pool()
+            pool_canvas.focus_set()                                  # Space ticks, and does not press the
+            return                                                   # Pool button again
         if view_var.get() == "gallery":
             tab_gal.pack(fill="both", expand=True)
             if state["res"]:                                         # at startup there is nothing to build yet, and
@@ -3795,6 +4856,1304 @@ def run_gui() -> None:
                     generate_dialog(rows[idx] if 0 <= idx < len(rows) else None)
         else:
             tab_table.pack(fill="both", expand=True)
+
+    # ------------------------------------------------------------------ Auto: a portrait for every creature listed
+    # One Generate for the whole list: each creature gets a couple of candidates made the way the Propose tab
+    # makes them (its own description, colors, role and face, Vary faces on), and the Auto tab shows them two
+    # creatures to a row. Clicking a picture proposes it. Nothing is proposed without being looked at: Klein still
+    # paints the odd monkey-ogre, and only a person can tell.
+    AUTO_TW, AUTO_TH = 160, 250
+    AUTO_PAGE = 40                                                   # cards on one page of the Auto view                                      # a candidate as the Auto tab shows it
+    auto_ui: Dict[str, object] = {"built": False, "busy": False, "queue": [], "imgs": {}, "cards": {}, "empty": None,
+                                  "apply": None, "bulk": False}
+
+    def auto_mod() -> str:
+        res_ = state["res"]
+        return str(res_["mod"]) if res_ else ""                      # type: ignore[index]
+
+    def auto_store() -> Dict[str, dict]:
+        """rowkey -> {"paths": [...candidates], "chosen": png, "bmp": its .bmp}, kept per mod between sessions."""
+        return st.setdefault("auto_runs", {}).setdefault(auto_mod(), {})   # type: ignore[union-attr]
+
+    def auto_folder(gs_: dict) -> Path:
+        return (Path(__file__).resolve().parent / str(gs_.get("output_folder", "generated"))
+                / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", auto_mod()))
+
+    def auto_stem(r: dict) -> str:                                   # the Propose tab's own, so it finds them too
+        return re.sub(r"[^A-Za-z0-9_.#!-]+", "_", f"{r['name']}_{(r.get('cre_list') or [''])[0]}").strip("_") or "portrait"
+
+    def auto_style(pg_: object, gs_: dict, r: dict) -> str:
+        """The style the Propose tab would open this creature with: the last one used for people, or for animals."""
+        styles_ = pg_.style_names(gs_) if hasattr(pg_, "style_names") else []   # type: ignore[attr-defined]
+        if not styles_:
+            return ""
+        fallback = gs_.get("style") if gs_.get("style") in styles_ else styles_[0]
+        if is_animal(r):
+            want = str(st.get("portrait_style_animal") or "")
+            return want if want in styles_ else next((x for x in styles_ if animal_style(x)), str(fallback))
+        for want in (str(st.get("portrait_style_people") or ""), str(st.get("portrait_style") or ""), str(fallback)):
+            if want in styles_ and not animal_style(want):
+                return want
+        return next((x for x in styles_ if not animal_style(x)), str(fallback))
+
+    def auto_desc(pg_: object, gs_: dict, r: dict) -> str:
+        """What the Propose tab would start from: the description kept for it there, else its own file's."""
+        key_ = rowkey(r)
+        notes_ = ((st.get("portrait_notes") or {}).get(auto_mod()) or {})   # type: ignore[union-attr]
+        saved_ = notes_.get(key_) or {}
+        whose_ = ",".join(str(c).upper() for c in (r.get("cre_list") or [])) or str(r.get("name") or "")
+        if not saved_ and r.get("cre_list"):                         # filed under the dialogs it had before
+            saved_ = next((v_ for v_ in notes_.values() if str(v_.get("whose") or "") == whose_), {})
+        if saved_.get("desc") and str(saved_.get("whose") or whose_) == whose_:
+            return str(saved_["desc"])
+        r["face_variant"] = ((st.get("face_variant") or {}).get(auto_mod()) or {}).get(key_, 0)   # type: ignore[union-attr]
+        return str(pg_.describe(r, gs_)[1])                         # type: ignore[attr-defined]
+
+    def auto_prompt(pg_: object, gs_: dict, style_: str, desc_: str, words_: str) -> Tuple[str, str]:
+        tmpl, neg = pg_.style_text(gs_, style_)                      # type: ignore[attr-defined]
+        if not st.get("use_lora", True):
+            tmpl = re.sub(r"\s*<lora:[^>]*>", "", tmpl)
+        elif str(st.get("lora_weight") or "Style's") != "Style's":
+            w_ = str(st.get("lora_weight"))
+            tmpl = re.sub(r"(<lora:[^:>]+):[0-9.]+>", lambda m_: f"{m_.group(1)}:{w_}>", tmpl)
+        desc_ = pg_.womanly(desc_) if hasattr(pg_, "womanly") else desc_   # type: ignore[attr-defined]
+        d_ = pg_.vary_merge(desc_, words_, gs_) if words_ else desc_    # type: ignore[attr-defined]
+        subj_ = re.sub(r"^(adult|young)\s+", "", d_.split(",")[0].strip())
+        bg_ = pg_.pick_palette(gs_, pg_.style_background(gs_, style_))   # type: ignore[attr-defined]  {random}: a palette
+        pr_ = pg_.fill_prompt(tmpl, subj_, d_, "", bg_)              # type: ignore[attr-defined]
+        if hasattr(pg_, "youthen"):
+            pr_ = pg_.youthen(pr_, d_, gs_)                          # type: ignore[attr-defined]
+        return pr_, neg
+
+    def auto_rows() -> List[dict]:
+        """The creatures a batch would make pictures for: those listed now (the filters above apply), less the
+        ones already proposed and the ones a batch has already made pictures for."""
+        rows_ = [r for r in sorted_rows() if rowkey(r) and (auto_redo.get() or rowkey(r) not in props)]
+        if not auto_party.get():
+            rows_ = [r for r in rows_ if not r.get("party")]
+        if auto_skip_has.get():
+            rows_ = [r for r in rows_ if not (r.get("large") or r.get("small"))]
+        store_ = auto_store()
+        return [r for r in rows_ if not any(os.path.isfile(p) for p in (store_.get(rowkey(r)) or {}).get("paths", []))
+                and (store_.get(rowkey(r)) or {}).get("chosen") != "keep"]
+
+    def auto_thumb(path: str) -> object:
+        cache_: Dict[str, object] = auto_ui["imgs"]                  # type: ignore[assignment]
+        if path in cache_:
+            return cache_[path]
+        img = None
+        try:
+            from PIL import Image, ImageTk
+            im = Image.open(path)
+            im.thumbnail((AUTO_TW, AUTO_TH))
+            img = ImageTk.PhotoImage(im)
+        except Exception:  # noqa: BLE001
+            try:
+                pi = tk.PhotoImage(file=path)
+                k = max(1, -(-pi.width() // AUTO_TW), -(-pi.height() // AUTO_TH))
+                img = pi.subsample(k, k) if k > 1 else pi
+            except Exception:  # noqa: BLE001
+                img = None
+        cache_[path] = img
+        return img
+
+    def auto_status(text: str) -> None:
+        if auto_ui.get("built"):
+            auto_msg.set(text)                                       # type: ignore[union-attr]
+        status.set("Auto: " + text)
+
+    def auto_counts() -> None:
+        if not auto_ui.get("built"):
+            return
+        store_ = auto_store()
+        live = {k for k, v in store_.items() if v.get("chosen") == "keep" or any(os.path.isfile(p) for p in v.get("paths", []))}
+        chosen = sum(1 for k in live if store_[k].get("chosen"))
+        pend = sum(1 for k in live if store_[k].get("sel"))
+        if auto_ui.get("apply") is not None:
+            auto_ui["apply"].config(text=f"Apply picks ({pend})" if pend else "Apply picks",   # type: ignore[union-attr]
+                                    state="normal" if pend else "disabled")
+        left = len(auto_rows()) if state["res"] else 0
+        auto_count_var.set(f"{len(live)} made, {chosen} proposed, {pend} picked to apply"   # type: ignore[union-attr]
+                           + (f"  ·  {left} listed with none yet" if left else ""))
+
+    def auto_wheel(e: object) -> str:
+        auto_ui["canvas"].yview_scroll(int(-getattr(e, "delta", 0) / 120) or (1 if getattr(e, "num", 0) == 5 else -1), "units")
+        return "break"
+
+    def auto_catch(w: object) -> None:
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            w.bind(ev, auto_wheel)                                   # type: ignore[attr-defined]
+        for kid in w.winfo_children():                               # type: ignore[attr-defined]
+            auto_catch(kid)
+
+    def auto_cut(r: dict, ent: Optional[dict] = None) -> Tuple[int, int, float, float, float]:
+        """(width, height, zoom, dx, dy) a creature's portrait is cut with: its own crop when one was set here,
+        else what the Propose tab uses (the style's zoom, your head zoom and nudge)."""
+        pg_ = generator_module()
+        gs_ = auto_ui.get("gs") or (pg_.load_settings() if pg_ else {})   # type: ignore[attr-defined]
+        auto_ui["gs"] = gs_
+        size_ = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) and len(st.get("portrait_size")) == 2 \
+            else [(gs_.get("portrait_bmp") or {}).get("width", 169), (gs_.get("portrait_bmp") or {}).get("height", 266)]   # type: ignore[union-attr]
+        bw, bh = int(size_[0] or 169), int(size_[1] or 266)
+        own = (ent or {}).get("crop") or {}
+        zm = own.get("z")
+        if zm is None:
+            zm = pg_.style_zoom(gs_, auto_style(pg_, gs_, r)) if pg_ and hasattr(pg_, "style_zoom") else None   # type: ignore[attr-defined]
+            zm = zm or st.get("portrait_head_zoom") or (gs_.get("portrait_bmp") or {}).get("zoom") or 1.0   # type: ignore[union-attr]
+        dx = own.get("dx", float(st.get("crop_dx") or 0))
+        dy = own.get("dy", float(st.get("crop_dy") or 0))
+        return bw, bh, max(1.0, min(2.5, float(zm))), float(dx), float(dy)
+
+    def auto_box(r: dict, ent: dict, path: str) -> Optional[Tuple[int, int, int, int, int, int]]:
+        """(left, top, width, height) of what the portrait keeps, in the picture's own pixels, and its size."""
+        pg_ = generator_module()
+        info_: Dict[str, object] = auto_ui.setdefault("info", {})   # type: ignore[assignment]
+        if path not in info_:
+            info_[path] = image_info(path)
+        inf_ = info_[path]
+        if not inf_ or pg_ is None or not hasattr(pg_, "crop_box"):
+            return None
+        bw, bh, zm, dx, dy = auto_cut(r, ent)
+        sw, sh = int(inf_["w"]), int(inf_["h"])                      # type: ignore[index]
+        top_ = float(((auto_ui.get("gs") or {}).get("portrait_bmp") or {}).get("top", 0) or 0)   # type: ignore[union-attr]
+        lf, tp, cw, ch = pg_.crop_box(sw, sh, bw, bh, zm, top_)      # type: ignore[attr-defined]
+        return int(max(0, min(sw - cw, lf + dx * sw))), int(max(0, min(sh - ch, tp + dy * sh))), cw, ch, sw, sh
+
+    def auto_lock(r: dict, on: bool) -> None:
+        ent = auto_store().setdefault(rowkey(r), {"paths": []})
+        if on:
+            ent["crop_locked"] = True
+            if not ent.get("crop"):                                  # lock what is shown, even if never moved
+                _bw, _bh, zm, dx, dy = auto_cut(r, ent)
+                ent["crop"] = {"z": round(zm, 2), "dx": round(dx, 3), "dy": round(dy, 3)}
+        else:
+            ent.pop("crop_locked", None)
+        save_settings(st)
+        auto_place(r)
+
+    def auto_thumb_cut(r: dict, ent: dict, path: str) -> object:
+        """The picture as the portrait will be cut from it, at the card's size."""
+        bx = auto_box(r, ent, path)
+        if not bx:
+            return auto_thumb(path)
+        ck = f"cut:{path}:{bx[:4]}"
+        cache_: Dict[str, object] = auto_ui["imgs"]                  # type: ignore[assignment]
+        if ck not in cache_:
+            try:
+                from PIL import Image, ImageTk
+                im = Image.open(path).convert("RGB").crop((bx[0], bx[1], bx[0] + bx[2], bx[1] + bx[3]))
+                im.thumbnail((AUTO_TW, AUTO_TH))
+                cache_[ck] = ImageTk.PhotoImage(im)
+            except Exception:  # noqa: BLE001 - no Pillow: the whole picture with its box instead
+                cache_[ck] = None
+        return cache_[ck] or auto_thumb(path)
+
+    def auto_src(bmp: str) -> str:
+        """The picture a proposal was cut from ("X_1_169x266_z12_m0_1.bmp" is X_1.png beside it), or ""."""
+        m_ = CUT_MARK.search(os.path.basename(bmp or ""))
+        if not m_:
+            return ""
+        base_ = os.path.join(os.path.dirname(bmp), os.path.basename(bmp)[:m_.start()])
+        for ext_ in (".png", ".jpg", ".jpeg", ".webp"):
+            if os.path.isfile(base_ + ext_):
+                return base_ + ext_
+        return ""
+
+    def auto_recut(r: dict, ent: dict) -> bool:
+        """Cut the creature's current proposal again with the card's crop, when it is not one of the batch's
+        pictures (made in Propose before, or since) but was cut from a picture that is still there."""
+        pg_ = generator_module()
+        key_ = rowkey(r)
+        prop = str(props.get(key_) or "")
+        src = auto_src(prop)
+        if pg_ is None or not src:
+            return False
+        bw, bh, zm, dx, dy = auto_cut(r, ent)
+        mark = f"_z{int(round(zm * 10))}" + (f"_m{int(dx * 100)}_{int(dy * 100)}" if dx or dy else "")
+        bmp = os.path.splitext(src)[0] + f"_{bw}x{bh}{mark}.bmp"
+        bx = auto_box(r, ent, src)
+        try:
+            to_portrait_bmp(src, bmp, bw, bh, getattr(pg_, "crop_box", None), bx[:4] if bx else None)
+        except Exception as e:  # noqa: BLE001
+            auto_status(f"Could not cut {Path(src).name} again: {e}")
+            return False
+        same_ = lambda a, b: os.path.normcase(str(a or "")) == os.path.normcase(str(b or ""))   # noqa: E731
+        if same_(ent.get("was"), prop):
+            ent["was"] = bmp                                         # Keep now keeps the new cut
+        if same_(ent.get("bmp"), prop):
+            ent["bmp"] = bmp
+        props[key_] = os.path.normpath(bmp)
+        persist_props()
+        refresh_table_only()
+        save_settings(st)
+        auto_status(f"Cut again for {r['name']}: {Path(bmp).name}")
+        return True
+
+    def auto_crop(r: dict, zoom: float = 0.0, mx: float = 0.0, my: float = 0.0, reset: bool = False) -> None:
+        """Move this creature's crop: the yellow box on its pictures. A picture already proposed is cut again."""
+        ent = auto_store().setdefault(rowkey(r), {"paths": []})
+        if reset:
+            ent.pop("crop", None)
+        else:
+            bw, bh, zm, dx, dy = auto_cut(r, ent)
+            ent["crop"] = {"z": round(max(1.0, min(2.5, zm + zoom)), 2),
+                           "dx": round(max(-0.5, min(0.5, dx + mx)), 3), "dy": round(max(-0.5, min(0.5, dy + my)), 3)}
+        save_settings(st)
+        ch_ = str(ent.get("chosen") or "")
+        if ch_ and ch_ not in ("keep", "elsewhere") and os.path.isfile(ch_) and auto_picked(r, ent) == ch_:
+            auto_choose(r, ch_)                                      # proposed already: cut it again to match
+        else:
+            prop_ = str(props.get(rowkey(r)) or "")                  # one proposed in Propose: cut that again
+            if prop_ and (os.path.normcase(prop_) == os.path.normcase(str(ent.get("was") or ""))
+                          or os.path.normcase(prop_) == os.path.normcase(str(ent.get("bmp") or ""))):
+                auto_recut(r, ent)
+            auto_place(r)
+
+    def auto_choose(r: dict, path: str) -> None:
+        """Propose this candidate: cut to the game portrait size the Propose tab uses, exactly as "Use this"."""
+        pg_ = generator_module()
+        if pg_ is None:
+            return
+        ent0 = auto_store().get(rowkey(r)) or {}
+        bw, bh, zm, dx, dy = auto_cut(r, ent0)
+        mark = f"_z{int(round(zm * 10))}" + (f"_m{int(dx * 100)}_{int(dy * 100)}" if dx or dy else "")
+        bmp = os.path.splitext(path)[0] + f"_{bw}x{bh}{mark}.bmp"
+        bx = auto_box(r, ent0, path)
+        box_ = bx[:4] if bx else None
+        try:
+            to_portrait_bmp(path, bmp, bw, bh, getattr(pg_, "crop_box", None), box_)
+        except Exception as e:  # noqa: BLE001
+            auto_status(f"Could not make the {bw}x{bh} .bmp for {r['name']}: {e}")
+            return
+        key_ = rowkey(r)
+        ent = auto_store().setdefault(key_, {"paths": [path]})
+        if "was" not in ent:                                         # what it had before: Keep puts it back
+            ent["was"] = props.get(key_, "") if not ent.get("chosen") else ""
+        old = str(ent.get("bmp") or "")
+        if old and os.path.normcase(old) != os.path.normcase(bmp) and os.path.isfile(old) and auto_own_cut(ent, old):
+            try:                                                     # the cut of the one chosen before
+                os.remove(old)
+            except OSError:
+                pass
+        ent["chosen"], ent["bmp"] = path, bmp
+        props[key_] = os.path.normpath(bmp)
+        persist_props()
+        refresh_table_only()
+        auto_status(f"Proposed for {r['name']}: {Path(bmp).name}")
+        if auto_ui.get("bulk"):
+            return
+        if auto_hide.get():
+            auto_fill()
+        else:
+            auto_place(r)
+            auto_counts()
+
+    def auto_discard(r: dict, only_unchosen: bool = False) -> None:
+        """Delete a creature's batch pictures (all of them, or all but the chosen one) and take it off the list."""
+        key_ = rowkey(r)
+        ent = auto_store().get(key_) or {}
+        keep = {os.path.normcase(str(ent.get("chosen") or ""))} if only_unchosen else set()
+        for p in list(ent.get("paths", [])):
+            if os.path.normcase(p) in keep:
+                continue
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+            (auto_ui["imgs"]).pop(p, None)                           # type: ignore[union-attr]
+        if only_unchosen:
+            ent["paths"] = [p for p in ent.get("paths", []) if os.path.normcase(p) in keep]
+        else:
+            auto_store().pop(key_, None)
+        save_settings(st)
+
+    def auto_discard_unchosen() -> None:
+        store_ = auto_store()
+        done_ = [k for k, v in store_.items() if v.get("chosen") and
+                 len(v.get("paths", [])) > (0 if v.get("chosen") == "keep" else 1)]
+        if not done_:
+            auto_status("Nothing to discard: no creature has a chosen picture with others beside it.")
+            return
+        if not messagebox.askyesno("Portrait Scout", f"Delete the pictures not chosen for {len(done_)} creature(s)? "
+                                   "The chosen ones stay. This cannot be undone.", parent=root):
+            return
+        byk = {rowkey(o): o for o in all_rows()}
+        for k in done_:
+            auto_discard(byk.get(k) or {"dialogs": k.split(","), "name": k}, only_unchosen=True)
+        auto_fill()
+
+    def auto_now(r: dict, ent: dict) -> Tuple[object, str]:
+        """What the creature has now, before the batch: the proposal it had (a file) or the portrait the game gives
+        it. (picture, words under it); no picture when it has neither."""
+        was = str(ent.get("was") or "")
+        if was and os.path.isfile(was):
+            return auto_thumb(was), "Earlier proposal"
+        res_ = state["res"]
+        nm = str(r.get("large_name") or r.get("small_name") or r.get("copy_port") or "")
+        if not nm or not res_:
+            return None, ""
+        cache_: Dict[str, object] = auto_ui["imgs"]                  # type: ignore[assignment]
+        ck = "game:" + nm.upper()
+        if ck not in cache_:
+            img = None
+            try:
+                data = res_["game"].get(nm, T_BMP)                   # type: ignore[index]
+            except Exception:  # noqa: BLE001
+                data = None
+            if data:
+                try:
+                    from PIL import Image, ImageTk
+                    im = Image.open(io.BytesIO(data)).convert("RGB")
+                    im.thumbnail((AUTO_TW, AUTO_TH))
+                    img = ImageTk.PhotoImage(im)
+                except Exception:  # noqa: BLE001
+                    img = thumb_from_bytes(data)
+            cache_[ck] = img
+        return cache_[ck], "Its portrait now"
+
+    def auto_sync(r: dict, ent: dict) -> None:
+        """Catch up with a proposal made or removed somewhere else (Propose, the gallery): a cut of one of these
+        candidates marks that candidate; any other picture is shown on the card as proposed elsewhere."""
+        key_ = rowkey(r)
+        prop = str(props.get(key_) or "")
+        ch = str(ent.get("chosen") or "")
+        was_ = str(ent.get("was") or "")
+        kept_ok = (os.path.normcase(prop) == os.path.normcase(was_)) if was_ else not prop
+        if (ch == "keep" and kept_ok) or (prop and ent.get("bmp") and
+                                         os.path.normcase(prop) == os.path.normcase(str(ent["bmp"]))):
+            return                                                   # still as Auto left it
+        if not prop:
+            if ch:                                                   # taken away elsewhere
+                ent.pop("chosen", None)
+                ent.pop("bmp", None)
+            return
+        if ent.get("was") and os.path.normcase(prop) == os.path.normcase(str(ent["was"])):
+            return                                                   # still what it had before the batch
+        ent.pop("sel", None)                                         # chosen in Propose since: that is the pick
+        #                                                              now, so Apply picks leaves it alone
+        stem_ = Path(prop).stem.lower()
+        for p_ in ent.get("paths", []):                              # "X_c1_..._1_169x266_z12_m0_1.bmp" is X_c1_..._1
+            if stem_.startswith(Path(p_).stem.lower()):
+                ent["chosen"], ent["bmp"] = p_, prop
+                return
+        ent["chosen"], ent["bmp"] = "elsewhere", prop
+
+    def auto_picked(r: dict, ent: dict) -> str:
+        """Which picture is the creature's now: a candidate's path, "keep", or "" (changed somewhere else)."""
+        key_ = rowkey(r)
+        ch = str(ent.get("chosen") or "")
+        if ch == "keep":
+            was = str(ent.get("was") or "")
+            ok = (os.path.normcase(props.get(key_, "")) == os.path.normcase(was)) if was else key_ not in props
+            return "keep" if ok else ""
+        if ch and ent.get("bmp") and props.get(key_) and \
+                os.path.normcase(props[key_]) == os.path.normcase(str(ent["bmp"])):
+            return ch
+        return ""
+
+    def auto_own_cut(ent: dict, path: str) -> bool:
+        """Whether a .bmp is Auto's own cut of one of this creature's candidates - the only kind it may delete.
+        One proposed in Propose, or the creature's earlier proposal, is left alone."""
+        if not path or not path.lower().endswith(".bmp"):
+            return False
+        st_ = os.path.normcase(os.path.splitext(path)[0])
+        return any(st_.startswith(os.path.normcase(os.path.splitext(p)[0]) + "_") for p in ent.get("paths", [])) \
+            and os.path.normcase(path) != os.path.normcase(str(ent.get("was") or ""))
+
+    def auto_keep(r: dict) -> None:
+        """Keep what it had: the earlier proposal back, or no proposal at all so the game's own portrait stays."""
+        key_ = rowkey(r)
+        ent = auto_store().setdefault(key_, {"paths": []})
+        old = str(ent.get("bmp") or "")
+        if old and os.path.isfile(old) and auto_own_cut(ent, old):
+            try:
+                os.remove(old)                                       # the cut of a candidate no longer wanted
+            except OSError:
+                pass
+        was = str(ent.get("was") or "")
+        if was and not os.path.isfile(was):                          # deleted since: nothing to put back
+            was = ""
+        if was:
+            props[key_] = was
+        else:
+            props.pop(key_, None)
+        ent["chosen"], ent["bmp"] = "keep", ""
+        persist_props()
+        refresh_table_only()
+        auto_status(f"{r['name']} keeps " + ("the earlier proposal." if was else "its own portrait."))
+        if auto_ui.get("bulk"):
+            return
+        if auto_hide.get():
+            auto_fill()
+        else:
+            auto_place(r)
+            auto_counts()
+
+    def auto_mark(r: dict, what: str) -> None:
+        """Pick a picture (or Keep) for this creature. Nothing is proposed until Apply picks; clicking the pick
+        again takes it back."""
+        ent = auto_store().setdefault(rowkey(r), {"paths": []})
+        applied = auto_picked(r, ent)
+        same = lambda a, b: os.path.normcase(str(a)) == os.path.normcase(str(b))   # noqa: E731
+        if same(ent.get("sel") or "", what) or (not ent.get("sel") and applied and same(applied, what)):
+            ent.pop("sel", None)                                     # clicked again: undecided
+        else:
+            ent["sel"] = what
+        if applied and same(ent.get("sel") or "", applied):
+            ent.pop("sel", None)                                     # already what is proposed
+        save_settings(st)
+        auto_place(r)
+        auto_counts()
+
+    def auto_pending() -> List[Tuple[dict, str]]:
+        store_ = auto_store()
+        byk = {rowkey(o): o for o in all_rows()}
+        for k, v in store_.items():                                  # cards on other pages too: a proposal made
+            if v.get("sel") and k in byk:                            # in Propose since beats the pick made here
+                auto_sync(byk[k], v)
+        return [(byk[k], str(v["sel"])) for k, v in store_.items() if v.get("sel") and k in byk]
+
+    def auto_apply() -> None:
+        """Propose every pick: the picture cut to the game size, or Keep."""
+        todo = auto_pending()
+        if not todo:
+            auto_status("Nothing picked to apply. Click a picture on each card first.")
+            return
+        auto_ui["bulk"] = True                                       # one redraw at the end, not one per card
+        try:
+            for r, what in todo:
+                if what == "keep":
+                    auto_keep(r)
+                elif os.path.isfile(what):
+                    auto_choose(r, what)
+                (auto_store().get(rowkey(r)) or {}).pop("sel", None)
+        finally:
+            auto_ui["bulk"] = False
+        save_settings(st)
+        if auto_hide.get():                                          # picked cards leave the page: lay it out again
+            auto_fill()
+        else:                                                        # otherwise only the cards that changed
+            cards_ = auto_ui.get("cards") or {}
+            for r, _what in todo:
+                if rowkey(r) in cards_:                              # type: ignore[operator]
+                    auto_place(r)
+            auto_counts()
+        auto_status(f"Applied {len(todo)} pick(s).")
+
+    def auto_delete(r: dict, path: str) -> None:
+        """Delete one candidate. A proposal already cut from it stays (that is its own .bmp)."""
+        if not messagebox.askyesno("Portrait Scout", f"Delete this picture of {r['name']}?\n\n{Path(path).name}\n\n"
+                                   "This cannot be undone.", parent=root):
+            return
+        ent = auto_store().get(rowkey(r)) or {}
+        try:
+            os.remove(path)
+        except OSError as e:
+            auto_status(f"Could not delete it: {e}")
+            return
+        (auto_ui["imgs"]).pop(path, None)                            # type: ignore[union-attr]
+        ent["paths"] = [p for p in ent.get("paths", []) if os.path.normcase(p) != os.path.normcase(path)]
+        if os.path.normcase(str(ent.get("sel") or "")) == os.path.normcase(path):
+            ent.pop("sel", None)
+        save_settings(st)
+        auto_status(f"Deleted {Path(path).name}.")
+        auto_place(r)
+        auto_counts()
+
+    def pool_chooser(parent: object, mine: Tuple[str, str], on_take: Callable[[Path], None],
+                     say: Callable[[str], None]) -> None:
+        """Take one of the spare pictures already made (Propose and the Auto view). The ones made for a creature of
+        the same race and sex come first. on_take gets the picture chosen; say reports."""
+        generic = not any(mine)
+        spare = list(spare_pictures(pool_folder(), pool_used()))
+        if not spare:
+            say("There are no spare pictures yet. Generate some, and the ones you do not use land here.")
+            return
+        who = pool_who()
+        fit = lambda q: who.get(made_from(q.name), ("", "")) == mine  # noqa: E731
+        w = tk.Toplevel(parent)
+        w.title("Pick from the pool")
+        w.transient(parent)
+        esc_closes(w)
+        only = tk.BooleanVar(value=any(fit(q) for q in spare) and not generic)
+        top_ = ttk.Frame(w, padding=(10, 8, 10, 0))
+        top_.pack(fill="x")
+        said = tk.StringVar()
+        ttk.Label(top_, textvariable=said).pack(side="left")
+        drop_v = tk.BooleanVar(value=bool(st.get("pool_drop_used")))
+        db_ = ttk.Checkbutton(top_, text="Delete the spare", variable=drop_v,
+                              command=lambda: (st.__setitem__("pool_drop_used", drop_v.get()),
+                                               save_settings(st)))
+        db_.pack(side="right", padx=(10, 0))
+        tooltip(db_, "Delete the picture from the pool once it is used. It leaves the pool either way - "
+                     "this throws the file away as well, so the proposal cannot be undone back to it.")
+        cb_ = ttk.Checkbutton(top_, text=f"Only {' '.join(x for x in mine if x) or 'these'}", variable=only)
+        if not generic:
+            cb_.pack(side="right")
+            tooltip(cb_, "Show only the pictures made for a creature of the same race and sex, which is "
+                         "who is in them.")
+        cv = tk.Canvas(w, bg=CARD, highlightthickness=0, width=5 * 170, height=3 * 230)
+        sb = ttk.Scrollbar(w, orient="vertical", command=cv.yview)
+        cv.configure(yscrollcommand=sb.set)
+        cv.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+        sb.pack(side="right", fill="y", pady=10)
+        inner = tk.Frame(cv, bg=CARD)
+        cv.create_window((0, 0), window=inner, anchor="nw")
+        hold: List[object] = []
+
+        def spare_gone(q: Path) -> None:
+            """Delete a spare from inside the chooser: the ones that came out wrong go for good."""
+            if not messagebox.askyesno("Portrait Scout", f"Delete {q.name} from the disk?\n\n"
+                                       "This cannot be undone.", parent=w):
+                return
+            went = bad = 0
+            for f in {str(q)} | {str(x) for x in q.parent.glob(plain_of(str(q)).stem + "_*")
+                                 if x.is_file() and x.suffix.lower() in POOL_EXT}:
+                try:
+                    os.remove(f)
+                    went += 1
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    bad += 1
+            if q in spare:
+                spare.remove(q)
+            state["pool_files"] = None                           # the Pool tab reads the folder again
+            said.set(f"Deleted {went:,} file(s)." + (f" {bad:,} could not be deleted." if bad else ""))
+            fill()
+
+        def spare_menu(event: object, q: Path) -> None:
+            m = tk.Menu(w, tearoff=0)
+            m.add_command(label=f"Use {q.name}", command=lambda: took(q))
+            m.add_separator()
+            m.add_command(label="Delete this picture", command=lambda: spare_gone(q))
+            try:
+                m.tk_popup(event.x_root, event.y_root)           # type: ignore[attr-defined]
+            finally:
+                m.grab_release()
+
+        def took(q: Path) -> None:
+            w.destroy()
+            on_take(q)
+            if drop_v.get():
+                try:
+                    os.remove(q)
+                    say(f"{q.name} was used and deleted from the pool.")
+                except OSError as e:
+                    say(f"{q.name} was used, but it could not be deleted ({e}).")
+
+        def fill() -> None:
+            for x in inner.winfo_children():
+                x.destroy()
+            hold.clear()
+            lot = [q for q in spare if fit(q)] if only.get() else list(spare)
+            said.set(f"{len(lot):,} spare picture(s) - click one")
+            for i, q in enumerate(lot[:300]):
+                cell = tk.Frame(inner, bg=CARD, padx=4, pady=4)
+                cell.grid(row=i // 5, column=i % 5, padx=4, pady=4, sticky="n")
+                im = load_thumb(str(q))
+                lb_ = tk.Label(cell, image=im, bg=CARD, cursor="hand2") if im else \
+                    tk.Label(cell, text="(no preview)", bg=CARD, width=18, height=6)
+                if im:
+                    hold.append(im)
+                lb_.pack()
+                nm_ = tk.Label(cell, text=made_for(q.name), bg=CARD, wraplength=150,
+                               font=("TkDefaultFont", 9, "bold"))
+                nm_.pack()
+                for x in (cell, lb_, nm_):
+                    x.bind("<Button-1>", lambda e, y=q: took(y))
+                    x.bind("<Button-3>", lambda e, y=q: spare_menu(e, y))
+                tooltip(lb_, f"{q.name}\nClick to use it, right-click to delete it.")
+            wheel_over(inner, cv)
+            inner.update_idletasks()
+            cv.configure(scrollregion=cv.bbox("all"))
+        cb_.config(command=fill)
+        wheel_over(cv, cv)
+        wheel_over(w, cv)
+        fill()
+        state["pool_hold"] = hold                                # Tk drops a picture nothing holds
+        w.grab_set()
+
+    def auto_from_pool(r: dict) -> None:
+        """A spare from the pool as one more choice on a creature's card (a copy, as the Propose tab takes it)."""
+        def take(q: Path) -> None:
+            pg_ = generator_module()
+            gs_ = pg_.load_settings() if pg_ else {}                 # type: ignore[attr-defined]
+            fold = auto_folder(gs_)
+            dst = fold / f"{auto_stem(r)}_p{int(time.time())}{q.suffix.lower()}"
+            try:
+                fold.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(q, dst)
+            except OSError as e_:
+                auto_status(f"Could not copy {q.name} ({e_}).")
+                return
+            st.setdefault("pool_from", {})[os.path.normcase(str(dst))] = os.path.normcase(os.path.normpath(str(q)))
+            ent = auto_store().setdefault(rowkey(r), {"paths": []})
+            auto_default(r, ent)
+            if "was" not in ent:
+                ent["was"] = str(props.get(rowkey(r)) or "")
+            ent.setdefault("paths", []).append(str(dst))
+            state["pool_files"] = None                               # the Pool tab reads the folder again
+            save_settings(st)
+            auto_place(r)
+            auto_counts()
+            auto_status(f"{q.name} added to {r['name']}'s card from the pool.")
+        pool_chooser(root, (str(r.get("race") or ""), str(r.get("sex") or "")), take, auto_status)
+
+    def auto_menu(e: object, r: dict, what: str) -> None:
+        """Right-click on a picture in the Auto view."""
+        ent = auto_store().get(rowkey(r)) or {}
+        m = tk.Menu(root, tearoff=0)
+        cand = what not in ("keep", "elsewhere") and os.path.isfile(what)
+        file_ = what if cand else str(ent.get("was") or "") if what == "keep" else str(ent.get("bmp") or "")
+        picked_ = os.path.normcase(str(ent.get("sel") or "")) == os.path.normcase(what)
+        if what != "elsewhere":
+            m.add_command(label="Take the pick back" if picked_ else ("Keep this" if what == "keep" else "Pick this one"),
+                          command=lambda: auto_mark(r, what))
+        if file_ and os.path.isfile(file_):
+            m.add_command(label="Open full size", command=lambda: open_path(file_))
+            m.add_command(label="Show in folder", command=lambda: (
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(file_)]) if os.name == "nt"
+                else open_path(str(Path(file_).parent))))
+        if cand:
+            sd_ = image_seed(what)
+            if sd_ is not None:
+                m.add_command(label=f"Copy seed ({sd_})", command=lambda: (root.clipboard_clear(),
+                                                                         root.clipboard_append(str(sd_)),
+                                                                         auto_status(f"Copied seed {sd_}.")))
+            m.add_separator()
+            m.add_command(label="One more picture", command=lambda: auto_start([r], ask=False, count=1))
+            def replace_() -> None:
+                auto_delete(r, what)                                 # asks first
+                if not os.path.isfile(what):                         # deleted: make one in its place
+                    auto_start([r], ask=False, count=1)
+            m.add_command(label="Replace with a new one...", command=replace_)
+            m.add_command(label="Delete this picture...", command=lambda: auto_delete(r, what))
+        m.add_separator()
+        m.add_command(label="Add from the pool...", command=lambda: auto_from_pool(r))
+        m.add_command(label="Open in Propose", command=lambda: auto_open(r))
+        try:
+            m.tk_popup(e.x_root, e.y_root)                           # type: ignore[attr-defined]
+        finally:
+            m.grab_release()
+
+    def auto_card(parent: object, r: dict, ent: dict) -> object:
+        card = tk.Frame(parent, bg=CARD, bd=1, relief="solid", padx=6, pady=6)   # type: ignore[arg-type]
+        info = tk.Frame(card, bg=CARD, width=150, height=AUTO_TH + 30)
+        info.pack(side="left", fill="y", padx=(0, 6))
+        info.pack_propagate(False)
+        nm_lab = tk.Label(info, text=str(r.get("name") or "?"), bg=CARD, font=("TkDefaultFont", 10, "bold"),
+                          wraplength=145, justify="left", anchor="w", cursor="hand2")
+        nm_lab.pack(fill="x")
+        nm_lab.bind("<Button-1>", lambda e: copy_text(str(r.get("name") or "")))
+        cre_ = ", ".join(r.get("cre_list") or [])
+        if cre_:
+            nm_lab.bind("<Button-3>", lambda e: copy_text(cre_))
+        tooltip(nm_lab, "Click: copy the name. Right-click: copy the creature file name" + (f" ({cre_})." if cre_ else "."))
+        sub = " ".join(x for x in (str(r.get("sex") or "").title(), str(r.get("race") or "").title()) if x)
+        tk.Label(info, text=(sub + "\n" if sub else "") + str(r.get("anim") or ""), bg=CARD, fg="#555",
+                 wraplength=145, justify="left", anchor="w").pack(fill="x")
+        ln_ = tk.Label(info, text=f"{int(r.get('lines', 0) or 0)} lines", bg=CARD, fg="#1a5fb4", anchor="w",
+                       cursor="hand2", font=("TkDefaultFont", 9, "underline"))
+        ln_.pack(fill="x", pady=(2, 6))
+        ln_.bind("<Button-1>", lambda e: show_lines(r))              # what they say, and play it: as in the gallery
+        picked = auto_picked(r, ent)
+        if False:
+            tk.Label(info, text="Proposal changed elsewhere", bg=CARD, fg="#b45309", wraplength=145,
+                     justify="left", anchor="w").pack(fill="x")
+        bb = tk.Frame(info, bg=CARD)
+        bb.pack(side="bottom", fill="x")
+        crop_ = tk.Frame(bb, bg=CARD)
+        crop_.pack(fill="x", pady=(0, 6))
+        _bw, _bh, zm_, dx_, dy_ = auto_cut(r, ent)
+        locked = bool(ent.get("crop_locked"))
+        tk.Label(crop_, text=f"Crop  {zm_:.2f}x" + ("  \u2714 set" if locked else "  (own)" if ent.get("crop") else ""),
+                 bg=CARD, fg="#1a7f37" if locked else "#8a6d00", anchor="w").pack(fill="x")
+        if locked:
+            eb_ = ttk.Button(crop_, text="Edit crop", command=lambda: auto_lock(r, False))
+            eb_.pack(fill="x")
+            tooltip(eb_, "Show the whole pictures with the yellow box again, to move it.")
+        c1_ = tk.Frame(crop_, bg=CARD)
+        c2_ = tk.Frame(crop_, bg=CARD)
+        if not locked:                                               # locked: built, but not shown
+            c1_.pack(fill="x")
+            c2_.pack(fill="x", pady=(1, 0))
+        for parent_, items in ((c1_, (("\u2212", -0.1, 0, 0, "Zoom out: keep more of the picture"),
+                                      ("+", 0.1, 0, 0, "Zoom in: closer on the face"),
+                                      ("Mid", 0, 0, 0, "Back to the crop Propose uses"))),
+                               (c2_, (("\u25c0", 0, -0.02, 0, "Move the box left"), ("\u25b6", 0, 0.02, 0, "Move the box right"),
+                                      ("\u25b2", 0, 0, -0.02, "Move the box up"), ("\u25bc", 0, 0, 0.02, "Move the box down")))):
+            for txt_, z_, x_, y_, tip_ in items:
+                b_ = ttk.Button(parent_, text=txt_, width=4 if txt_ == "Mid" else 2,
+                                command=lambda z=z_, x=x_, y=y_, t=txt_: auto_crop(r, z, x, y, reset=(t == "Mid")))
+                b_.pack(side="left", padx=(0, 1))
+                tooltip(b_, tip_ + ". The yellow box shows what the portrait keeps; a proposed one is cut again.")
+        if not locked:
+            sb_ = ttk.Button(crop_, text="\u2714 Set crop", command=lambda: auto_lock(r, True))
+            sb_.pack(fill="x", pady=(2, 0))
+            tooltip(sb_, "Lock this crop in and show the pictures cut as the portrait will be. Edit crop undoes it.")
+        rb = ttk.Button(bb, text="Reroll", command=lambda: auto_reroll(r))
+        rb.pack(fill="x")
+        tooltip(rb, "Throw these away and make new ones. The one picked now stays picked until you click another.")
+        ob = ttk.Button(bb, text="Open in Propose", command=lambda: auto_open(r))
+        ob.pack(fill="x", pady=2)
+        tooltip(ob, "Work on this one by hand: its description, style, touch-ups. The pictures are there too.")
+        db = ttk.Button(bb, text="Discard", command=lambda: (auto_discard(r), auto_fill()))
+        db.pack(fill="x")
+        tooltip(db, "Delete these pictures and take it off this list. Whatever is proposed for it stays.")
+
+        sel = str(ent.get("sel") or "")
+        same = lambda a, b: bool(a) and os.path.normcase(str(a)) == os.path.normcase(str(b))   # noqa: E731
+
+        def tile(img: object, what: str, label: str, tip: str, right: object = None, name: str = "") -> None:
+            if same(sel, what):
+                bg_, fg_, txt = "#1a5fb4", "white", "\u25cf Picked " + label        # to apply
+            elif same(picked, what) and not sel:
+                bg_, fg_, txt = "#1a7f37", "white", "\u2714 Proposed " + label
+            elif same(picked, what):
+                bg_, fg_, txt = CARD, "#1a7f37", "Proposed now " + label       # Apply swaps it for the pick
+            else:
+                bg_, fg_, txt = CARD, "#555", "Pick " + label
+            if what == "keep":                                       # Keep is not a letter
+                txt = {"#1a5fb4": "\u25cf Keep", "#1a7f37": "\u2714 Kept"}.get(bg_, "Keep: " + now_txt.lower())
+            if what == "elsewhere":
+                txt = "\u2714 From Propose" if bg_ == "#1a7f37" else "From Propose (until Apply)"
+            on = bg_ != CARD
+            click = (lambda: None) if what == "elsewhere" else (lambda: auto_mark(r, what))   # noqa: E731
+            box = tk.Frame(card, bg=bg_, padx=4, pady=4, cursor="hand2")
+            box.pack(side="left", padx=2, anchor="n")
+            src_ = what if what not in ("keep", "elsewhere") else \
+                auto_src(str(ent.get("bmp") or "") if what == "elsewhere" else str(ent.get("was") or ""))
+            if src_ and what in ("keep", "elsewhere") and os.path.isfile(src_):
+                img = auto_thumb(src_)                               # the picture it was cut from, so the crop
+            cut_ = locked and bool(src_) and os.path.isfile(src_)    # box works on it too
+            if cut_:
+                img = auto_thumb_cut(r, ent, src_)
+            if img is not None:
+                lab = tk.Canvas(box, width=img.width(), height=img.height(), highlightthickness=0, bd=0,   # type: ignore[attr-defined]
+                                cursor="hand2")
+                lab.create_image(0, 0, image=img, anchor="nw")
+                bx = auto_box(r, ent, src_) if src_ and os.path.isfile(src_) and not cut_ else None
+                if bx:
+                    k = img.width() / float(bx[4] or 1)               # type: ignore[attr-defined]
+                    lab.create_rectangle(bx[0] * k, bx[1] * k, (bx[0] + bx[2]) * k - 1, (bx[1] + bx[3]) * k - 1,
+                                         outline="#ffd000", width=2)
+            else:
+                lab = tk.Label(box, text=name, bg=bg_, bd=0, wraplength=AUTO_TW, cursor="hand2")
+            lab.image = img                                          # type: ignore[attr-defined]
+            lab.pack()
+            cap = tk.Label(box, text=txt, bg=bg_, fg=fg_, font=("TkDefaultFont", 10, "bold" if on else "normal"),
+                           cursor="hand2")
+            cap.pack(fill="x", pady=(3, 0))
+            for w in (box, lab, cap):
+                w.bind("<Button-1>", lambda e: click())             # type: ignore[operator]
+                w.bind("<Button-3>", lambda e: auto_menu(e, r, what))   # no tooltip: the pictures are
+                #                                                      redrawn under the mouse while a batch runs
+        if picked == "elsewhere":
+            ep_ = str(ent.get("bmp") or "")
+            tile(auto_thumb(ep_) if os.path.isfile(ep_) else None, "elsewhere", "", "Proposed in the Propose tab "
+                 "(or the gallery). Pick one of the others and Apply to replace it.", lambda: open_path(ep_),
+                 Path(ep_).name)
+        now_img, now_txt = auto_now(r, ent)
+        if now_img is not None:                                      # nothing left to show (its earlier proposal
+            #                                                          was deleted since): nothing to keep either
+            tile(now_img, "keep", "(keep)", "Keep what it has now and use none of the new ones: "
+                 + (now_txt.lower() or "its portrait") + ". Click again to take the pick back.")
+        for i, p in enumerate([p for p in ent.get("paths", []) if os.path.isfile(p)]):
+            letter = "ABCDEFGH"[i] if i < 8 else str(i + 1)
+            tile(auto_thumb(p), p, letter, "Click: pick this one (Apply picks proposes it). Click again to take "
+                 "it back. Right-click for more: full size, one more, replace, delete.", lambda q=p: open_path(q), Path(p).name)
+        return card
+
+    def auto_fill() -> None:
+        """Lay the batch out again: two creatures to a row, in the order they are listed."""
+        if not auto_ui.get("built"):
+            return
+        for w in auto_ui["grid"].winfo_children():
+            w.destroy()
+        auto_ui["cards"], auto_ui["empty"] = {}, None
+        if not state["res"]:                                         # at startup: nothing analyzed, and the row
+            auto_ui["empty"] = ttk.Label(auto_ui["grid"], text="Analyze a mod first.", foreground="#555")   # helpers
+            auto_ui["empty"].grid(row=0, column=0, sticky="w", pady=8)   # type: ignore[union-attr]   are not built yet
+            return
+        store_ = auto_store()
+        byk = {rowkey(o): o for o in all_rows()}
+        order = {rowkey(o): i for i, o in enumerate(sorted_rows(False))}
+        listed_ = {rowkey(o) for o in sorted_rows()}                 # the search box and the filters, as the
+        #                                                              gallery has them ("1 of 489")
+        if search_var.get().strip():                                 # a search shows whoever it finds, even
+            for k_ in listed_:                                       # with nothing made yet: a card to Reroll
+                if k_ and k_ in byk and k_ not in store_:            # from, with what it has now as Keep
+                    store_[k_] = {"paths": []}
+            searched_ = listed_
+        else:
+            searched_ = set()
+        keys = [k for k, v in store_.items() if k in byk and k in listed_ and (k in searched_ or v.get("chosen") == "keep" or
+                                                              any(os.path.isfile(p) for p in v.get("paths", [])))]
+        if auto_hide.get():
+            keys = [k for k in keys if not (auto_picked(byk[k], store_[k]) or store_[k].get("sel"))]
+        keys.sort(key=lambda k: order.get(k, 1 << 30))
+        per = AUTO_PAGE                                              # a page at a time: hundreds of cards were
+        pages = max(1, -(-len(keys) // per))                         # thousands of widgets, slow to lay out and
+        pg_n = max(0, min(int(auto_ui.get("page") or 0), pages - 1)) # flashing at the top left on every resize
+        auto_ui["page"], auto_ui["pages"] = pg_n, pages
+        total_ = len(keys)
+        auto_page_var.set(f"Page {pg_n + 1} of {pages}  ({total_})" if pages > 1 else f"{total_} creature(s)")
+        keys = keys[pg_n * per:(pg_n + 1) * per]
+        if auto_ui.get("navtop") is not None:
+            for w_ in auto_ui["navtop"].winfo_children():            # type: ignore[union-attr]
+                w_.destroy()
+            auto_nav(auto_ui["navtop"], pg_n, pages, per, total_)   # same as the gallery's: top and bottom
+        if pages > 1 and keys:
+            bot_ = tk.Frame(auto_ui["grid"], bg=PANEL)
+            bot_.grid(row=(len(keys) + 1) // 2 + 1, column=0, columnspan=2, pady=8)
+            auto_nav(bot_, pg_n, pages, per, total_)
+        try:
+            auto_ui["canvas"].yview_moveto(0) if auto_ui.get("paged") else None   # type: ignore[union-attr]
+        except tk.TclError:
+            pass
+        auto_ui["paged"] = False
+        if not keys:
+            auto_ui["empty"] = ttk.Label(auto_ui["grid"], text=("Nothing made yet. Press Generate to make pictures for every creature listed "
+                                   "(the filters above say which), or untick Expanded beside Gallery for the cards." if state["res"] else
+                                   "Analyze a mod first."), foreground="#555")
+            auto_ui["empty"].grid(row=0, column=0, sticky="w", pady=8)   # type: ignore[union-attr]
+        gen_ = int(auto_ui.get("fill_gen") or 0) + 1                # a newer fill makes this one stop
+        auto_ui["fill_gen"] = gen_
+
+        def some(start: int) -> None:                                # a few cards at a time, so the window shows
+            if auto_ui.get("fill_gen") != gen_:                      # at once and stays responsive while the
+                return                                               # pictures load
+            for i in range(start, min(start + 6, len(keys))):
+                auto_place(byk[keys[i]], i)
+            if start + 6 < len(keys):
+                root.after(1, some, start + 6)
+            else:
+                auto_counts()
+        some(0)
+        auto_counts()
+
+    def auto_fill_soon() -> None:
+        """auto_fill once, however many times it is asked for in a row (an analysis asks several times)."""
+        if auto_ui.get("fill_job"):
+            return
+        def run_() -> None:
+            auto_ui["fill_job"] = None
+            auto_fill()
+        auto_ui["fill_job"] = root.after(30, run_)
+
+    def auto_place(r: dict, slot: int = -1) -> None:
+        """One creature's card, in its own slot (or the next free one): a finished creature or a new choice
+        redraws that card alone, not the whole list."""
+        cards: Dict[str, Tuple[object, int]] = auto_ui["cards"]     # type: ignore[assignment]
+        key_ = rowkey(r)
+        if key_ in cards:
+            old, slot = cards[key_]
+            old.destroy()                                            # type: ignore[attr-defined]
+        elif slot < 0:                                               # new: only if this page has room for it
+            if len(cards) >= AUTO_PAGE:
+                return
+            slot = max((s_ for _w, s_ in cards.values()), default=-1) + 1
+        if auto_ui.get("empty") is not None:
+            auto_ui["empty"].destroy()                               # type: ignore[union-attr]
+            auto_ui["empty"] = None
+        ent = auto_store().get(key_)
+        if not ent:
+            cards.pop(key_, None)
+            return
+        auto_sync(r, ent)
+        auto_default(r, ent)                                         # cards made before this existed get it too
+        w = auto_card(auto_ui["grid"], r, ent)
+        w.grid(row=slot // 2, column=slot % 2, sticky="nsew", padx=4, pady=4)   # type: ignore[attr-defined]
+        cards[key_] = (w, slot)
+        auto_catch(w)
+
+    def auto_open(r: dict) -> None:
+        view_var.set("generate")
+        state["gen_built"] = True
+        show_view()
+        generate_dialog(r)
+
+    def auto_reroll(r: dict) -> None:
+        ent = auto_store().get(rowkey(r)) or {}
+        chosen_ = str(ent.get("chosen") or "")
+        for p in [p for p in ent.get("paths", []) if os.path.normcase(p) != os.path.normcase(chosen_)]:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+            (auto_ui["imgs"]).pop(p, None)                           # type: ignore[union-attr]
+        ent["paths"] = [chosen_] if chosen_ and os.path.isfile(chosen_) else []
+        if ent.get("sel") and ent["sel"] != "keep" and not os.path.isfile(str(ent["sel"])):
+            ent.pop("sel", None)
+        save_settings(st)
+        auto_place(r)                                                # stays in its place, empty until the new ones come
+        auto_status(f"Rerolling {r['name']}...")
+        auto_start([r], ask=False)
+
+    def auto_go() -> None:
+        if auto_ui.get("busy"):
+            auto_stop()
+            return
+        if not state["res"]:
+            auto_status("Analyze a mod first.")
+            return
+        rows_ = auto_rows()
+        if not rows_:
+            auto_status("Every creature listed already has a proposal or pictures from a batch.")
+            return
+        auto_start(rows_, ask=True)
+
+    def auto_start(rows_: List[dict], ask: bool, count: Optional[int] = None) -> None:
+        pg_ = generator_module()
+        if pg_ is None:
+            auto_status("The generator folder is missing: see generator/README.md.")
+            return
+        try:
+            n = max(1, min(8, int(auto_n.get())))
+        except (tk.TclError, ValueError):
+            n = 2
+        st["auto_count"] = n
+        save_settings(st)
+        if ask and not messagebox.askyesno(
+                "Portrait Scout", f"Make {n} picture(s) each for {len(rows_)} creature(s)? That is {n * len(rows_)} "
+                f"pictures, about {max(1, round(n * len(rows_) * 3 / 60))} minute(s) on a fast engine.\n\n"
+                "They are made the way the Propose tab makes them: each creature's own description, colors and "
+                "face, with Vary faces on. Nothing is proposed until you click one.", parent=root):
+            return
+        queue: List[object] = auto_ui["queue"]                       # type: ignore[assignment]
+        queue.extend([(r_, count) for r_ in rows_] if count else rows_)
+        if auto_ui.get("busy"):
+            auto_status(f"Added to the queue: {len(queue)} waiting.")
+            return
+        gs_ = pg_.load_settings()                                    # type: ignore[attr-defined]
+        auto_ui["gs"] = gs_                                          # the crop reads the settings as they are now
+        if state.get("engine") is None:
+            state["engine"] = pg_.Engine(gs_)                         # type: ignore[attr-defined]
+        eng = state["engine"]
+        eng.log = lambda m: root.after(0, status.set, "Image engine: " + str(m))   # type: ignore[attr-defined]
+        eng.progress = lambda frac, text: None                       # type: ignore[attr-defined]
+        auto_ui["busy"] = True
+        auto_ui["stop"] = threading.Event()
+        auto_ui["btn"].config(text="Stop", bg="#b5452f", activebackground="#8f3524")
+        vary_ = True                                                 # a batch is for new faces, always
+        try:
+            fade_ = max(0.05, min(1.5, float(gs_.get("ghost_fade", 0.55))))
+        except (TypeError, ValueError):
+            fade_ = 0.55
+        total = [len(queue)]
+        fails = [0]
+
+        def work() -> None:
+            err = ""
+            done_n = 0
+            try:
+                while queue and not auto_ui["stop"].is_set():        # type: ignore[union-attr]
+                    item_ = queue.pop(0)
+                    r, k_ = item_ if isinstance(item_, tuple) else (item_, n)   # type: ignore[misc]
+                    done_n += 1
+                    total[0] = max(total[0], done_n + len(queue))
+                    root.after(0, auto_status, f"{done_n} of {total[0]}: {r['name']}...")
+                    desc_ = auto_desc(pg_, gs_, r)
+                    style_ = auto_style(pg_, gs_, r)
+                    ghost = fade_ if hasattr(pg_, "incorporeal") and pg_.incorporeal(desc_) else 0.0   # type: ignore[attr-defined]
+                    rnd_ = random.Random()
+                    for i in range(int(k_ or n)):
+                        if auto_ui["stop"].is_set():                 # type: ignore[union-attr]
+                            break
+                        words_ = pg_.vary_words(rnd_, gs_, desc_) if vary_ and hasattr(pg_, "vary_words") else ""   # type: ignore[attr-defined]
+                        pr_, ng_ = auto_prompt(pg_, gs_, style_, desc_, words_)
+                        ini_, src_ = start_pick(pg_, gs_, str(r.get("race") or ""), desc_, pr_, r)
+                        imgs_ = None
+                        for try_ in range(2):                        # the engine now and then refuses one (500):
+                            try:                                     # try once more, then move on
+                                imgs_ = (eng.generate(pr_, ng_, 1, init=ini_, strength=start_strength(pg_, gs_),   # type: ignore[attr-defined]
+                                                      steps=start_steps(pg_, gs_))
+                                         if ini_ else eng.generate(pr_, ng_, 1))   # type: ignore[attr-defined]
+                                fails[0] = 0
+                                break
+                            except Exception as e_:  # noqa: BLE001
+                                if try_ or "(500)" not in str(e_):
+                                    fails[0] += 1
+                                    root.after(0, auto_status, f"{r['name']}: skipped ({str(e_)[:120]})")
+                                    if fails[0] >= 3:                # three in a row: the engine is in trouble
+                                        raise
+                                time.sleep(2)
+                        if not imgs_ or auto_ui["stop"].is_set():    # type: ignore[union-attr]
+                            break                                    # Stop interrupts the picture: not kept half-made
+                        pth = pg_.save_candidates(imgs_[:1], auto_folder(gs_), f"{auto_stem(r)}_c{i + 1}", ghost)[0]   # type: ignore[attr-defined]
+                        root.after(0, auto_got, r, pth, words_, src_)
+            except Exception as e:  # noqa: BLE001 - the engine's messages are meant for the user
+                err = str(e) or e.__class__.__name__
+            root.after(0, auto_finished, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def auto_default_keep(r: dict) -> bool:
+        """Whether a creature should start on Keep: one the game already has, with lines added and a portrait of
+        its own; or a copy of a named character that is the same person (Face kept). A copy made into someone new
+        (Shandalar copied as "Bob the Wizard") gets a new portrait like any of the mod's own."""
+        if r.get("copy_port"):
+            return face_kept(r)
+        return bool(r.get("patched")) and bool(r.get("large") or r.get("small"))
+
+    def auto_default(r: dict, ent: dict) -> None:
+        """Start a creature on Keep where auto_default_keep says so - once: taking the pick back sticks."""
+        if ent.get("default_done"):
+            return
+        ent["default_done"] = True
+        if not ent.get("chosen") and "sel" not in ent and auto_default_keep(r):
+            ent["sel"] = "keep"                                      # picked for you; Apply picks keeps it
+
+    def auto_got(r: dict, path: str, words_: str, src_: str = "") -> None:
+        ent = auto_store().setdefault(rowkey(r), {"paths": []})
+        auto_default(r, ent)
+        if "was" not in ent:                                         # its proposal from before the batch: shown as
+            ent["was"] = str(props.get(rowkey(r)) or "")             # Keep, and kept until a pick is applied
+        ent.setdefault("paths", []).append(path)
+        if words_:                                                   # so "Use this face" in Propose brings it back
+            vw_ = st.setdefault("vary_words", {})
+            vw_[Path(path).name] = words_                            # type: ignore[index]
+        start_note(path, src_)
+        save_settings(st)
+        if auto_ui.get("built") and tab_auto.winfo_ismapped():
+            n_ = len(ent["paths"])
+            try:
+                want = max(1, int(auto_n.get()))
+            except (tk.TclError, ValueError):
+                want = 2
+            if n_ >= want or n_ == 1:                                # a card when it has its pictures, not per picture
+                auto_place(r)
+                auto_counts()
+
+    def auto_stop() -> None:
+        ev = auto_ui.get("stop")
+        if ev is not None:
+            ev.set()                                                 # type: ignore[union-attr]
+        auto_ui["queue"].clear()                                     # type: ignore[union-attr]
+        auto_ui["btn"].config(text="Stopping...", bg="#9bbfa6")
+        eng = state.get("engine")
+        if eng is not None and hasattr(eng, "cancel"):
+            threading.Thread(target=eng.cancel, daemon=True).start()   # type: ignore[union-attr]
+        auto_status("Stopping after the picture being painted...")
+
+    def auto_finished(err: str) -> None:
+        auto_ui["busy"] = False
+        auto_ui["btn"].config(text="Generate", bg="#2e9e4f", activebackground="#25803f")
+        stopped = bool(auto_ui.get("stop") and auto_ui["stop"].is_set())   # type: ignore[union-attr]
+        auto_status(err if err else "Stopped. Generate carries on where it left off." if stopped else
+                    "Done. Click the picture you want for each creature.")
+        auto_counts()                                                # each card was drawn as its pictures came in:
+        #                                                              no redraw of the whole page at the end
+
+    def build_auto() -> None:
+        auto_ui["gs"] = None                                         # settings may have been edited since
+        if auto_ui.get("built"):
+            auto_fill()
+            return
+        bar = ttk.Frame(tab_auto)
+        bar.pack(fill="x", pady=(2, 4))
+        btn = tk.Button(bar, text="Generate", bg="#2e9e4f", fg="white", activebackground="#25803f",
+                        activeforeground="white", font=("TkDefaultFont", 10, "bold"), padx=12, relief="raised",
+                        command=auto_go)
+        btn.pack(side="left")
+        tooltip(btn, "Make pictures for every creature listed (the filters above say which) that has no proposal "
+                     "yet - or every one, with Redo proposed. Stop and Generate again carries on where it left off.")
+        ap = tk.Button(bar, text="Apply picks", bg="#1a5fb4", fg="white", activebackground="#154a8c",
+                       activeforeground="white", disabledforeground="#b7c9e2", font=("TkDefaultFont", 10, "bold"),
+                       padx=10, relief="raised", state="disabled", command=lambda: auto_apply())
+        ap.pack(side="left", padx=(8, 0))
+        tooltip(ap, "Propose every picture picked (blue), cut to the game size. Picks are kept until then, "
+                    "between sessions too.")
+        auto_ui["apply"] = ap
+        ttk.Label(bar, text="Each:").pack(side="left", padx=(14, 4))
+        sp = ttk.Spinbox(bar, from_=1, to=8, width=3, textvariable=auto_n)
+        sp.pack(side="left")
+        tooltip(sp, "Pictures per creature.")
+        start_controls(bar)
+        c1 = ttk.Checkbutton(bar, text="Skip if has one", variable=auto_skip_has,
+                             command=lambda: (st.__setitem__("auto_skip_has", bool(auto_skip_has.get())),
+                                              save_settings(st), auto_counts()))
+        c1.pack(side="left", padx=(14, 0))
+        tooltip(c1, "Leave out creatures that already have a portrait. Off, they get new ones too, so the whole "
+                    "mod comes out in one look.")
+        c0 = ttk.Checkbutton(bar, text="Redo proposed", variable=auto_redo,
+                             command=lambda: (st.__setitem__("auto_redo", bool(auto_redo.get())),
+                                              save_settings(st), auto_counts()))
+        c0.pack(side="left", padx=(8, 0))
+        tooltip(c0, "Include creatures that already have a proposal. Picking one of the new pictures replaces it.")
+        c2 = ttk.Checkbutton(bar, text="Party NPCs", variable=auto_party,
+                             command=lambda: (st.__setitem__("auto_party", bool(auto_party.get())),
+                                              save_settings(st), auto_counts()))
+        c2.pack(side="left", padx=(8, 0))
+        tooltip(c2, "Include joinable NPCs. Off by default: theirs are usually picked by hand.")
+        c3 = ttk.Checkbutton(bar, text="Hide picked", variable=auto_hide,
+                             command=lambda: (st.__setitem__("auto_hide", bool(auto_hide.get())),
+                                              save_settings(st), auto_fill()))
+        c3.pack(side="left", padx=(8, 0))
+        tooltip(c3, "Show only the creatures with nothing picked.")
+        du = ttk.Button(bar, text="Discard unchosen", command=auto_discard_unchosen)
+        du.pack(side="left", padx=(14, 0))
+        tooltip(du, "Delete the pictures not picked, for every creature that has one picked.")
+        ttk.Label(bar, textvariable=auto_count_var, foreground="#555").pack(side="left", padx=(14, 0))
+        hint_ = ttk.Frame(tab_auto)
+        hint_.pack(fill="x")
+        navtop_ = tk.Frame(hint_)
+        navtop_.pack(side="left", padx=(0, 14))
+        auto_ui["navtop"] = navtop_
+        ttk.Label(hint_, textvariable=auto_msg, foreground="#1a5fb4").pack(side="left")
+        ttk.Label(hint_, text="Click a picture to pick it, again to take it back \u00b7 right-click for more \u00b7 "
+                              "click a name to copy it \u00b7 click the lines to read them", foreground="#777").pack(side="right")
+        wrap = ttk.Frame(tab_auto)
+        wrap.pack(fill="both", expand=True)
+        sb = ttk.Scrollbar(wrap, orient="vertical")
+        sb.pack(side="right", fill="y")
+        cv = tk.Canvas(wrap, highlightthickness=0, bg=PANEL, yscrollcommand=sb.set)
+        cv.pack(side="left", fill="both", expand=True)
+        sb.config(command=cv.yview)
+        inner = tk.Frame(cv, bg=PANEL)
+        cv.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        auto_ui.update(built=True, btn=btn, canvas=cv, grid=inner)
+        auto_catch(cv)
+        auto_fill()
+
+    auto_n = tk.IntVar(value=int(st.get("auto_count") or 2))
+    auto_skip_has = tk.BooleanVar(value=bool(st.get("auto_skip_has", False)))
+    auto_party = tk.BooleanVar(value=bool(st.get("auto_party", False)))
+    auto_hide = tk.BooleanVar(value=bool(st.get("auto_hide", False)))
+    auto_redo = tk.BooleanVar(value=bool(st.get("auto_redo", False)))
+    auto_msg = tk.StringVar(value="")
+    auto_page_var = tk.StringVar(value="")
+    START_FROM = ["Nothing", "Face bank", "Its portrait"]
+    start_v = tk.StringVar(value=str(st.get("start_from") or "Face bank")
+                           if str(st.get("start_from") or "Face bank") in START_FROM else "Face bank")
+    if st.get("start_strength") in (0.77, "0.77") and not st.get("start_v2"):
+        st["start_strength"] = 0.68                                  # 0.77 was for 4 steps: the bank now uses 6
+    st["start_v2"] = True
+    start_k = tk.StringVar(value=str(st.get("start_strength") or "0.68"))
+
+    def start_keep(*_a: object) -> None:
+        st["start_from"] = start_v.get()
+        try:
+            st["start_strength"] = round(max(0.3, min(1.0, float(start_k.get()))), 2)
+        except (tk.TclError, ValueError):
+            return
+        save_settings(st)
+    start_v.trace_add("write", start_keep)
+    start_k.trace_add("write", start_keep)
+
+    def start_strength(pg_: object, gs_: dict) -> float:
+        try:
+            return max(0.3, min(1.0, float(start_k.get())))
+        except (tk.TclError, ValueError):
+            return float(pg_.bank_strength(gs_)) if hasattr(pg_, "bank_strength") else 0.68   # type: ignore[attr-defined]
+
+    def start_steps(pg_: object, gs_: dict) -> Optional[int]:
+        return int(pg_.bank_steps(gs_)) if hasattr(pg_, "bank_steps") else None   # type: ignore[attr-defined]
+
+    def own_portrait_src(r: Optional[dict]) -> str:
+        """Where the creature's own portrait is: "game:NAME" (the game has it) or the mod's own .bmp. "" if none."""
+        if not r:
+            return ""
+        res_ = state.get("res")
+        for f_ in ("large_name", "copy_port", "small_name"):
+            nm = str(r.get(f_) or "")
+            if not nm:
+                continue
+            try:
+                if res_ and res_["game"].has(nm, T_BMP):             # type: ignore[index]
+                    return "game:" + nm
+            except Exception:  # noqa: BLE001
+                pass
+            p_ = mod_bmp_index().get(nm.upper(), "")
+            if p_ and os.path.isfile(p_):
+                return p_
+        return ""
+
+    def init_bytes(src: str) -> Optional[bytes]:
+        """The start picture named by start_pick: a file, or "game:NAME" for a portrait the game has."""
+        try:
+            if src.startswith("game:"):
+                res_ = state.get("res")
+                return res_["game"].get(src[5:], T_BMP) if res_ else None   # type: ignore[index]
+            return Path(src).read_bytes() if src and os.path.isfile(src) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def start_pick(pg_: object, gs_: dict, race: str, desc: str, prompt: str,
+                   r: Optional[dict] = None) -> Tuple[Optional[bytes], str]:
+        """What a picture starts from, as Start from says: (bytes, where from) or (None, "") for plain noise. The
+        face bank leaves out beasts, monsters, the undead and ghosts; a child only takes a face from faces\\child."""
+        mode = start_v.get()
+        if mode == "Nothing" or not hasattr(pg_, "bank_pick"):
+            return None, ""
+        if mode == "Its portrait":
+            src = own_portrait_src(r)
+            data = init_bytes(src) if src else None
+            if data:
+                return data, src
+        text = desc + (", nine years old" if "nine years old" in prompt.lower() else "")
+        p_ = pg_.bank_pick(gs_, race, text)                        # type: ignore[attr-defined]
+        data = init_bytes(str(p_)) if p_ else None
+        return (data, str(p_)) if data else (None, "")
+
+    def start_note(path: str, src: str) -> None:
+        """Remember what a picture started from, so "Use this face" can start from it again."""
+        if not src:
+            return
+        vi_ = st.setdefault("vary_init", {})
+        vi_[Path(path).name] = src                                   # type: ignore[index]
+        for old_ in list(vi_)[:-4000]:                               # type: ignore[arg-type]
+            vi_.pop(old_, None)                                      # type: ignore[union-attr]
+
+    def start_controls(bar: object, side: str = "left", sv: Optional[tk.StringVar] = None,
+                       sk: Optional[tk.StringVar] = None) -> object:
+        """Start from [list] [strength], for the Auto bar and the Propose window (they share one setting; the
+        Propose window passes its own two, which follow the shared ones until a picture is restyled)."""
+        lab = ttk.Label(bar, text="Start from:")
+        box = ttk.Combobox(bar, textvariable=sv or start_v, values=START_FROM, state="readonly", width=11)
+        spn = ttk.Spinbox(bar, from_=0.3, to=1.0, increment=0.01, width=5, textvariable=sk or start_k)
+        tooltip(box, "Face bank: each picture starts from a new face from the faces folder, so faces differ. "
+                     "Its portrait: from the creature's own portrait. Nothing: plain.")
+        tooltip(spn, "Strength: how far a picture may move from its start face (about 0.6-0.72). Lower keeps more of it.")
+        order = (lab, box, spn) if side == "left" else (spn, box, lab)
+        for i_, w_ in enumerate(order):
+            w_.pack(side=side, padx=((14 if side == "left" else 2), 4) if i_ == 0 else (0, 4))
+        return box
+
+    def auto_turn(step: int, to: Optional[int] = None) -> None:
+        last = int(auto_ui.get("pages") or 1) - 1
+        auto_ui["page"] = max(0, min(last, to if to is not None else int(auto_ui.get("page") or 0) + step))
+        auto_ui["paged"] = True
+        auto_fill()
+
+    def auto_nav(bar: object, page: int, pages: int, per: int, total: int) -> None:
+        """< Previous, Page [n] of N, Next >: as the gallery has them. Type a page number and press Enter."""
+        if pages <= 1:
+            tk.Label(bar, text=f"{total} creature(s)", fg="#555").pack(side="left")
+            return
+        bar.config(highlightthickness=2, highlightbackground="#8a8f98", highlightcolor="#8a8f98", padx=4, pady=2)   # type: ignore[attr-defined]
+        tk.Button(bar, text=f"< Previous {per}", command=lambda: auto_turn(-1),
+                  state="normal" if page > 0 else "disabled").pack(side="left", padx=6)
+        bg_ = bar.cget("bg")                                         # type: ignore[attr-defined]
+        tk.Label(bar, text="Page", bg=bg_, fg="#555").pack(side="left", padx=(6, 2))
+        pv_ = tk.StringVar(value=str(page + 1))
+        pe_ = tk.Entry(bar, textvariable=pv_, width=4, justify="center")
+        pe_.pack(side="left")
+
+        def jump(_e: object = None) -> None:
+            try:
+                auto_turn(0, int(pv_.get().strip()) - 1)
+            except ValueError:
+                pass
+        pe_.bind("<Return>", jump)
+        pe_.bind("<KP_Enter>", jump)
+        first = page * per
+        tk.Label(bar, text=f"of {pages}  ({first + 1}-{min(first + per, total)} of {total})", bg=bg_,
+                 fg="#555").pack(side="left", padx=(2, 6))
+        tk.Button(bar, text=f"Next {per} >", command=lambda: auto_turn(1),
+                  state="normal" if page < pages - 1 else "disabled").pack(side="left", padx=6)
+    auto_count_var = tk.StringVar(value="")
 
     def open_path(p: str) -> None:
         """Open a file or folder in whatever the system uses for it."""
@@ -3865,11 +6224,14 @@ def run_gui() -> None:
     LORA_DL2 = "https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux"
 
     def lora_files() -> List[str]:
-        d = Path(__file__).resolve().parent / "engine" / "webui" / "models" / "Lora"
-        try:
-            return sorted(p.name for p in d.iterdir() if p.suffix.lower() in (".safetensors", ".pt", ".ckpt"))
-        except OSError:
-            return []
+        here_ = Path(__file__).resolve().parent
+        found_: Set[str] = set()
+        for d in (here_ / "engine" / "webui" / "models" / "Lora", here_ / "engine-neo" / "models" / "Lora"):
+            try:                                                     # the old Forge's and Forge Neo's
+                found_ |= {p.name for p in d.iterdir() if p.suffix.lower() in (".safetensors", ".pt", ".ckpt")}
+            except OSError:
+                pass
+        return sorted(found_)
 
     def engine_ready() -> bool:
         """Forge is really unpacked - the file start_engine.bat runs. An empty engine\\webui\\models\\ tree, made
@@ -3972,6 +6334,7 @@ def run_gui() -> None:
         """Every set of proposals this copy of Portrait Scout has kept, with the chance to throw one away."""
         saved = st.get("proposals") or {}
         w = tk.Toplevel(root)
+        esc_closes(w)
         w.title("Saved proposals")
         f = ttk.Frame(w, padding=12)
         f.pack(fill="both", expand=True)
@@ -4012,6 +6375,7 @@ def run_gui() -> None:
     def setup_window() -> None:
         """The setup steps and their download links, on their own, for when the Propose tab is not where you are."""
         w = tk.Toplevel(root)
+        esc_closes(w)
         w.title("Setting up portrait generation")
         w.geometry("920x560")
         cv_ = tk.Canvas(w, highlightthickness=0)
@@ -4130,6 +6494,13 @@ def run_gui() -> None:
         terms = search_var.get().lower().split() if filtered else []
         if terms:
             rows = [r for r in rows if all(t in row_text(r) for t in terms)]
+        on_ = [fn for lbl, fn in CHIPS if chip_vars[lbl].get()]     # the chips narrow the same view
+        if on_:
+            rows = [r for r in rows if all(fn(r) for fn in on_)]
+        if key == "borrowed":                                    # borrowed faces first, those sharing one together
+            rows.sort(key=lambda r: (-int(r.get("lines", 0) or 0), str(r.get("name", "")).lower()))
+            rows.sort(key=lambda r: (not r.get("copy_port"), str(r.get("copy_port") or "").lower()), reverse=desc)
+            return rows
         rows.sort(key=lambda r: (r[key] if key == "lines" else str(r[key]).lower()), reverse=desc)
         return rows
 
@@ -4161,6 +6532,7 @@ def run_gui() -> None:
                               + (f", {unk} dialog(s) without a speaker" if unk else "")) if res_.get("source") else ""))   # type: ignore[union-attr]
         if view_var.get() == "gallery":
             build_gallery(rows)
+        show_lost()                                                  # the same creatures the boxes above list
 
     def on_search(*_a: object) -> None:
         if state.get("search_job"):
@@ -4169,11 +6541,13 @@ def run_gui() -> None:
         def go() -> None:
             state["search_job"] = None
             state["page"] = 0
+            auto_ui["page"] = 0                                      # the Auto view's pages too
             refresh()
         state["search_job"] = root.after(250, go)
 
     search_var.trace_add("write", on_search)
     root.bind("<Control-f>", lambda e: (search_entry.focus_set(), search_entry.select_range(0, "end")))
+
 
     def sort_by(col: str) -> None:
         key, desc = state["sort"]                                    # type: ignore[misc]
@@ -4352,6 +6726,7 @@ def run_gui() -> None:
         on = rowkey(r) in skip
         menu.add_command(label="Stop ignoring this creature" if on else "Ignore this creature",
                          command=lambda: set_skipped(r, not on))
+        keep_item(menu, r)
         try:
             menu.tk_popup(event.x_root, event.y_root)                # type: ignore[attr-defined]
         finally:
@@ -4382,6 +6757,15 @@ def run_gui() -> None:
         touch_up_window(parent, pp, pg=pg_, gs=gs_, r=r, desc=desc_, say=status.set,
                         on_done=took, touch_memory=TOUCH_MEMORY)
 
+    def keep_item(menu: object, r: dict) -> None:
+        """The keep-this-borrowed-face line, on every menu a creature has."""
+        if not r.get("copy_port"):
+            return
+        on = face_kept(r)
+        menu.add_command(label=f"Give {r['name']} a face of its own" if on   # type: ignore[attr-defined]
+                         else f"Keep {r['copy_port']} on {r['name']}",
+                         command=lambda: set_kept(r, not on))
+
     def image_menu(event: object, r: dict, parent: object) -> None:
         res = state["res"]
         if not res:
@@ -4391,6 +6775,7 @@ def run_gui() -> None:
         on = rowkey(r) in skip
         menu.add_command(label="Stop ignoring this creature" if on else "Ignore this creature",
                          command=lambda: set_skipped(r, not on))
+        keep_item(menu, r)
         menu.add_separator()
         pp = props.get(rowkey(r))
         n = 0
@@ -4423,9 +6808,22 @@ def run_gui() -> None:
         finally:
             menu.grab_release()
 
+    def listed_lost() -> Dict[str, str]:
+        """Missing pictures of creatures that are listed now. A bunch taken apart one by one is not listed
+        itself - its creatures are - so a picture once proposed for the whole bunch is not counted: it could
+        not be shown, and the Missing box would find nothing to show for it."""
+        res_ = state["res"]
+        rows_ = all_rows()
+        if res_ and not party_var.get():
+            rows_ = [o for o in rows_ if not o.get("party")]
+        if not show_skip_var.get():
+            rows_ = [o for o in rows_ if rowkey(o) not in skip]
+        keys_ = {rowkey(o) for o in rows_}
+        return {k: v for k, v in lost_proposals(props).items() if k in keys_}
+
     def show_lost() -> None:
         """The button appears only when a proposed picture has gone missing, and says how many."""
-        n = len(lost_proposals(props))
+        n = len(listed_lost())
         if n and not lost_btn.winfo_ismapped():
             lost_btn.pack(side="left", padx=(6, 0))
         elif not n and lost_btn.winfo_ismapped():
@@ -4435,7 +6833,7 @@ def run_gui() -> None:
 
     def fix_lost() -> None:
         """Point the proposals that lost their picture at another crop of the same one, where there is one."""
-        lost = lost_proposals(props)
+        lost = listed_lost()
         if not lost:
             return
         can = {k: v for k, v in lost.items() if v}
@@ -4475,6 +6873,27 @@ def run_gui() -> None:
             st.setdefault("proposals", {})[res["mod"]] = dict(props)          # type: ignore[index]
             save_settings(st)
         update_prop_label()
+
+    def face_kept(r: dict) -> bool:
+        """Whether this creature's borrowed face is the right one to keep. Judged by hand where it has been
+        judged; otherwise Analyze's guess, which is weak - a template copied only once is called "the same
+        creature", and most are (258 of CotSC's are), so Shandalar and a generic beggar look alike to it."""
+        if not r.get("copy_port"):
+            return False
+        return bool(kept.get(rowkey(r), bool(r.get("copy_named"))))
+
+    def set_kept(r: dict, on: bool) -> None:
+        """Keep this creature's borrowed face, or hand it back for a portrait of its own."""
+        res = state["res"]
+        kept[rowkey(r)] = bool(on)
+        if res:
+            st.setdefault("kept_faces", {})[res["mod"]] = dict(kept)         # type: ignore[index]
+            save_settings(st)
+        refresh_table_only()
+        if view_var.get() == "gallery":
+            rebuild_keep_scroll()
+        status.set(f"{r['name']} keeps {r.get('copy_port')}, and the mod writes it in." if on else
+                   f"{r['name']} wants a face of its own; {r.get('copy_port')} is not written in.")
 
     def set_skipped(r: dict, on: bool) -> None:
         """Mark a creature as not wanting a portrait, or let it back in. Kept per mod, between sessions."""
@@ -4591,6 +7010,7 @@ def run_gui() -> None:
             messagebox.showinfo("Portrait Scout", "Tick some creatures in the gallery first.", parent=root)
             return
         w = tk.Toplevel(root)
+        esc_closes(w)
         w.title("Copy their portraits")
         w.transient(root)
         bx = ttk.Frame(w, padding=12)
@@ -4717,6 +7137,7 @@ def run_gui() -> None:
             messagebox.showinfo("Portrait Scout", "Analyze a mod or a game first.", parent=root)
             return
         w = tk.Toplevel(root)
+        esc_closes(w)
         w.title("Propose from a folder")
         w.transient(root)
         box = ttk.Frame(w, padding=12)
@@ -4897,6 +7318,12 @@ def run_gui() -> None:
         mod_name = "_anything" if generic or not res else str(res["mod"])   # type: ignore[index]
         notes = st.setdefault("portrait_notes", {}).setdefault(mod_name, {})
         saved = notes.get(key, {})
+        if not saved and not generic:                                # filed under the dialogs it had before (a
+            whose0 = ",".join(str(c).upper() for c in (r.get("cre_list") or []))   # newer analysis groups them
+            hit_ = next((k_ for k_, v_ in notes.items() if whose0 and str(v_.get("whose") or "") == whose0), "")
+            if hit_:                                                 # differently): same creature file, same note
+                notes[key] = notes.pop(hit_)
+                saved = notes[key]
         # a kept description belongs to one creature: if the note was written for another (two rows can share a
         # dialog key, and old notes outlive an analysis), start from the game data again rather than its words
         whose = ",".join(str(c).upper() for c in (r.get("cre_list") or [])) or str(r.get("name") or "")
@@ -4948,7 +7375,48 @@ def run_gui() -> None:
             cl_.pack(side="left", padx=(0, 6))
             cl_.bind("<Button-1>", lambda e, n=cn_: copy_text(n))
             tooltip(cl_, "Click to copy, for NearInfinity's search.")
+        if not generic:                                            # v2: context strip - what it has now vs what is proposed
+            ctx = ttk.Frame(head_)                                     # on the name's row: one line less
+            ctx.pack(side="left", padx=(14, 0))
+            in_port = str(r["small"] or r["large"] or "").split("/")[0]
+            ttk.Label(ctx, text="In-game:", foreground="#666").pack(side="left")
+            ttk.Label(ctx, text=in_port or "(none)", foreground="#1a5fb4" if in_port else "#999").pack(side="left")
+            ttk.Label(ctx, text="   Proposed:", foreground="#666").pack(side="left")
+            prop_lab = ttk.Label(ctx, text="(none)", foreground="#999")   # names only: the pictures themselves
+            prop_lab.pack(side="left")                               # are among the candidates below (in-game
+            #                                                          "its portrait now", proposed in green)
 
+            seen_prop = {"p": str(props.get(key) or "")}
+
+            def prop_name() -> None:
+                """Keep the proposed file's name current as proposals are made and cleared - and the green
+                frame on the candidates with it."""
+                if not prop_lab.winfo_exists():
+                    return
+                p_ = str(props.get(key) or "")
+                if p_ != seen_prop["p"]:
+                    seen_prop["p"] = p_
+                    try:
+                        for c_ in cells:
+                            mark_now(c_)
+                    except NameError:
+                        pass
+                if not p_:
+                    prop_lab.config(text="(none)", foreground="#999")
+                else:
+                    ok_ = os.path.isfile(p_)
+                    prop_lab.config(text=Path(p_).name + ("" if ok_ else " (missing)"),
+                                    foreground="#2e9e4f" if ok_ else "#b3261e")
+                prop_lab.after(800, prop_name)
+            prop_name()
+            ttk.Label(ctx, text="   Description: " + ("your saved edit" if saved.get("desc") else "animation + creature file"),
+                      foreground="#666").pack(side="left", padx=(0, 0))
+            tooltip(ctx, "In-game: the portrait the game shows now.  Proposed: the picture this tab is working on. "
+                         "Description: where the words at the top come from.")
+
+        pickrow = ttk.Frame(dlg, padding=(10, 4, 10, 2))             # race, gender, class, age, look: what the
+        pickrow.pack(fill="x")                                       # description is built from, under the name
+        ttk.Label(pickrow, text="Built from:", foreground="#666").pack(side="left", padx=(0, 6))
         eng_s = gs.get("engine") or {}
         if not engine_ready() and eng_s.get("autostart", True) and "start_engine.bat" in str(eng_s.get("start", "")):
             nb_ = tk.Frame(dlg, bg="#fdf6d8", highlightthickness=1, highlightbackground="#d9c97a")
@@ -4962,6 +7430,20 @@ def run_gui() -> None:
         frm = ttk.Frame(dlg, padding=10)
         frm.pack(fill="x")
         frm.columnconfigure(1, weight=1)
+        # Everything above the candidates on the left; on the right, the creature's sprite and the spares from
+        # the pool, at a size you can see (they used to sit small on the status line).
+        topwrap = ttk.Frame(dlg)
+        topwrap.pack(fill="x", before=head_)
+        side_ = ttk.Frame(topwrap, padding=(8, 6, 10, 0))
+        side_.pack(side="right", anchor="n")
+        left_ = ttk.Frame(topwrap)
+        left_.pack(side="left", fill="x", expand=True, anchor="n")
+        for w_ in [x for x in dlg.pack_slaves() if x is not topwrap]:
+            info_ = {k_: v_ for k_, v_ in w_.pack_info().items() if k_ != "in"}
+            w_.pack_forget()
+            w_.pack(in_=left_, **info_)
+            w_.lift()                                                # above the frames made after it, or they
+            #                                                          hide it (Tk draws a later sibling on top)
         dlab = ttk.Label(frm, text="Description:")
         dlab.grid(row=1, column=0, sticky="w")
         desc0 = str(saved.get("desc") or character)
@@ -4972,30 +7454,42 @@ def run_gui() -> None:
         dent.grid(row=1, column=1, sticky="ew", padx=6)
         dbtn = ttk.Frame(frm)
         dbtn.grid(row=1, column=2)
-        reset_btn = ttk.Button(dbtn, text="\u21bb", width=3, command=lambda: pick_reset())
+        reset_btn = ttk.Button(pickrow, text="\u21bb Reset", width=8, command=lambda: pick_reset())
         tooltip(reset_btn, "Reset: put the description back to what the animation and the creature file say, "
                            "losing anything typed here and any new face." if not generic else
                 "Reset: back to Human, Male, Fighter, Adult.")
 
-        def big_edit(var: tk.StringVar, title: str) -> None:
+        def big_edit(var: tk.StringVar, title: str, on_ok: Optional[Callable[[], None]] = None) -> None:
             """A roomy box for text too long to read in one line."""
             w = tk.Toplevel(root)
+            esc_closes(w)
             w.title(title)
             w.geometry("700x240")
-            t = tk.Text(w, wrap="word", font=("TkDefaultFont", 10))
+            row_ = ttk.Frame(w, padding=(8, 0, 8, 8))                # packed first, at the bottom: a Text asks for
+            row_.pack(side="bottom", fill="x")                       # 24 lines and would push the buttons off
+            t = tk.Text(w, wrap="word", font=("TkDefaultFont", 10), height=6)
             t.pack(fill="both", expand=True, padx=8, pady=8)
             t.insert("1.0", var.get())
             t.focus_set()
-            row_ = ttk.Frame(w, padding=(8, 0, 8, 8))
-            row_.pack(fill="x")
 
-            def ok() -> None:
+            def ok(_e: object = None) -> str:
                 var.set(" ".join(t.get("1.0", "end-1c").split()))
                 w.destroy()
-            ttk.Button(row_, text="OK", command=ok).pack(side="right")
+                if on_ok:
+                    on_ok()                                          # kept right away, not only on Generate
+                return "break"
+            ok_ = ttk.Button(row_, text="OK", command=ok)
+            ok_.pack(side="right")
+            tooltip(ok_, "Keep the changes (Ctrl+Enter).")
             ttk.Button(row_, text="Cancel", command=w.destroy).pack(side="right", padx=6)
-        ttk.Button(dbtn, text="\u2922", width=3, command=lambda: big_edit(desc_var, "Description")).pack(side="left")
-        reset_btn.pack(side="left", padx=(3, 0))
+            t.bind("<Control-Return>", ok)
+        def keep_desc() -> None:
+            """The description as edited, saved now: it used to be kept only when Generate was pressed."""
+            notes.setdefault(key, {})["desc"] = desc_var.get().strip()
+            save_settings(st)
+            gstat.set("Description saved.")
+        ttk.Button(dbtn, text="\u2922", width=3,
+                   command=lambda: big_edit(desc_var, "Description", keep_desc)).pack(side="left")
         if not generic:
 
             def clauses(t: str) -> List[str]:
@@ -5004,7 +7498,7 @@ def run_gui() -> None:
             def described(n: int) -> List[str]:
                 """The description this creature would get on face n."""
                 r["face_variant"] = n
-                return clauses(pg.describe(r, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
+                return clauses(pg.describe(r, gs, age_v.get(), look_v.get(), cloth_v.get(), mood_v.get(), scar_v.get(), grime_v.get(), beard_v.get())[1])   # type: ignore[attr-defined]
 
             def new_face() -> None:
                 """Another face for this creature. Only the drawn face is swapped out - anything typed by hand
@@ -5023,25 +7517,42 @@ def run_gui() -> None:
                 save_settings(st)
                 if at < 0:
                     # Nothing in the description comes from the face draw - a sirine or a troll has no face drawn
-                    # for it, and a description written over by hand has none left. The seed still moves, so the
-                    # next Generate paints somebody else.
-                    gstat.set(f"Face {nxt + 1} for {r['name']}: the description is painted as you wrote it, by "
-                              "somebody new. Press Generate to see them.")
+                    # for it, and a description written over by hand has none left.
+                    gstat.set(f"Face {nxt + 1} for {r['name']}: nothing in the description comes from the face "
+                              "draw, so it is unchanged. Generate paints somebody new either way.")
                     return
                 parts[at + 1:at + 1] = fresh                         # anything left over goes in beside it
                 desc_var.set(", ".join(c for c in parts if c))
-                gstat.set(f"Face {nxt + 1} for {r['name']}: new face words, and a new painting when you press "
-                          "Generate. Press again for another; Reset starts over.")
-            nf_ = ttk.Button(dbtn, text="New face", width=9, command=new_face)
-            nf_.pack(side="left", padx=(3, 0))
-            tooltip(nf_, "Draw this creature another face - a different shape, nose and hair. Only the face "
-                         "changes; anything you typed yourself stays. The creature keeps its new face from then "
-                         "on, so it is the same person every time you come back. Reset starts over.")
-        prow0 = ttk.Frame(frm)                                       # what the description is built from
-        prow0.grid(row=1, column=3, sticky="w", padx=(8, 0))
-        RACES = ["Human", "Elf", "Half-Elf", "Dwarf", "Halfling", "Gnome", "Half-Orc"]
-        CLASSES = ["Fighter", "Paladin", "Ranger", "Barbarian", "Monk", "Cleric", "Druid", "Shaman",
-                   "Mage", "Sorcerer", "Thief", "Bard"]
+                gstat.set(f"Face {nxt + 1} for {r['name']}: new face words. Press again for another; Reset "
+                          "starts over.")
+        prow0 = ttk.Frame(pickrow)                                   # what the description is built from
+        prow0.pack(side="left")
+        reset_btn.pack(side="left", padx=(6, 0))
+        seed_var = tk.StringVar(value=str(saved.get("seed") or ""))
+        ttk.Label(pickrow, text="Seed:").pack(side="left", padx=(18, 4))
+        seed_ent = ttk.Entry(pickrow, textvariable=seed_var, width=12)
+        seed_ent.pack(side="left")
+        seed_x = ttk.Button(pickrow, text="x", width=2, command=lambda: (seed_var.set(""), keep_seed()))
+        seed_x.pack(side="left", padx=(2, 0))
+        for w_ in (seed_ent, seed_x):
+            tooltip(w_, "Empty: every Generate paints somebody new. A number: the first picture starts from that "
+                        "seed, so the same face comes back - change the description and it keeps the face "
+                        "with what you changed. Right-click a picture to take its seed. x clears it.")
+
+        def keep_seed(*_a: object) -> None:
+            v_ = seed_var.get().strip()
+            if v_ and not v_.isdigit():
+                return
+            notes.setdefault(key, {})["seed"] = v_
+            if not v_:
+                notes[key]["init"] = ""                             # no seed: new start faces again
+            save_settings(st)
+        seed_ent.bind("<FocusOut>", keep_seed)
+        seed_ent.bind("<Return>", keep_seed)
+        RACES = ["Human", "Elf", "Half-Elf", "Drow", "Dwarf", "Duergar", "Halfling", "Gnome", "Half-Orc", "Tiefling",
+                 "Githyanki", "Orc", "Goblin", "Hobgoblin", "Ogre"]             # each has its words in race_terms
+        CLASSES = list(pg.roles(gs)) or ["Fighter"]                 # type: ignore[attr-defined]
+        #                                                            classes, then stations: role_terms in settings
         last = st.get("generic_pick") if isinstance(st.get("generic_pick"), list) else []
         last = (list(last) + ["Human", "Male", "Fighter"])[:3]
         race_vals, class_vals = list(RACES), list(CLASSES)
@@ -5049,11 +7560,18 @@ def run_gui() -> None:
             aw_ = str(r.get("anim") or "").split()
             raw_race = str(r.get("race") or "").strip()
             cre_race = next((x for x in RACES if x.lower() == raw_race.lower()), "")
+            anim_race = next((x for x in RACES if x.lower().replace("-", "_") in
+                              [w.lower().replace("-", "_") for w in aw_]), "")
+            if anim_race and not cre_race:                           # a "golem" with a gnome's sprite: the sprite
+                cre_race = anim_race                                 # is what the portrait stands beside
             if raw_race and not cre_race:                            # an orc, a sahuagin: not a playable race, but
                 cre_race = raw_race                                  # it is what this creature is, so offer it
                 race_vals = [raw_race] + race_vals
             cre_sex = str(r.get("sex") or "").strip().title() if str(r.get("sex") or "").strip().lower() in ("male", "female") else ""
-            cre_cls = next((c for c in CLASSES if any(c.lower() == w.lower() for w in aw_)), "")
+            anim_sex = next((w.title() for w in aw_ if w.lower() in ("male", "female")), "")
+            if anim_sex:                                             # the sprite's gender beats the file's
+                cre_sex = anim_sex
+            cre_cls = pg.find_role(aw_, gs)                           # type: ignore[attr-defined]
             if not cre_cls and aw_:                                  # "Orog", "Sahuagin": the animation is the role
                 cre_cls = aw_[0]
                 class_vals = [cre_cls] + class_vals
@@ -5064,7 +7582,21 @@ def run_gui() -> None:
         ages = pg.term_names(gs, "age_terms") or ["Adult"]           # type: ignore[attr-defined]
         looks = pg.term_names(gs, "look_terms") or ["Ordinary"]      # type: ignore[attr-defined]
         age_v = tk.StringVar(value=str(saved.get("age") or st.get("last_age") or ("Adult" if "Adult" in ages else ages[0])))
-        look_v = tk.StringVar(value=str(saved.get("look") or st.get("last_look") or looks[0]))
+        def kept(v: object, vals: List[str]) -> str:                 # a choice since taken out of settings
+            return str(v) if str(v or "") in vals else vals[0]       # ("Noble" was a look once) starts over
+        look_v = tk.StringVar(value=kept(saved.get("look") or st.get("last_look"), looks))
+        moods = pg.term_names(gs, "mood_terms") or ["Neutral"]      # type: ignore[attr-defined]
+        mood_v = tk.StringVar(value=kept(saved.get("mood") or st.get("last_mood"), moods))
+        scars = pg.term_names(gs, "scar_terms") or ["None"]         # type: ignore[attr-defined]
+        scar0 = str(gs.get("scar_default") or "") if str(gs.get("scar_default") or "") in scars else scars[0]
+        scar_v = tk.StringVar(value=str(saved.get("scars")) if saved.get("scars") in scars else
+                              kept(st.get("last_scars") or scar0, scars))
+        beards = pg.term_names(gs, "beard_terms") or ["By race"]   # type: ignore[attr-defined]
+        beard_v = tk.StringVar(value=kept(saved.get("beard"), beards))
+        grimes = pg.term_names(gs, "grime_terms") or ["Clean"]      # type: ignore[attr-defined]
+        grime_v = tk.StringVar(value=kept(saved.get("grime") or st.get("last_grime"), grimes))
+        cloths = pg.term_names(gs, "outfit_terms") or ["By role"]   # type: ignore[attr-defined]
+        cloth_v = tk.StringVar(value=kept(saved.get("outfit"), cloths))
 
         def pick_changed(*_a: object) -> None:
             race, sex, cls = race_v.get() or "Human", sex_v.get() or "Male", class_v.get() or "Fighter"
@@ -5073,9 +7605,12 @@ def run_gui() -> None:
                 st["generic_pick"] = [race, sex, cls]                 # remembered until Reset
             else:                                                     # keep the creature's own face and files
                 row_ = dict(r, race=race, sex=sex, anim=f"{cls} {sex} {race}")
-            st["last_age"], st["last_look"] = age_v.get(), look_v.get()
+                if race.lower() != str(r.get("race") or "").lower():  # a race picked by hand beats what the
+                    row_["colors"] = {k_: v_ for k_, v_ in (r.get("colors") or {}).items() if k_ != "kind"}   # colors hint
+            st["last_age"], st["last_look"], st["last_mood"] = age_v.get(), look_v.get(), mood_v.get()
+            st["last_scars"], st["last_grime"] = scar_v.get(), grime_v.get()
             save_settings(st)
-            desc_var.set(pg.describe(row_, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
+            desc_var.set(pg.describe(row_, gs, age_v.get(), look_v.get(), cloth_v.get(), mood_v.get(), scar_v.get(), grime_v.get(), beard_v.get())[1])   # type: ignore[attr-defined]
 
         def pick_reset() -> None:
             st.pop("generic_pick", None)
@@ -5084,17 +7619,50 @@ def run_gui() -> None:
             class_v.set(last[2] if not generic else "Fighter")
             age_v.set("Adult" if "Adult" in ages else ages[0])
             look_v.set(looks[0])
+            mood_v.set(moods[0])
+            scar_v.set(scar0)
+            beard_v.set(beards[0])
+            grime_v.set(grimes[0])
+            cloth_v.set(cloths[0])
             if generic:
                 pick_changed()
             else:                                                    # the creature as its own file describes it
-                desc_var.set(pg.describe(r, gs, age_v.get(), look_v.get())[1])   # type: ignore[attr-defined]
-        picks = [(race_v, race_vals, 12), (sex_v, ["Male", "Female"], 8), (class_v, class_vals, 11),
-                 (age_v, ages, 11), (look_v, looks, 11)]
+                row_ = r                                             # (race and gender as the sprite shows them)
+                if race_v.get().lower() != str(r.get("race") or "").lower() or \
+                        sex_v.get().lower() != str(r.get("sex") or "").lower():
+                    row_ = dict(r, race=race_v.get(), sex=sex_v.get())
+                desc_var.set(pg.describe(row_, gs, age_v.get(), look_v.get(), cloth_v.get(), mood_v.get(), scar_v.get(), grime_v.get(), beard_v.get())[1])   # type: ignore[attr-defined]
+        picks = [(race_v, race_vals, 11), (sex_v, ["Male", "Female"], 7), (class_v, class_vals, 10),
+                 (age_v, ages, 10), (look_v, looks, 11), (beard_v, beards, 8), (scar_v, scars, 8), (grime_v, grimes, 8), (mood_v, moods, 8),
+                 (cloth_v, cloths, 11)]
+        pick_tips = {id(race_v): "Race", id(sex_v): "Gender",
+                     id(class_v): "Role: who they are. Classes first, then everyday folk. Sets the outfit too, "
+                                  "unless Outfit says otherwise.",
+                     id(age_v): "Age",
+                     id(look_v): "Look: the skin - weathered, freckled, sickly, well-kept.",
+                     id(beard_v): "Beard, for men. By race: a dwarf, gnome or duergar gets his race's own, "
+                                  "different for each one; anyone else gets none said.",
+                     id(scar_v): "Scars: none, a few, scarred, heavily scarred, or fresh wounds.",
+                     id(grime_v): "Grime: how dirty the face is.",
+                     id(mood_v): "Mood: the expression. Any lets Vary faces pick one per picture, mostly calm.",
+                     id(cloth_v): "Outfit: what they wear. By role takes the role's own; pick one to dress a "
+                                  "fighter in mail or a farmer in rags. The creature's colors go into it."}
+        typed = {id(race_v), id(class_v)} if generic else set()      # a cat is not in the list: type it in
         for var_, vals_, w_ in picks:
-            cb_ = ttk.Combobox(prow0, textvariable=var_, values=vals_, state="readonly", width=w_)
+            free = id(var_) in typed
+            cb_ = ttk.Combobox(prow0, textvariable=var_, values=vals_, width=w_,
+                               state="normal" if free else "readonly")
             cb_.pack(side="left", padx=(0, 4))
             cb_.bind("<<ComboboxSelected>>", pick_changed)
-        tooltip(prow0, "Race, gender and class, then how old the character looks and anything about the face. They "
+            if id(var_) in pick_tips:
+                tooltip(cb_, pick_tips[id(var_)])
+            if free:
+                cb_.bind("<Return>", pick_changed)
+                cb_.bind("<FocusOut>", pick_changed)
+        tooltip(prow0, ("Race and role can be typed, not only picked: \"cat\", \"owl\", \"wolf\". For an "
+                        "animal take the Animal style as well, or it comes out as a person in "
+                        "clothes. " if generic else "")
+                       + "Race, gender, role, age, face, mood and outfit. They "
                        + ("start from the creature's own file and nothing happens until you change one, which "
                           "rewrites the description. " if not generic else "")
                        + "Flux paints clean, young skin unless it is told otherwise, so \"Old\" and \"Weathered\" "
@@ -5127,23 +7695,92 @@ def run_gui() -> None:
         def lora_changed() -> None:
             st["use_lora"] = bool(lora_var.get())
             save_settings(st)
+        LORA_WS = ["Style's", "1.0", "0.85", "0.65", "0.5", "0.35", "0.2"]
+        lora_w = tk.StringVar(value=str(st.get("lora_weight") or "Style's"))
+        if lora_w.get() not in LORA_WS:
+            lora_w.set("Style's")
         if have_lora:                                                # packed right to left: LoRA ends up last
+            lw_cb = ttk.Combobox(brow, textvariable=lora_w, values=LORA_WS, width=7, state="readonly")
+            lw_cb.pack(side="right", padx=(2, 0))
+            lw_cb.bind("<<ComboboxSelected>>", lambda e: (st.__setitem__("lora_weight", lora_w.get()), save_settings(st)))
+            tooltip(lw_cb, "How hard the LoRA pulls. Style's: what the style says (BG2 framing: 0.35). The "
+                           "portrait LoRA was trained on armored adventurers, so it paints armor and a leather "
+                           "coat over whatever clothes are asked for: at 0.35 rags come out as rags. Lower also "
+                           "lets a creature keep its own features; higher looks more like the game's portraits.")
             lora_cb = ttk.Checkbutton(brow, text="LoRA", variable=lora_var, command=lora_changed)
             lora_cb.pack(side="right", padx=(6, 0))
             tooltip(lora_cb, "Off: the <lora:...> part is taken out of the prompt, so only the model itself paints "
                              "the picture. A LoRA pushes hard towards what it was trained on, which can cost a "
                              "creature its own features (horns, green skin).")
         styles = pg.style_names(gs) if hasattr(pg, "style_names") else []   # type: ignore[attr-defined]
-        style_var = tk.StringVar(value=st.get("portrait_style") if st.get("portrait_style") in styles
-                                 else (gs.get("style") if gs.get("style") in styles else (styles[0] if styles else "")))
+        # An animal style asks for "a real animal and nothing else", so it must not carry over to the next person
+        # opened (an ogre came out a gorilla). Each kind keeps the style last used for it.
+        fallback_ = gs.get("style") if gs.get("style") in styles else (styles[0] if styles else "")
+        last_ = str(st.get("portrait_style") or "")
+        if r is not None and styles:
+            want_animal = is_animal(r)
+            if want_animal and not animal_style(last_):
+                last_ = next((x for x in (str(st.get("portrait_style_animal") or ""),) if x in styles), "") or \
+                    next((x for x in styles if animal_style(x)), last_)
+            elif not want_animal and animal_style(last_):
+                pp_ = str(st.get("portrait_style_people") or "")
+                last_ = pp_ if pp_ in styles and not animal_style(pp_) else (
+                    fallback_ if not animal_style(fallback_) else
+                    ("BG2 framing" if "BG2 framing" in styles else fallback_))
+        style_var = tk.StringVar(value=last_ if last_ in styles else fallback_)
         style_box = ttk.Combobox(brow, textvariable=style_var, values=styles, state="readonly", width=22)
         style_box.pack(side="right", padx=(4, 0))
         ttk.Label(brow, text="Style:").pack(side="right", padx=(12, 0))
         count_var = tk.IntVar(value=int(saved.get("count") or gs.get("candidates", 2) or 2))
-        ttk.Spinbox(brow, from_=1, to=8, width=3, textvariable=count_var).pack(side="right", padx=(4, 0))
+        try:
+            max_c = max(1, int(gs.get("max_candidates") or MAX_CANDIDATES))
+        except (TypeError, ValueError):
+            max_c = MAX_CANDIDATES
+        # Every picture gets a face of its own in words (Klein paints nearly one face per description whatever
+        # the seed). A seed in the Seed box means "this face": then no new words, so it comes back the same.
+        cnt_ = ttk.Spinbox(brow, from_=1, to=max_c, width=3, textvariable=count_var)
+        cnt_.pack(side="right", padx=(4, 0))
+        tooltip(cnt_, f"How many to paint each time Generate is pressed, up to {max_c} (max_candidates in "
+                      "generator/settings.json). They arrive one "
+                      "by one and Stop keeps the ones already made.")
         ttk.Label(brow, text="Candidates:").pack(side="right", padx=(14, 0))
+        p_sv = tk.StringVar(value=start_v.get())                     # this window's: "This picture" while a
+        p_sk = tk.StringVar(value=start_k.get())                     # picture is restyled, the shared ones else
+        p_box = start_controls(brow, "right", p_sv, p_sk)
+        p_guard = {"on": False}
+
+        def p_sv_changed(*_a: object) -> None:
+            if p_guard["on"]:
+                return
+            v_ = p_sv.get()
+            if v_ != "This picture":
+                if restyle["path"]:
+                    restyle_from("")
+                start_v.set(v_)
+
+        def p_sk_changed(*_a: object) -> None:
+            if p_guard["on"]:
+                return
+            try:
+                k_ = max(0.3, min(1.0, float(p_sk.get())))
+            except (tk.TclError, ValueError):
+                return
+            if restyle["path"]:
+                restyle["k"] = k_                                    # fine-tuning the restyle, not Auto's
+            else:
+                start_k.set(p_sk.get())
+        p_sv.trace_add("write", p_sv_changed)
+        p_sk.trace_add("write", p_sk_changed)
+        def keep_bg() -> None:
+            """The background as edited, saved straight away (the prompt words are left as they are saved)."""
+            name = style_var.get()
+            try:
+                pg.save_background(gs, name, bg_var.get().strip())    # type: ignore[attr-defined]
+                gstat.set("Background saved.")
+            except Exception as e:  # noqa: BLE001
+                messagebox.showwarning("Portrait Scout", str(e), parent=dlg)
         ttk.Button(brow, text="\u2922", width=3,
-                   command=lambda: big_edit(bg_var, "Background")).pack(side="right", padx=(4, 0))
+                   command=lambda: big_edit(bg_var, "Background", keep_bg)).pack(side="right", padx=(4, 0))
         ttk.Entry(brow, textvariable=bg_var).pack(side="left", fill="x", expand=True, padx=(6, 0))
         fold_lbl = tk.StringVar()
 
@@ -5159,6 +7796,10 @@ def run_gui() -> None:
                     w_.grid_remove() if off else w_.grid()
                 except (tk.TclError, AttributeError):
                     pass
+            try:                                                     # the pickers are a row of their own
+                pickrow.pack_forget() if off else pickrow.pack(fill="x", after=head_)
+            except (tk.TclError, AttributeError):
+                pass
             nb = state.get("gen_banner")
             if nb is not None:
                 try:
@@ -5193,12 +7834,20 @@ def run_gui() -> None:
                 parent=dlg, title=f"Picture for {r['name']}",
                 initialdir=os.path.dirname(props.get(key, "")) or str(folder) if folder.is_dir() else None,
                 filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tga *.tif *.tiff"), ("All files", "*.*")])
-            if not q:
-                return
+            if q:
+                take_image(q)
+
+        def take_image(q: str, came_from: str = "") -> None:
+            """Put a picture in with the candidates, so it can be framed like a generated one. A spare taken
+            out of the pool is remembered, so that using it here takes it out of the pool."""
             try:                                                     # a copy: Discard deletes candidates, and the
                 folder.mkdir(parents=True, exist_ok=True)            # picture you picked is not ours to delete
                 dst = folder / f"{stem}_f{int(time.time())}{Path(q).suffix.lower()}"
                 shutil.copyfile(q, dst)
+                if came_from:
+                    st.setdefault("pool_from", {})[os.path.normcase(str(dst))] = \
+                        os.path.normcase(os.path.normpath(came_from))
+                    save_settings(st)
                 q = str(dst)
             except OSError as e:
                 messagebox.showwarning("Portrait Scout", f"Could not copy {Path(q).name} into {folder} ({e}).\n\n"
@@ -5217,12 +7866,27 @@ def run_gui() -> None:
                 add_candidate(os.path.normpath(q))
             gstat.set(f"{Path(q).name} added. Frame it with the crop box, then press "
                       + ("Make portrait." if generic else "Use this."))
+        def pick_spare() -> None:
+            """Take one of the spare pictures already made. The ones made for this kind of creature come first."""
+            pool_chooser(dlg, ("" if generic else str(r.get("race") or ""), "" if generic else str(r.get("sex") or "")),
+                         lambda q: take_image(str(q), came_from=str(q)), gstat.set)
+
+        def sel_menu() -> None:
+            """Two ways in: a file of your own, or one of the spares already made."""
+            m = tk.Menu(dlg, tearoff=0)
+            m.add_command(label="From a file...", command=pick_image)
+            m.add_command(label="From the pool...", command=pick_spare)
+            try:
+                m.tk_popup(sel_btn.winfo_rootx(), sel_btn.winfo_rooty() + sel_btn.winfo_height())
+            finally:
+                m.grab_release()
         ttk.Label(bar, text="or").pack(side="left", padx=(8, 8))
         sel_btn = tk.Button(bar, text="Select image...", bg="#2f6fb5", fg="white", activebackground="#27598f",
                             activeforeground="white", font=("TkDefaultFont", 9, "bold"), padx=12, relief="raised",
-                            disabledforeground="#e8e8e8", command=pick_image)
+                            disabledforeground="#e8e8e8", command=sel_menu)
         sel_btn.pack(side="left")
-        gen_only.extend([dlab, dent, dbtn, prow0])
+        tooltip(sel_btn, "A picture of your own, or one of the spare ones already made.")
+        gen_only.extend([dlab, dent, dbtn])
         fb_ = ttk.Button(bar, textvariable=fold_lbl, command=lambda: fold_gen(not st.get("gen_folded")))
         fb_.pack(side="left", padx=(12, 0))
         tooltip(fb_, "Fold away the description, the background and the generator notice, for when you are only "
@@ -5233,14 +7897,21 @@ def run_gui() -> None:
         gstat = tk.StringVar(value="Type what the portrait should show, then press Generate." if generic else
                              "Description comes from the creature's gender, race and animation type - edit it freely.")
 
-        def prompt_now() -> Tuple[str, str]:
-            d = desc_var.get().strip()
+        def prompt_now(more: str = "") -> Tuple[str, str]:
+            base_ = pg.womanly(desc_var.get().strip()) if hasattr(pg, "womanly") else desc_var.get().strip()   # type: ignore[attr-defined]
+            d = pg.vary_merge(base_, more, gs) if hasattr(pg, "vary_merge") else \
+                ", ".join(x for x in (desc_var.get().strip(), more.strip()) if x)     # type: ignore[attr-defined]
             subj = re.sub(r"^(adult|young)\s+", "", d.split(",")[0].strip())
             tmpl = ptext.get("1.0", "end-1c")
             if not lora_var.get():
                 tmpl = re.sub(r"\s*<lora:[^>]*>", "", tmpl)          # paint without the LoRA
-            return (pg.fill_prompt(tmpl, subj, d, "", bg_var.get()),   # type: ignore[attr-defined]
-                    ntext.get("1.0", "end-1c"))
+            elif lora_w.get() != "Style's":                          # the strength picked beside the tick box
+                tmpl = re.sub(r"(<lora:[^:>]+):[0-9.]+>", lambda m_: f"{m_.group(1)}:{lora_w.get()}>", tmpl)
+            bg_ = pg.pick_palette(gs, bg_var.get()) if hasattr(pg, "pick_palette") else bg_var.get()   # type: ignore[attr-defined]
+            pr_ = pg.fill_prompt(tmpl, subj, d, "", bg_)              # type: ignore[attr-defined]  {random}: a palette
+            if hasattr(pg, "youthen"):
+                pr_ = pg.youthen(pr_, d, gs)                         # type: ignore[attr-defined]
+            return pr_, ntext.get("1.0", "end-1c")
 
         def copy_prompt() -> None:
             pr, ng = prompt_now()
@@ -5358,6 +8029,11 @@ def run_gui() -> None:
         move_ws.append(mid_btn)
         tooltip(mid_btn, "Put the box back in the middle. The arrows move it on every candidate at once; the picture "
                          "that \"Use this\" makes is exactly what the box shows.")
+        z1_btn = ttk.Button(crow, text="Zoom 1", width=7, command=lambda: zoom_var.set(1.0))
+        z1_btn._ps_pack = {"side": "left", "padx": (0, 8)}           # type: ignore[attr-defined]
+        z1_btn.pack(**z1_btn._ps_pack)                               # type: ignore[attr-defined]
+        move_ws.append(z1_btn)
+        tooltip(z1_btn, "Put Head zoom back to 1.0 - the box as wide as the picture allows, nothing cropped closer.")
         full_var = tk.BooleanVar(value=bool(st.get("cand_full_size", False)))
 
         def full_toggled() -> None:
@@ -5516,6 +8192,7 @@ def run_gui() -> None:
             """The picture on its own, as large as the screen allows - a 169x266 game portrait opens several
             times its own size, since at 100% there is nothing to see."""
             v = tk.Toplevel(dlg)
+            esc_closes(v)
             v.title(Path(path).name)
             keep_: Dict[str, object] = {}
             try:
@@ -5576,7 +8253,7 @@ def run_gui() -> None:
                 render()
                 lab.bind("<Button-1>", lambda e: v.destroy())
                 lab.bind("<Button-3>", lambda e: save_image(v, Path(path).name, None, path))
-                v.bind("<Escape>", lambda e: v.destroy())
+                esc_closes(v)
                 v.bind("<plus>", lambda e: step(1.25))
                 v.bind("<minus>", lambda e: step(1 / 1.25))
                 v.bind("<MouseWheel>", lambda e: step(1.25 if e.delta > 0 else 1 / 1.25))
@@ -5624,11 +8301,196 @@ def run_gui() -> None:
                         cvs.itemconfigure(item, state="normal" if show_ else "hidden")
                 except (tk.TclError, KeyError, ZeroDivisionError, AttributeError):
                     pass
+            if not generic:                                          # the one proposed from here follows the box
+                try:
+                    if recut_job.get("id"):
+                        dlg.after_cancel(recut_job["id"])            # type: ignore[arg-type]
+                    recut_job["id"] = dlg.after(700, recut_proposal)
+                except (tk.TclError, NameError):                    # (while the window is still being built)
+                    pass
+
+        recut_job: Dict[str, object] = {}
+        dlg.after(2000, lambda: recut_job.__setitem__("armed", True))   # changes made by you, not by the opening
+
+        def recut_proposal() -> None:
+            """Cut the proposed portrait again when the crop changes, if it was cut from one of the pictures
+            here - so zooming or nudging after "Use this" updates the proposal instead of needing it again."""
+            recut_job["id"] = None
+            if not recut_job.get("armed"):
+                return
+            prop_ = str(props.get(key) or "")
+            m_ = CUT_MARK.search(os.path.basename(prop_))
+            if not m_:
+                return
+            base_ = os.path.normcase(os.path.join(os.path.dirname(prop_), os.path.basename(prop_)[:m_.start()]))
+            src_ = next((c["path"] for c in cells if os.path.normcase(os.path.splitext(c["path"])[0]) == base_
+                         and not str(c["path"]).lower().endswith(".bmp")), "")
+            if not src_:
+                return
+            try:
+                zm_ = max(1.0, min(2.5, float(zoom_var.get())))
+            except (tk.TclError, ValueError):
+                return
+            want_ = f"_z{int(round(zm_ * 10))}" + (f"_m{int(nudge['dx'] * 100)}_{int(nudge['dy'] * 100)}"
+                                                    if nudge["dx"] or nudge["dy"] else "")
+            if os.path.basename(prop_)[m_.start():].lower().endswith(f"{want_}.bmp".lower()):
+                return                                               # already cut this way
+            use(src_)
+            gstat.set(f"The proposal follows the crop: cut again from {Path(src_).name}.")
+
+        restyle = {"path": "", "k": 0.75}                             # Generate starts from this picture
+
+        def restyle_from(path: str, k: float = 0.0) -> None:
+            restyle.update(path=path, k=k)
+            p_guard["on"] = True                                     # Start from shows it, and its number is the
+            try:                                                     # restyle's strength to fine-tune
+                p_box.config(values=START_FROM + (["This picture"] if path else []))   # type: ignore[attr-defined]
+                p_sv.set("This picture" if path else start_v.get())
+                p_sk.set(f"{k:.2f}" if path else start_k.get())
+            finally:
+                p_guard["on"] = False
+            gstat.set(f"Generate now starts from {Path(path).name} at strength {k:.2f} (fine-tune it beside Start "
+                      "from): the description and style repaint it, keeping its face and pose. Pick another Start "
+                      "from, or right-click it again, to stop." if path else
+                      "Generate paints new pictures again (Start from).")
+
+        def edit_from(path: str, expression: str = "", change: str = "", amount: float = 1.0) -> None:
+            """Repaint a candidate from itself in edit mode: the same person, with only what is asked changed.
+            As many new candidates as Candidates says, each a little different."""
+            if not hasattr(pg, "edit_prompt"):
+                return
+            try:
+                n_ = max(1, min(max_c, int(count_var.get())))
+            except (tk.TclError, ValueError):
+                n_ = 1
+            try:
+                data_ = Path(path).read_bytes()
+            except OSError as e_:
+                gstat.set(f"Could not read {Path(path).name}: {e_}")
+                return
+            prompt_ = pg.edit_prompt(gs, expression, change)          # type: ignore[attr-defined]
+            eng = get_engine()
+            gstat.set(f"{Path(path).name}: {expression.lower() if expression else change}...")
+            gen_btn.config(state="disabled", bg="#7fae8d")
+
+            def work() -> None:
+                try:
+                    def got(i: int, d: bytes) -> None:
+                        pth = pg.save_candidates([d], folder, f"{stem}_e{i + 1}")[0]   # type: ignore[attr-defined]
+                        #                                    (no fading: a faded picture comes back faded already)
+                        root.after(0, add_candidate, pth)
+                    # Full strength makes the change in full; less blends it with the picture as it was (8 steps,
+                    # so that there is room between) - "a little darker" that came out near black, made milder.
+                    eng.generate(prompt_, "", n_, got, None, init=data_,   # type: ignore[attr-defined]
+                                 strength=amount, steps=None if amount >= 0.99 else 8)
+                    root.after(0, done, "")
+                except Exception as e_:  # noqa: BLE001 - the engine's messages are meant for the user
+                    root.after(0, done, str(e_) or e_.__class__.__name__)
+            threading.Thread(target=work, daemon=True).start()
+
+        def edit_ask(path: str) -> None:
+            """What to change, in words, and how strongly."""
+            w_ = tk.Toplevel(dlg)
+            w_.title("Change it")
+            w_.transient(dlg)
+            esc_closes(w_)
+            f_ = ttk.Frame(w_, padding=12)
+            f_.pack(fill="both", expand=True)
+            ttk.Label(f_, text="What to change? Everything else is kept.\n(for example: make the hair gray / add "
+                               "a deep hood / give him a small black eye patch)").pack(anchor="w")
+            tv_ = tk.StringVar(value=str(st.get("edit_last") or ""))
+            en_ = ttk.Entry(f_, textvariable=tv_, width=70)
+            en_.pack(fill="x", pady=(6, 8))
+            w_.after(60, lambda: (en_.focus_set(), en_.select_range(0, "end")))   # after Esc's own focus grab
+            row_ = ttk.Frame(f_)
+            row_.pack(fill="x")
+            ttk.Label(row_, text="Strength:").pack(side="left")
+            kv_ = tk.DoubleVar(value=float(st.get("edit_strength") or 1.0))
+            kl_ = ttk.Label(row_, text="", width=5)
+            sc_ = ttk.Scale(row_, from_=0.5, to=1.0, variable=kv_, length=260,
+                            command=lambda _v: kl_.config(text=f"{kv_.get():.2f}"))
+            sc_.pack(side="left", padx=6)
+            kl_.pack(side="left")
+            kl_.config(text=f"{kv_.get():.2f}")
+
+            def at_(e: object) -> str:
+                """A click (or a drag) anywhere on the line puts the strength there, in steps of 0.05 - not a
+                jump to one end, which is what a plain ttk scale does."""
+                w__ = max(1, sc_.winfo_width() - 16)
+                f_ = max(0.0, min(1.0, (int(e.x) - 8) / w__))       # type: ignore[attr-defined]
+                kv_.set(round((0.5 + 0.5 * f_) * 20) / 20)
+                kl_.config(text=f"{kv_.get():.2f}")
+                return "break"
+            sc_.bind("<Button-1>", at_)
+            sc_.bind("<B1-Motion>", at_)
+            tooltip(sc_, "1.00 makes the change in full. Lower blends it with the picture as it is: 0.7 for "
+                         "a little, 0.55 for a touch.")
+
+            def go_(_e: object = None) -> None:
+                t_ = tv_.get().strip()
+                if not t_:
+                    return
+                k_ = round(max(0.5, min(1.0, float(kv_.get()))), 2)
+                st["edit_last"], st["edit_strength"] = t_, k_
+                save_settings(st)
+                w_.destroy()
+                edit_from(path, change=t_, amount=k_)
+            en_.bind("<Return>", go_)
+            br_ = ttk.Frame(f_)
+            br_.pack(fill="x", pady=(10, 0))
+            ttk.Button(br_, text="Change", command=go_).pack(side="right")
+            ttk.Button(br_, text="Cancel", command=w_.destroy).pack(side="right", padx=6)
 
         def cand_menu(event: object, path: str) -> None:
             menu = tk.Menu(dlg, tearoff=0)
+            exs_ = list(((gs.get("edit_terms") or {}).get("expressions") or {}))   # type: ignore[union-attr]
+            if exs_ and hasattr(pg, "edit_prompt"):
+                sube_ = tk.Menu(menu, tearoff=0)
+                for x_ in exs_:
+                    sube_.add_command(label=x_, command=lambda x=x_: edit_from(path, expression=x))
+                sube_.add_separator()
+
+                def other_() -> None:
+                    w_ = simpledialog.askstring("Portrait Scout", "Which expression?\n(for example: a nervous grin, "
+                                                "a haunted stare, mild disgust)", parent=dlg)
+                    if w_ and w_.strip():
+                        edit_from(path, expression=w_.strip())
+                sube_.add_command(label="Other...", command=other_)
+                menu.add_cascade(label="Change expression", menu=sube_)
+                menu.add_command(label="Change it...", command=lambda: edit_ask(path))
+                menu.add_separator()
+            if hasattr(pg, "touch_up"):                              # by hand: glowing eyes, an exact recolor
+                menu.add_command(label="Touch up...", command=lambda: skinned(path))
+            same_ = bool(restyle["path"]) and os.path.normcase(restyle["path"]) == os.path.normcase(path)
+            if same_:
+                menu.add_command(label="Stop restyling from this", command=lambda: restyle_from(""))
+            else:
+                sub_ = tk.Menu(menu, tearoff=0)
+                for k_ in (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85):
+                    lab_ = f"{k_:.2f}" + ("  (keeps the most)" if k_ == 0.5 else "  (mostly new)" if k_ == 0.85 else "")
+                    sub_.add_command(label=lab_, command=lambda k=k_: restyle_from(path, k))
+                menu.add_cascade(label="Restyle from this", menu=sub_)
+            menu.add_separator()
             menu.add_command(label=f"Save {Path(path).name} as...", command=lambda: save_image(dlg, Path(path).name, None, path))
             menu.add_command(label="Open full size", command=lambda: view_full(path))
+            sd_ = image_seed(path)
+            menu.add_separator()
+            if sd_ is None:
+                menu.add_command(label="No seed in this picture", state="disabled")
+            else:
+                def take_seed(v: int = sd_) -> None:
+                    seed_var.set(str(v))
+                    keep_seed()
+                    notes.setdefault(key, {})["init"] = str((st.get("vary_init") or {}).get(plain_of(path).name, ""))   # type: ignore[union-attr]
+                    save_settings(st)
+                    w_ = str((st.get("vary_words") or {}).get(plain_of(path).name, ""))   # type: ignore[union-attr]
+                    if w_ and w_.split("||")[0].strip() not in desc_var.get():   # the face was made in words
+                        desc_var.set(pg.vary_merge(desc_var.get().strip(), w_, gs))   # type: ignore[attr-defined]
+                    gstat.set(f"Seed {v}: Generate makes this face now"
+                              + (", its face words added to the description" if w_ else "")
+                              + ". Clear the Seed box (x) for new faces again.")
+                menu.add_command(label=f"Use this face (seed {sd_})", command=take_seed)
+                menu.add_command(label="Copy seed", command=lambda v=sd_: copy_text(str(v)))
             menu.add_separator()
             menu.add_command(label="Discard", command=lambda: discard([path]))
             try:
@@ -5659,6 +8521,22 @@ def run_gui() -> None:
             shown = max(1, out.height())                              # type: ignore[attr-defined]
             return out, h0 / shown
 
+        ticked: Set[str] = set()                                     # candidates ticked for "Discard ticked"
+        tick_ui: Dict[str, object] = {}
+
+        def tick_count() -> None:
+            """Forget ticks on cards that are gone, and show how many are ticked on the button."""
+            ticked.intersection_update({os.path.normcase(str(c["path"])) for c in cells})
+            b_ = tick_ui.get("btn")
+            if b_ is not None and b_.winfo_exists():                 # type: ignore[attr-defined]
+                n_ = len(ticked)
+                b_.config(text=f"Discard ticked ({n_})" if n_ else "Discard ticked",   # type: ignore[attr-defined]
+                          state="normal" if n_ else "disabled")
+
+        def set_tick(path: str, on: bool) -> None:
+            (ticked.add if on else ticked.discard)(os.path.normcase(path))
+            tick_count()
+
         def relist() -> None:
             """Draw the candidate strip again, at whatever size the Full size box now says."""
             paths = [str(c["path"]) for c in cells]
@@ -5668,6 +8546,46 @@ def run_gui() -> None:
             state["cand_cols"] = None
             for q in paths:
                 add_candidate(q)
+
+        def prop_source() -> str:
+            """The picture the proposal now was cut from ("X_1_169x266_z12_m0_1.bmp" is X_1.png), if it is
+            still there: it leads the candidates, marked, so it can be cropped and worked on like the rest."""
+            if generic:
+                return ""
+            prop_ = str(props.get(key) or "")
+            m_ = re.search(r"_\d+x\d+(_z\d+)?(_m-?\d+_-?\d+)?\.bmp$", os.path.basename(prop_), re.I)
+            if not m_:                                               # (older cuts carry no zoom mark)
+                return ""
+            base_ = os.path.join(os.path.dirname(prop_), os.path.basename(prop_)[:m_.start()])
+            for ext_ in (".png", ".jpg", ".jpeg", ".webp"):
+                if os.path.isfile(base_ + ext_):
+                    return base_ + ext_
+            return ""
+
+        def prop_shown() -> str:
+            """What stands for the proposal among the candidates: the picture it was cut from, or the cut itself
+            when that picture is gone (one brought in long ago, say)."""
+            src_ = prop_source()
+            if src_:
+                return src_
+            p_ = "" if generic else str(props.get(key) or "")
+            return p_ if p_ and os.path.isfile(p_) else ""
+
+        def mark_now(c_: dict) -> None:
+            """The proposed one: a green frame and "proposed now", as the gallery and Auto have it - kept up to
+            date when another is proposed from this window."""
+            try:
+                now_ = bool(prop_shown()) and os.path.normcase(prop_shown()) == os.path.normcase(str(c_["path"]))
+                c_["canvas"].config(highlightthickness=5 if now_ else 0,
+                                    highlightbackground="#2e9e4f", highlightcolor="#2e9e4f")
+                rw_, rh_, ig_, db_ = c_["rw"], c_["rh"], c_["in_game"], c_["done_bmp"]
+                c_["szl"].config(text=(f"its portrait now {rw_}x{rh_}" if ig_ else
+                                       f"\u2714 proposed now {rw_}x{rh_}" if now_ else
+                                       f"game portrait {rw_}x{rh_}" if db_ else f"{rw_}x{rh_}"),
+                                 foreground="#1a5fb4" if ig_ else "#1a7f37" if (db_ or now_) else "#888",
+                                 font=("TkDefaultFont", 9, "bold") if (db_ or now_) else "TkDefaultFont")
+            except (KeyError, tk.TclError):
+                pass
 
         def add_candidate(path: str) -> None:
             if not dlg.winfo_exists():
@@ -5712,12 +8630,19 @@ def run_gui() -> None:
                 cvs.bind("<Button-3>", lambda e: cand_menu(e, path))  # right click: save a copy
                 rw, rh = int(round(pi.width() * k)), int(round(pi.height() * k))
                 in_game = "_gnow_" in Path(path).stem             # the picture it wears in the game right now
-                ttk.Label(cell, text=(f"its portrait now {rw}x{rh}" if in_game else
-                                      f"game portrait {rw}x{rh}" if done_bmp else f"{rw}x{rh}"),
-                          foreground="#1a5fb4" if in_game else "#1a7f37" if done_bmp else "#888",
-                          font=("TkDefaultFont", 9, "bold") if done_bmp else "TkDefaultFont").pack()
+                srow = ttk.Frame(cell)
+                srow.pack()
+                tv = tk.BooleanVar(value=os.path.normcase(path) in ticked)
+                tcb = ttk.Checkbutton(srow, variable=tv, command=lambda: set_tick(path, tv.get()))
+                tcb.pack(side="left")
+                tooltip(tcb, "Tick to delete with Discard ticked. Ctrl+click the picture does the same.")
+                cvs.bind("<Control-Button-1>", lambda e: (tv.set(not tv.get()), set_tick(path, tv.get()), "break")[-1])
+                szl_ = ttk.Label(srow)
+                szl_.pack(side="left")
+                info.update(szl=szl_, rw=rw, rh=rh, in_game=in_game, done_bmp=done_bmp, canvas=cvs)
+                mark_now(info)
                 info.update(image=pi, canvas=cvs, sw=rw, sh=rh,
-                            tw=pi.width(), th=pi.height())
+                            tw=pi.width(), th=pi.height(), tick=tv)
             except tk.TclError:
                 ttk.Label(cell, text=Path(path).name, wraplength=160).pack()
             cells.append(info)
@@ -5730,13 +8655,7 @@ def run_gui() -> None:
                        command=lambda: (propose(path) if done_bmp else use(path))).pack(side="left")
             ttk.Button(btns, text="Discard", width=8, command=lambda: discard([path])).pack(side="left", padx=(4, 0))
             worked = Path(path).stem.endswith(("_ghost", "_skin", "_touch"))
-            if hasattr(pg, "touch_up"):
-                kb = ttk.Button(btns, text="Touch up", width=9, command=lambda: skinned(path))
-                kb.pack(side="left", padx=(4, 0))
-                tooltip(kb, "Work on this one's skin: its color (green, gray, red), how dark it is, and the "
-                            "lips on their own. Hair, cloth, metal and the background are left alone. The engine "
-                            "paints a person it recognizes whatever the description says, so this is done to the "
-                            "picture afterwards.")
+            #   Touch up is on the right-click menu now: Change it... does most of what it did, better
             if worked:
                 gb = ttk.Button(btns, text="Plain", width=6, command=lambda: plain_again(path))
                 gb.pack(side="left", padx=(4, 0))
@@ -5770,7 +8689,6 @@ def run_gui() -> None:
             swap_candidate(path, back, str(q))
             gstat.set(f"{Path(back).name} — the plain picture.")
 
-        batch_at: Dict[str, int] = {}                                # how far along this creature's seeds we are
 
 
         def skinned(path: str) -> None:
@@ -5830,17 +8748,33 @@ def run_gui() -> None:
                 if callable(after):
                     after()                                          # type: ignore[operator]
             gstat.set(f"Discarded {len(gone)} picture(s)." + (f" {failed} file(s) could not be deleted." if failed else ""))
+            tick_count()
+
+        def discard_ticked() -> None:
+            paths = [str(c["path"]) for c in cells if os.path.normcase(str(c["path"])) in ticked]
+            if not paths:
+                return
+            discard(paths, f"Delete the {len(paths)} ticked picture(s) from the disk? This cannot be undone.")
 
         def discard_all() -> None:
             try:
                 every = [str(q) for q in folder.glob(f"{stem}_c*.png")] + [str(q) for q in folder.glob(f"{stem}_c*.bmp")] \
-                    + [str(q) for q in folder.glob(f"{stem}_f*") if q.is_file()]   # pictures brought in from a file
+                    + [str(q) for q in folder.glob(f"{stem}_f*") if q.is_file()] \
+                    + [str(q) for q in folder.glob(f"{stem}_e*") if q.is_file()]   # brought in, and edits
             except OSError:
                 every = []
+            src_ = prop_source()                                     # the proposed one stays (right-click it >
+            if src_ or props.get(key):                               # Discard to delete it on purpose)
+                keep_ = {os.path.normcase(x) for x in (src_, str(props.get(key) or "")) if x}
+                stem_ = os.path.normcase(os.path.splitext(src_)[0]) if src_ else ""
+                every = [x for x in every if os.path.normcase(x) not in keep_
+                         and not (stem_ and os.path.normcase(x).startswith(stem_ + "_"))]
             if not every:
-                gstat.set("Nothing to discard.")
+                gstat.set("Nothing to discard" + (" but the proposed one (right-click it > Discard to delete it)."
+                                                  if src_ else "."))
                 return
-            discard(every, f"Delete all {len(every)} generated picture(s) for {r['name']}? This cannot be undone.")
+            discard(every, f"Delete all {len(every)} generated picture(s) for {r['name']}"
+                    + (", all but the proposed one" if src_ else "") + "? This cannot be undone.")
 
         def done(err: str) -> None:
             status.set(f"Portrait for {r['name']}: " + (err if err else "candidates ready"))
@@ -5858,16 +8792,23 @@ def run_gui() -> None:
 
         def run() -> None:
             try:
-                n = max(1, min(8, int(count_var.get())))
+                n = max(1, min(max_c, int(count_var.get())))
             except (tk.TclError, ValueError):
                 n = 2
+            seed_txt = seed_var.get().strip()
+            seed_ = int(seed_txt) if seed_txt.isdigit() else None
+            init_was = str((notes.get(key) or {}).get("init") or "") if seed_ is not None else ""
             notes[key] = {"desc": desc_var.get().strip(), "count": n, "age": age_v.get(), "look": look_v.get(),
-                          "whose": whose}
+                          "mood": mood_v.get(), "outfit": cloth_v.get(),
+                          "scars": scar_v.get(), "grime": grime_v.get(), "beard": beard_v.get(),
+                          "whose": whose, "seed": seed_txt if seed_ is not None else "", "init": init_was}
             if generic:
                 notes[key].update(race=race_v.get(), sex=sex_v.get(), **{"class": class_v.get()})
             st["portrait_style"] = style_var.get()
+            st["portrait_style_animal" if animal_style(style_var.get()) else "portrait_style_people"] = style_var.get()
             save_settings(st)
             pr, ng = prompt_now()
+            vary_on = seed_ is None                                  # a seed asks for one face: no new face words
             eng = get_engine()
 
             def stop_now() -> None:
@@ -5882,16 +8823,57 @@ def run_gui() -> None:
 
             def work() -> None:
                 try:
-                    def on_image(i: int, data: bytes) -> None:
+                    def on_image(i: int, data: bytes, words: str = "", src: str = "") -> None:
                         pth = pg.save_candidates([data], folder, f"{stem}_c{i + 1}",   # type: ignore[attr-defined]
                                                  ghost_depth())[0]
+                        start_note(pth, src)
+                        if words:                                    # so "Use this face" can bring it back
+                            vw_ = st.setdefault("vary_words", {})
+                            vw_[Path(pth).name] = words              # type: ignore[index]
+                            for old_ in list(vw_)[:-800]:            # type: ignore[arg-type]
+                                vw_.pop(old_, None)                  # type: ignore[union-attr]
                         root.after(0, add_candidate, pth)
-                    sd = None
-                    if not generic:                                  # carry on past the ones already here, or
-                        was = max(len(cells), batch_at.get(key, 0))  # Generate hands back the same pictures
-                        sd = (pg.creature_seed(pg.face_key(r)) + was) % 2147483647   # type: ignore[attr-defined]
-                        batch_at[key] = was + n
-                    eng.generate(pr, ng, n, on_image, sd)             # type: ignore[attr-defined]
+                    rs_ = restyle["path"]
+                    if rs_ and os.path.isfile(rs_):
+                        # Restyle: each picture starts from the one picked, repainted in the description and
+                        # style. No new face words - the face is the picture's.
+                        ini_ = Path(rs_).read_bytes()
+                        for i_ in range(n):
+                            if i_ and getattr(eng, "canceled", None) is not None and eng.canceled.is_set():   # type: ignore[attr-defined]
+                                break
+                            eng.generate(pr, ng, 1,                  # type: ignore[attr-defined]
+                                         lambda _k, data, k=i_: on_image(k, data, "", rs_),
+                                         None, init=ini_, strength=float(restyle["k"]))
+                        save_settings(st)
+                        root.after(0, done, "")
+                        return
+                    if vary_on:
+                        # Klein paints nearly one face for one description whatever the seed: each picture
+                        # gets a face of its own in words instead, one request each.
+                        rnd_ = random.Random()
+                        for i_ in range(n):
+                            if i_ and getattr(eng, "canceled", None) is not None and eng.canceled.is_set():   # type: ignore[attr-defined]
+                                break
+                            words_ = pg.vary_words(rnd_, gs, desc_var.get())   # type: ignore[attr-defined]
+                            pr_i, ng_i = prompt_now(words_)
+                            ini_, src_ = start_pick(pg, gs, race_v.get(), desc_var.get(), pr_i, r)
+                            eng.generate(pr_i, ng_i, 1,          # type: ignore[attr-defined]
+                                         lambda _k, data, k=i_, w=words_, s=src_: on_image(k, data, w, s),
+                                         (seed_ + i_) if seed_ is not None else None,
+                                         **({"init": ini_, "strength": start_strength(pg, gs),
+                                             "steps": start_steps(pg, gs)} if ini_ else {}))
+                        save_settings(st)
+                        root.after(0, done, "")
+                        return
+                    # No seed: the engine rolls its own, so Generate never hands back a face it has painted
+                    # before. A creature's seed used to be worked out from its creature file, which meant the
+                    # same four faces every time the tab was opened again - and spares already in the pool
+                    # coming back as "new" candidates.
+                    ini_ = init_bytes(init_was) if init_was else None   # "Use this face": its start face too
+                    eng.generate(pr, ng, n,                           # type: ignore[attr-defined]
+                                 lambda k, d, s=(init_was if ini_ else ""): on_image(k, d, "", s), seed_,
+                                 **({"init": ini_, "strength": start_strength(pg, gs),
+                                     "steps": start_steps(pg, gs)} if ini_ else {}))
                     root.after(0, done, "")
                 except Exception as e:  # noqa: BLE001 - GeneratorError texts are meant for the user
                     root.after(0, done, str(e) or e.__class__.__name__)
@@ -5915,6 +8897,10 @@ def run_gui() -> None:
         start_btn.pack(side="left")
         stop_btn = ttk.Button(erow2, text="Stop")
         stop_btn.pack(side="left", padx=6)
+        web_btn = ttk.Button(erow2, text="Web UI", width=7, command=lambda: webbrowser.open(eurl))
+        web_btn.pack(side="left", padx=(0, 6))
+        tooltip(web_btn, f"Open the generator's own page ({eurl}) in your browser, to watch it work or to use "
+                         "it by hand. It has to be running.")
         keep_var = tk.BooleanVar(value=bool(st.get("engine_keep")))
 
         for _v in (zoom_var, w_var, h_var):
@@ -5972,6 +8958,7 @@ def run_gui() -> None:
             def show(ok: bool) -> None:
                 if dlg.winfo_exists():
                     eng_var.set("running" if ok else "not running")
+                    web_btn.config(state="normal" if ok else "disabled")
             threading.Thread(target=lambda: root.after(0, show, eng.alive()), daemon=True).start()   # type: ignore[attr-defined]
 
         def engine_job(stop: bool) -> None:
@@ -6062,6 +9049,7 @@ def run_gui() -> None:
                 style_box.config(values=names)
                 style_var.set(name)
                 st["portrait_style"] = name
+                st["portrait_style_animal" if animal_style(name) else "portrait_style_people"] = name
                 save_settings(st)
             gstat.set(f"Saved the prompt and head zoom of \"{name}\" in generator/settings.json.")
             load_prompt()
@@ -6113,6 +9101,61 @@ def run_gui() -> None:
                         "page and try things there.")
         ttk.Label(prow, textvariable=gstat, foreground="#1a5fb4", wraplength=640, justify="left"
                   ).pack(side="left")
+        spare_bar = ttk.Frame(side_)                                 # a few spares like this one, before
+        spare_bar.pack(side="right", anchor="n")                     # generating more
+        if not generic:                                              # and the creature as it walks about
+            spr_p = tk.Frame(side_, width=160, height=238)           # its own size, whichever way it faces
+            spr_p.pack(side="right", anchor="n", padx=(0, 14))
+            spr_p.pack_propagate(False)
+            sprite_show(r, spr_p, size=(150, 200))
+        spare_hold: List[object] = []
+
+        def fill_spares() -> None:
+            """Up to six spares made for a creature of the same race and sex, a new six each time."""
+            if not spare_bar.winfo_exists():
+                return
+            for x in spare_bar.winfo_children():
+                x.destroy()
+            spare_hold.clear()
+            if generic:
+                return
+            mine = (str(r.get("race") or ""), str(r.get("sex") or ""))
+            if state.get("pool_files") is None:
+                state["pool_files"] = spare_pictures(pool_folder(), pool_used())
+            taken_ = set((st.get("pool_from") or {}).values())       # type: ignore[union-attr]
+            who = pool_who()
+            lot = [q for q in (state.get("pool_files") or []) if who.get(made_from(q.name), ("", "")) == mine   # type: ignore[union-attr]
+                   and os.path.normcase(os.path.normpath(str(q))) not in taken_]
+            if not lot:
+                return
+            lab_ = ttk.Label(spare_bar, text=f"Pool ({len(lot)}) - another six", foreground="#555", cursor="hand2")
+            lab_.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 2))
+            lab_.bind("<Button-1>", lambda e: fill_spares())
+            tooltip(lab_, f"Spare pictures made for a {' '.join(x for x in mine if x)}. Click one to add it to "
+                          "the candidates. Click here for another six.")
+            try:
+                from PIL import Image, ImageTk
+            except ImportError:
+                return
+            for n_, q in enumerate(random.sample(lot, min(6, len(lot)))):
+                try:
+                    im_ = Image.open(q)
+                    im_.thumbnail((66, 104))
+                    ph_ = ImageTk.PhotoImage(im_)
+                except Exception:  # noqa: BLE001
+                    continue
+                spare_hold.append(ph_)
+                b_ = tk.Label(spare_bar, image=ph_, cursor="hand2", bd=1, relief="solid")
+                b_.grid(row=1 + n_ // 3, column=n_ % 3, padx=1, pady=1)
+                b_.bind("<Button-1>", lambda e, y=q: (take_image(str(y), came_from=str(y)), fill_spares()))
+                tooltip(b_, f"{made_for(q.name)}: click to add it to the candidates.")
+            mb_ = ttk.Button(spare_bar, text="More...", width=7, command=pick_spare)
+            mb_.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(3, 0))
+            tooltip(mb_, "All the spares, to pick from.")
+        dlg.after_idle(fill_spares)
+        take_ = str(state.pop("propose_take", "") or "")            # opened from the Pool with a picture
+        if take_ and os.path.isfile(take_) and not generic:
+            dlg.after_idle(lambda: take_image(take_, came_from=take_))
         style_box.bind("<<ComboboxSelected>>", load_prompt)
         load_prompt()
         show_prompt()
@@ -6237,6 +9280,12 @@ def run_gui() -> None:
         da_btn = tk.Button(erow2, text="Discard all", command=discard_all, bg="#b5452f", fg="white",
                            activebackground="#8f3524", activeforeground="white", relief="raised", bd=1)
         da_btn.pack(side="left", padx=(10, 0))
+        dt_btn = tk.Button(erow2, text="Discard ticked", command=discard_ticked, bg="#b5452f", fg="white",
+                           activebackground="#8f3524", activeforeground="white", disabledforeground="#e8c4bc",
+                           relief="raised", bd=1, state="disabled")
+        dt_btn.pack(side="left", padx=(6, 0))
+        tick_ui["btn"] = dt_btn
+        tooltip(dt_btn, "Delete the pictures whose box is ticked, from the disk. Asks first.")
         tooltip(da_btn, "Delete every picture generated or brought in for this creature, from the disk. This "
                         "cannot be undone, so it asks first.")
         show_settings()
@@ -6275,9 +9324,13 @@ def run_gui() -> None:
 
         try:                                                         # candidates made earlier for this creature,
             pics = ".png .bmp .jpg .jpeg .webp .tga .gif .tif .tiff"  # generated (_c), brought in (_f), or the
-            found = {q for pat in (f"{stem}_c*", f"{stem}_f*", f"{stem}_gnow_*")   # game's own (_gnow_)
+            found = {q for pat in (f"{stem}_c*", f"{stem}_f*", f"{stem}_gnow_*",   # game's own (_gnow_),
+                                   f"{stem}_e*", f"{stem}_p*")       # edited (_e) and from the pool (_p)
                      for q in folder.glob(pat) if q.is_file() and q.suffix.lower() in pics}
             old = sorted(found, key=lambda q: q.stat().st_mtime)[-12:]
+            src0 = prop_shown()                                      # what is proposed now, first of all
+            if src0:
+                old = [Path(src0)] + [q for q in old if os.path.normcase(str(q)) != os.path.normcase(src0)]
         except OSError:
             old = []
         for q in old:
@@ -6306,6 +9359,7 @@ def run_gui() -> None:
                                 "(With Declone off, the creatures of one name are already a single row.)", parent=par)
             return
         w = tk.Toplevel(par)                                         # type: ignore[arg-type]
+        esc_closes(w)
         w.title(f"Use {Path(path).name} for others")
         f = ttk.Frame(w, padding=12)
         f.pack(fill="both", expand=True)
@@ -6402,6 +9456,7 @@ def run_gui() -> None:
                                                      "formats).", parent=par)
             return
         w = tk.Toplevel(par)                                         # type: ignore[arg-type]
+        esc_closes(w)
         w.title(f"Frame the portrait - {r['name']}")
         top_ = ttk.Frame(w, padding=10)
         top_.pack(fill="x")
@@ -6738,6 +9793,7 @@ def run_gui() -> None:
         here = Path(__file__).resolve().parent
         out: Dict[str, str] = {}
         w = tk.Toplevel(root)
+        esc_closes(w)
         w.title("Export as mod")
         w.transient(root)
         f = ttk.Frame(w, padding=12)
@@ -6769,15 +9825,17 @@ def run_gui() -> None:
                 folder["dir"] = d
                 shown()
         lent = [r_ for r_ in all_rows() if r_.get("copy_port") and rowkey(r_) not in props]
-        lent_n, stock_n = sum(1 for r_ in lent if r_.get("copy_named")), sum(1 for r_ in lent if not r_.get("copy_named"))
+        lent_n, stock_n = sum(1 for r_ in lent if face_kept(r_)), sum(1 for r_ in lent if not face_kept(r_))
         see_v = tk.BooleanVar(value=bool(st.get("mod_export_as_seen", True)))
         ship_v = tk.BooleanVar(value=bool(st.get("mod_export_inherited_files", True)))
         gen_v = tk.BooleanVar(value=bool(st.get("mod_export_stock_faces", True)))
         if lent_n:
             ttk.Label(f, foreground="#1a5fb4", wraplength=460, justify="left",
-                      text=f"{lent_n:,} creature(s) here are a copy of one of the game's own and wear its face. "
-                           "They are written in too, so the copy keeps looking like it whatever order the mods "
-                           "went in.").grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+                      text=f"{lent_n:,} creature(s) here are a copy of one of the game's own and wear its face"
+                           + (" - the ones ticked \"Keep face\" in the gallery" if any(rowkey(r_) in kept
+                                                                                        for r_ in lent) else "")
+                           + ". They are written in too, so the copy keeps looking like it whatever order the "
+                             "mods went in.").grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
             cb1_ = ttk.Checkbutton(f, variable=see_v, text="Everything I see", command=lambda: see_changed())
             cb1_.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
             tooltip(cb1_, "The mod puts these creatures back the way they look on your game, pictures and all - "
@@ -6786,12 +9844,16 @@ def run_gui() -> None:
             kids = ttk.Frame(f)
             kids.grid(row=7, column=0, columnspan=3, sticky="w", padx=(18, 0))
             if stock_n:
-                cb3_ = ttk.Checkbutton(kids, variable=gen_v, text=f"Stock faces too ({stock_n:,})")
+                judged = any(rowkey(r_) in kept for r_ in lent)      # nothing ticked by hand: as it always read
+                cb3_ = ttk.Checkbutton(kids, variable=gen_v,
+                                       text=f"The rest too ({stock_n:,})" if judged
+                                       else f"Stock faces too ({stock_n:,})")
                 cb3_.pack(anchor="w")
-                tooltip(cb3_, f"Which creatures go in.\n\nAlways: the {lent_n:,} that copy a particular "
-                              "creature - a second Bassilus, who is Bassilus on anybody's game.\n\nThis box: "
-                              f"the {stock_n:,} that copy a stock farmer, commoner or merchant. That picture is "
-                              "whatever each install puts there, and need not even be the same sex.")
+                tooltip(cb3_, f"Which creatures go in.\n\nAlways: the {lent_n:,} ticked \"Keep face\" - a "
+                              "second Bassilus, who is Bassilus on anybody's game.\n\nThis box: the "
+                              f"{stock_n:,} left unticked, which mostly copy a stock farmer, commoner or "
+                              "merchant. That picture is whatever each install puts there, and need not even "
+                              "be the same sex.")
             cb2_ = ttk.Checkbutton(kids, variable=ship_v, text="Carry the pictures")
             cb2_.pack(anchor="w")
             tooltip(cb2_, "What goes in the mod, for the creatures above.\n\nOff: the face is named only. It has "
@@ -6862,7 +9924,7 @@ def run_gui() -> None:
                         "areas": areas_text(r), "box": (crop_for(r) or {}).get("box")} for r in rows]
             lent_rows = [r for r in sorted_rows(False)               # a copy of a creature wears its face
                          if rowkey(r) not in props and r.get("copy_port") and r.get("cre_list")
-                         and (take_stock or r.get("copy_named"))]     # ...a copy of a stock type only if asked
+                         and (face_kept(r) or take_stock)]            # kept by hand, or the whole lot if asked
             stage = (Path(__file__).resolve().parent / "generated"
                      / re.sub(r"[^A-Za-z0-9_.#!-]+", "_", str(res["mod"])) / "inherited")   # type: ignore[index]
             kept_face: Dict[str, str] = {}
@@ -6917,6 +9979,10 @@ def run_gui() -> None:
     clear_btn.config(command=clear_all)
 
     def build_gallery(rows: List[dict]) -> None:
+        if st.get("gallery_mode", "auto") == "auto" and view_var.get() == "gallery":
+            auto_fill_soon()                                         # the Auto view is what shows: it is the one to
+            return                                                   # draw (Plain gallery draws the cards when chosen)
+        keep_vars.clear()                                            # the cards are about to be thrown away
         loading_var.set("Loading...")
         root.update_idletasks()
         try:
@@ -7054,6 +10120,21 @@ def run_gui() -> None:
                 il = tk.Label(card, image=img, bg=CARD)
                 il.pack()
                 il.bind("<Button-3>", lambda e, rr=r: image_menu(e, rr, root))
+            elif mod_only and r.get("copy_port") and face_kept(r) and \
+                    (inh_ := inherited_thumb(game, imgs, str(r.get("copy_port")), thumb_from_bytes)) is not None:
+                il = tk.Label(card, image=inh_, bg=CARD)             # a copy keeping the face it was copied with:
+                il.pack()                                            # that face is the one it wears, mod or not
+                il.bind("<Button-3>", lambda e, rr=r: image_menu(e, rr, root))
+                tk.Label(card, text=f"inherits {r.get('copy_port')}", bg=CARD, fg="#1a7f37",
+                         font=("TkDefaultFont", 8, "bold")).pack()
+            elif mod_only and r.get("patched") and (r.get("large_name") or r.get("small_name")) and \
+                    (own_ := inherited_thumb(game, imgs, str(r.get("large_name") or r.get("small_name")),
+                                             thumb_from_bytes)) is not None:
+                il = tk.Label(card, image=own_, bg=CARD)             # one of the game's own creatures the mod only
+                il.pack()                                            # adds lines to: it keeps the game's portrait
+                il.bind("<Button-3>", lambda e, rr=r: image_menu(e, rr, root))
+                tk.Label(card, text=f"game's own ({r.get('large_name') or r.get('small_name')})", bg=CARD,
+                         fg="#1a7f37", font=("TkDefaultFont", 8, "bold")).pack()
             else:
                 tk.Label(card, text="no portrait\nfrom this mod" if mod_only else
                          "no portrait" if not (r["large"] or r["small"]) else "(file not found)",
@@ -7064,6 +10145,16 @@ def run_gui() -> None:
             if shown_field == "copy" or (r.get("copy_worn") and shown_field in ("small", "large")):
                 tk.Label(card, text=f"{r.get('copy_port')} - borrowed", bg=CARD, fg="#1a5fb4",
                          font=("TkDefaultFont", 8, "bold")).pack()   # not its face: the one it was copied from
+            if r.get("copy_port") and not prop:                      # is this borrowed face the right one?
+                kv_ = tk.BooleanVar(value=face_kept(r))
+                kc_ = tk.Checkbutton(card, text="Keep face", variable=kv_, bg=CARD, activebackground=CARD,
+                                     font=("TkDefaultFont", 8), command=lambda rr=r, v=kv_: set_kept(rr, v.get()))
+                kc_.pack()
+                keep_vars.append(kv_)                                # Tk drops a variable nothing holds
+                tooltip(kc_, f"Ticked: {r['name']} keeps {r.get('copy_port')}, and Create mod writes that face "
+                             f"into it, so it survives whatever order the mods go in. Unticked: it wants a face "
+                             "of its own and nothing is written in.\n\nThe tick starts on Analyze's guess, which "
+                             "only knows whether the name matched or the creature was copied once.")
             elif sz:
                 tk.Label(card, text=sz, bg=CARD, fg="#888", font=("TkDefaultFont", 8)).pack()
             nl = tk.Label(card, text=r["name"], bg=CARD, wraplength=CARD_W - 30, justify="center", cursor="hand2",
@@ -7073,12 +10164,19 @@ def run_gui() -> None:
             nl.bind("<Button-3>", lambda e, rr=r: row_menu(e, rr, root))                  # right click: ignore it
             if rowkey(r) in skip:
                 nl.config(fg="#999")
-                tk.Label(card, text="(ignored)", bg=CARD, fg="#999", font=("TkDefaultFont", 8)).pack()
             tk.Label(card, text=f"{r['lines']} lines", bg=CARD, fg="#666").pack()
             if prop:                                                 # the green border says it is a proposal already
                 tooltip(card, f"Proposed: {Path(prop).name}" + (f"  ({prop_dims(prop)})" if prop_dims(prop) else "")
                         + "\n\nDouble-click the card to see it, frame it, or clear it.")
+            _st: List[str] = []                                  # what this card is, in a line
+            if prop:                                                 # the borrowed face and "no portrait" are
+                _st.append("missing file" if not os.path.isfile(prop) else "proposed")   # already said above
+            if rowkey(r) in skip:
+                _st.append("ignored")
             sub = " ".join(x for x in (r["race"], r["sex"]) if x)
+            if _st:
+                tk.Label(card, text=" · ".join(_st), bg=CARD, fg="#a35a00",
+                         font=("TkDefaultFont", 8, "bold")).pack()
             if sub:
                 tk.Label(card, text=sub, bg=CARD, fg="#666", wraplength=CARD_W - 30, justify="center").pack()
             for cn in r["cre_list"][:6]:
@@ -7095,7 +10193,7 @@ def run_gui() -> None:
                            command=lambda rr=r: open_propose(rr))
             b1.pack(side="left")
             b1._copy_label = True                                                          # type: ignore[attr-defined]
-            tooltip(b1, "Pick a picture from a file or make one, frame it, and propose it.")
+            tooltip(b1, "Make a picture, take one of your own or one from the pool, frame it, and propose it.")
             dl_g, dl_gw = declone_label(r)
             if dl_g:
                 db_ = tk.Button(brow, text=dl_g, font=("TkDefaultFont", 8), command=lambda rr=r: toggle_declone(rr))
@@ -7118,9 +10216,176 @@ def run_gui() -> None:
             bind_all_children(card, row)
         nav_bar((len(shown_rows) - 1) // per_row + 1)
 
+    SPRITE_DIR = Path(__file__).resolve().parent / "generated" / "_sprites"
+
+    def find_java() -> str:
+        """Java, as Near Infinity uses it: on the PATH, or in one of the usual install folders."""
+        for nm_ in ("java", "javaw"):
+            got_ = shutil.which(nm_)
+            if got_:
+                return got_
+        import glob as _gl
+        for base_ in (os.environ.get("JAVA_HOME", ""), r"C:\Program Files\Java\*", r"C:\Program Files\Eclipse Adoptium\*",
+                      r"C:\Program Files\Microsoft\jdk*", r"C:\Program Files\Zulu\*", r"C:\Program Files\BellSoft\*"):
+            for hit_ in sorted(_gl.glob(os.path.join(base_, "bin", "java.exe")) if base_ else [], reverse=True):
+                return hit_
+        return ""
+
+    def sprite_tools() -> Tuple[str, str, str]:
+        """(java, Near Infinity's jar, our helper jar), "" for whatever is missing."""
+        here_ = Path(__file__).resolve().parent
+        ni_ = str(st.get("ni_jar") or here_ / "NearInfinity.jar")
+        helper_ = here_ / "generator" / "spriteshot.jar"
+        return (find_java(), ni_ if os.path.isfile(ni_) else "", str(helper_) if helper_.is_file() else "")
+
+    def sprite_make(cres: List[str], done_: Callable[[Set[str], str], None]) -> None:
+        """Draw the creatures' in-game sprites (Near Infinity's own decoder, standing, first direction) into
+        generated/_sprites, in the background. done_(drawn, problem) is called on the main thread."""
+        java_, ni_, helper_ = sprite_tools()
+        game_ = game_var.get().strip()
+        if not (java_ and ni_ and helper_ and game_):
+            done_(set(), "needs " + ", ".join(x for x, ok in (("Java", java_), ("NearInfinity.jar in the Portrait Scout "
+                                                                                 "folder", ni_), ("generator/spriteshot.jar",
+                                                                                                  helper_), ("the game folder", game_)) if not ok))
+            return
+
+        def work() -> None:
+            got_: Set[str] = set()
+            why_ = ""
+            try:
+                SPRITE_DIR.mkdir(parents=True, exist_ok=True)
+                pr_ = subprocess.run([java_, "-cp", os.pathsep.join((ni_, helper_)), "SpriteShot", game_,
+                                      str(SPRITE_DIR), "-1"] + [c.upper() for c in cres],   # every direction
+                                     capture_output=True, text=True, timeout=300,
+                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                for ln_ in (pr_.stdout or "").splitlines():
+                    if ln_.startswith("OK "):
+                        got_.add(ln_[3:].split()[0].strip())
+                    elif ln_.startswith("FAIL"):
+                        why_ = ln_[5:].strip()
+                if not got_ and not why_:
+                    why_ = ((pr_.stderr or "").strip().splitlines() or ["Near Infinity did not answer"])[-1][:200]
+            except Exception as e_:  # noqa: BLE001
+                why_ = str(e_)[:200]
+            root.after(0, done_, got_, why_)
+        threading.Thread(target=work, daemon=True).start()
+
+    def sprite_files(cre_: str) -> List[Path]:
+        """The creature's sprite, one picture per direction (NAME_c0.png ...), in order."""
+        got_ = []
+        for q_ in SPRITE_DIR.glob(f"{cre_}_c*.png"):
+            m_ = re.match(r".*_c(\d+)$", q_.stem)
+            if m_:
+                got_.append((int(m_.group(1)), q_))
+        return [q_ for _n, q_ in sorted(got_)]
+
+    def sprite_big(pth: Path, parent: object) -> None:
+        """A sprite at a size you can see the pixels of - twice over for a small one, as it is for a dragon - with
+        scroll bars when it is bigger than the screen."""
+        try:
+            from PIL import Image, ImageTk
+            im_ = Image.open(pth).convert("RGBA")
+        except Exception:  # noqa: BLE001
+            return
+        k_ = 3 if max(im_.size) < 150 else 2 if max(im_.size) < 300 else 1
+        im_ = im_.resize((im_.width * k_, im_.height * k_), Image.NEAREST)
+        v_ = tk.Toplevel(parent)                                     # type: ignore[arg-type]
+        v_.title(f"{pth.stem.split('_c')[0]} - sprite")
+        esc_closes(v_)
+        sw_, sh_ = min(im_.width, root.winfo_screenwidth() - 120), min(im_.height, root.winfo_screenheight() - 160)
+        cv_ = tk.Canvas(v_, width=sw_, height=sh_, bg="#bfc3c9", highlightthickness=0,
+                        scrollregion=(0, 0, im_.width, im_.height))
+        if im_.width > sw_:
+            hs_ = ttk.Scrollbar(v_, orient="horizontal", command=cv_.xview)
+            hs_.pack(side="bottom", fill="x")
+            cv_.configure(xscrollcommand=hs_.set)
+        if im_.height > sh_:
+            vs_ = ttk.Scrollbar(v_, orient="vertical", command=cv_.yview)
+            vs_.pack(side="right", fill="y")
+            cv_.configure(yscrollcommand=vs_.set)
+        cv_.pack(fill="both", expand=True)
+        ph_ = ImageTk.PhotoImage(im_)
+        cv_.create_image(0, 0, image=ph_, anchor="nw")
+        cv_.image = ph_                                              # type: ignore[attr-defined]
+        cv_.bind("<Button-1>", lambda e: v_.destroy())
+
+    def sprite_show(r: dict, box: tk.Frame, again: bool = False, size: Tuple[int, int] = (200, 230),
+                    side: bool = False) -> None:
+        """The creature as it walks about in the game, beside its portrait: drawn once (every direction), then
+        kept. The arrows turn it; a click shows it bigger. Kept to the box's size, so a dragon fits too."""
+        cre_ = str((r.get("cre_list") or [""])[0]).upper()
+        if not cre_:
+            return
+        for w_ in box.winfo_children():
+            w_.destroy()
+        nav_ = ttk.Frame(box)                                        # the arrows stay put at the foot (or the
+        nav_.pack(side="right" if side else "bottom", padx=(4, 0) if side else 0, pady=0 if side else (2, 0))
+        lab = tk.Label(box, bd=0, fg="#888", justify="center", cursor="hand2")   # side) whatever its size
+        lab.pack(side="left" if side else "top", expand=True)
+        at_ = {"i": 0}
+        BOXW, BOXH = size
+
+        def put() -> None:
+            files_ = sprite_files(cre_)
+            if not files_:
+                return
+            at_["i"] %= len(files_)
+            pth_ = files_[at_["i"]]
+            try:
+                from PIL import Image, ImageTk
+                im_ = Image.open(pth_).convert("RGBA")
+                k_ = min(3.0, BOXW / max(1, im_.width), BOXH / max(1, im_.height))
+                if k_ >= 1:                                          # pixel art: whole steps, no blur
+                    k_ = int(k_)
+                    im_ = im_.resize((im_.width * k_, im_.height * k_), Image.NEAREST)
+                else:                                                # too big for the box (a dragon): shrunk
+                    im_ = im_.resize((max(1, int(im_.width * k_)), max(1, int(im_.height * k_))), Image.LANCZOS)
+                ph_ = ImageTk.PhotoImage(im_)
+                lab.config(image=ph_, text="")
+                lab.image = ph_                                      # type: ignore[attr-defined]
+                cyc_.set(f"{at_['i'] + 1}/{len(files_)}")
+                lab.bind("<Button-1>", lambda e, q=pth_: sprite_big(q, box.winfo_toplevel()))
+            except Exception:  # noqa: BLE001
+                lab.config(text="(sprite\nunreadable)")
+
+        def turn(by: int) -> None:
+            at_["i"] += by
+            put()
+        cyc_ = tk.StringVar(value="")
+        ttk.Button(nav_, text="\u25c0", width=3, command=lambda: turn(-1)).pack(side="top" if side else "left")
+        ttk.Label(nav_, textvariable=cyc_, width=6, anchor="center").pack(side="top" if side else "left")
+        ttk.Button(nav_, text="\u25b6", width=3, command=lambda: turn(1)).pack(side="top" if side else "left")
+        lab.bind("<Button-3>", lambda e: sprite_show(r, box, again=True, size=size, side=side))
+        tooltip(lab, "Its sprite in the game, in its own colors (drawn by Near Infinity). The arrows turn it, "
+                     "a click shows it bigger, right-click draws it again.")
+        if sprite_files(cre_) and not again:
+            put()
+            return
+        lab.config(image="", text="drawing\nthe sprite...")
+
+        def done(got_: Set[str], why_: str) -> None:
+            try:
+                if not lab.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            if cre_ in got_ and sprite_files(cre_):
+                put()
+                if not state.get("sprites_all"):                     # then the rest of the mod's, in one go in
+                    state["sprites_all"] = True                      # the background: Near Infinity takes a while
+                    rest_ = sorted({str((o.get("cre_list") or [""])[0]).upper() for o in all_rows()} - {""})
+                    rest_ = [c for c in rest_ if not sprite_files(c)]
+                    if rest_:                                        # to open the game, so once, not per creature
+                        sprite_make(rest_, lambda g_, w_: status.set(f"Sprites drawn for {len(g_)} creature(s)."))
+            else:
+                lab.config(text="no sprite")
+                tooltip(lab, f"Could not draw {cre_}'s sprite: {why_ or 'unknown'}.")
+        sprite_make([cre_], done)
+
     def show_lines(r: dict) -> None:
         res = state["res"]
         win = tk.Toplevel(root)
+        esc_closes(win)
         win.title(f"{r['name']} - {r['lines']} line(s)")
         win.geometry("900x640")
         win.minsize(680, 320)
@@ -7129,8 +10394,9 @@ def run_gui() -> None:
         img = None
         if res:
             game: Game = res["game"]                                 # type: ignore[index]
-            for field in ("small", "large"):
-                nm = r[field].split("/")[0] if r[field] else ""
+            for field in ("small", "large", "copy"):                 # ...and the face it was copied from,
+                nm = (str(r.get("copy_port") or "") if field == "copy" else   # which is what the gallery shows
+                      (r[field].split("/")[0] if r[field] else ""))
                 data = game.get(nm, T_BMP) if nm else None
                 img = thumb_from_bytes(data) if data else None       # the same box as a proposed picture
                 if img:
@@ -7138,6 +10404,10 @@ def run_gui() -> None:
         lb = tk.Label(head, bd=0, highlightthickness=4, cursor="hand2")   # the proposal (green border) or the
         lb.pack(side="left", padx=(0, 10))                           # portrait the creature wears now
         lb.bind("<Button-3>", lambda e: image_menu(e, r, win))
+        spr_ = tk.Frame(head, width=210, height=268)                 # and the creature as it walks about - a box
+        spr_.pack(side="left", padx=(0, 12), anchor="n")             # of its own size, so turning it does not
+        spr_.pack_propagate(False)                                   # move the words beside it
+        sprite_show(r, spr_)
 
         def big_view(_e: object = None) -> None:
             """Click the picture: it opens as large as the screen allows, which for a 169x266 game portrait
@@ -7152,6 +10422,7 @@ def run_gui() -> None:
                     status.set(f"{r['name']} has no picture to show.")
                     return
             v = tk.Toplevel(win)
+            esc_closes(v)
             v.title(Path(pp).name if pp and os.path.isfile(pp) else nm_ + ".bmp")
             keep_: Dict[str, object] = {}
             lab_ = tk.Label(v, cursor="hand2")
@@ -7210,7 +10481,7 @@ def run_gui() -> None:
             render()
             lab_.bind("<Button-1>", lambda e: v.destroy())
             lab_.bind("<Button-3>", lambda e: image_menu(e, r, v))
-            v.bind("<Escape>", lambda e: v.destroy())
+            esc_closes(v)
             v.bind("<plus>", lambda e: step(1.25))
             v.bind("<minus>", lambda e: step(1 / 1.25))
             v.bind("<MouseWheel>", lambda e: step(1.25 if e.delta > 0 else 1 / 1.25))
@@ -7240,7 +10511,7 @@ def run_gui() -> None:
                                       (f"medium {r['small_size']}" if r.get("small_size") else "")) if x)
         ttk.Label(info, text=f"Portrait: {r['portrait']}" + (f"  ({sizes})" if sizes else "")
                   + "     (click the picture to see it full size, right-click to save it)",
-                  foreground="#666").pack(anchor="w")
+                  foreground="#666", wraplength=420, justify="left").pack(anchor="w")
         if r.get("copy_of"):                                         # built by copying one of the game's own
             ttk.Label(info, foreground="#1a5fb4", wraplength=640, justify="left",
                       text=(f"The mod builds this by copying {r['copy_of']}.CRE, so the face it shows is "
@@ -7248,6 +10519,13 @@ def run_gui() -> None:
                             if r.get("copy_worn") else
                             f"Wears nothing of its own. The mod builds it by copying {r['copy_of']}.CRE, "
                             f"which wears {r['copy_port']} - the face it would have had.")).pack(anchor="w")
+            kv2 = tk.BooleanVar(value=face_kept(r))
+            kc2 = ttk.Checkbutton(info, text="Keep this face", variable=kv2,
+                                  command=lambda: set_kept(r, kv2.get()))
+            kc2.pack(anchor="w")
+            keep_vars.append(kv2)
+            tooltip(kc2, f"Ticked: Create mod writes {r['copy_port']} into {r['name']}, so it keeps this face "
+                         "whatever order the mods go in. Unticked: it wants a face of its own.")
         mine = {x.upper() for f in ("large", "small") for x in str(r.get(f) or "").split("/") if x}
         others = sorted({o["name"] for o in all_rows() if o is not r and o["name"] != r["name"]
                          and mine & {x.upper() for f in ("large", "small") for x in str(o.get(f) or "").split("/") if x}})
@@ -7273,7 +10551,7 @@ def run_gui() -> None:
         # the lines window has done its job once you are choosing a picture: it closes rather than lurking behind
         prop_btn = ttk.Button(pf, text="Propose...", command=lambda: (win.destroy(), open_propose(r, None, root)))
         prop_btn.pack(side="left")
-        tooltip(prop_btn, "Pick a picture from a file or make one, frame it, and propose it.")
+        tooltip(prop_btn, "Make a picture, take one of your own or one from the pool, frame it, and propose it.")
         clr = ttk.Button(pf, text="Clear", command=clear_here)
         clr.pack(side="left", padx=4)
         tooltip(clr, "Forget the portrait proposed for this creature.")
@@ -7291,7 +10569,7 @@ def run_gui() -> None:
                             "Creatures that share a creature file are never split.")
         tooltip(same_btn, "Give the proposed picture to other creatures of the same name, or to the ones that share "
                           "this creature's portrait now. Useful after decloning.")
-        ttk.Label(info, textvariable=pl, foreground="#1f7a3a", wraplength=520, justify="left").pack(anchor="w")
+        ttk.Label(info, textvariable=pl, foreground="#1f7a3a", wraplength=380, justify="left").pack(anchor="w")
         upd_prop()
         ttk.Label(info, text="(Clear or export proposals from the Proposals tab.)", foreground="#888").pack(anchor="w")
         chip_head = ttk.Frame(info)                                  # a well-used creature has dozens of these:
@@ -7558,6 +10836,9 @@ def run_gui() -> None:
                       if isinstance(v, str)})
         skip.clear()
         skip.update(x for x in (st.get("ignored", {}).get(res["mod"], []) or []) if isinstance(x, str))   # type: ignore[index]
+        kept.clear()
+        kept.update({k: bool(v) for k, v in ((st.get("kept_faces") or {}).get(res["mod"], {}) or {}).items()
+                     if isinstance(k, str)})
         # creatures can be grouped differently than when these were saved (above all: the mod's own files hold dialogs
         # the installed game does not), which would leave the pictures attached to nothing. Hand them over instead.
         bunches = [r for r in res["rows"] if r.get("parts")]         # type: ignore[union-attr]
@@ -7574,6 +10855,9 @@ def run_gui() -> None:
         for old_, new_ in s_moved.items():
             skip.discard(old_)
             skip.add(new_)
+        k_moved = remap_keys(sorted(kept), every)
+        for old_, new_ in k_moved.items():
+            kept[new_] = kept.pop(old_)
         now_split = [k for k in ((st.get("declone") or {}).get(str(res["mod"])) or []) if k]   # type: ignore[index]
         woke = []                                                    # a picture chosen for one creature of a bunch is
         for b in bunches:                                            # only on show while the bunch is listed one by one
@@ -7583,14 +10867,14 @@ def run_gui() -> None:
         woke_set = set(woke)
         if woke:
             st.setdefault("declone", {})[res["mod"]] = now_split + woke   # type: ignore[index]
-        if moved or s_moved or d_moved or woke:
+        if moved or s_moved or k_moved or d_moved or woke:
             st.setdefault("proposals", {})[res["mod"]] = dict(props)     # type: ignore[index]
             st.setdefault("ignored", {})[res["mod"]] = sorted(skip)      # type: ignore[index]
+            st.setdefault("kept_faces", {})[res["mod"]] = dict(kept)     # type: ignore[index]
             save_settings(st)
         update_prop_label()
         refresh()
-        for b in (save_btn, csv_btn):
-            b.config(state="normal")
+        list_btn.config(state="normal")
         extra = ""
         if res.get("source"):                                                        # type: ignore[union-attr]
             unk = res["stats"].get("dialogs not linked", 0)                          # type: ignore[index]
@@ -7609,52 +10893,47 @@ def run_gui() -> None:
 
     def analyze_clicked() -> None:
         g, m = game_var.get().strip(), mod_var.get().strip()
-        from_source = source_var.get()
-        if from_source:
-            same = os.path.isdir(m) and os.path.isdir(g) and os.path.normcase(os.path.abspath(m)) == os.path.normcase(os.path.abspath(g))
-            if not os.path.isdir(m) or same or not os.path.isdir(g):
-                messagebox.showwarning("Portrait Scout", "Reading the mod's own files needs the game folder and the mod's "
-                                       "folder (not the whole install). The mod does not have to be installed.")
-                return
-        elif not os.path.isdir(g) or (m and not os.path.isdir(m)):
+        if not os.path.isdir(g) or (m and not os.path.isdir(m)):
             messagebox.showwarning("Portrait Scout", "Pick an existing game folder (and a mod folder, or leave it empty "
                                    "for the whole install).")
             return
-        st.update({"game": g, "mod": m, "source": from_source})
+        st.update({"game": g, "mod": m})
         save_settings(st)
         go_btn.config(state="disabled")
         state["imgs"] = {}
         box: Dict[str, object] = {}
 
         def work() -> None:
+            say = lambda s: root.after(0, status.set, s)            # noqa: E731
             try:
-                box["res"] = (analyze_source(g, m, False, lambda s: root.after(0, status.set, s)) if from_source else
-                              analyze(g, m, merge_var.get(), lambda s: root.after(0, status.set, s)))
+                try:
+                    box["res"] = analyze(g, m, False, say)
+                except NotInstalled:                                 # not installed in this game: read the mod's
+                    say("The mod is not installed here - reading its own files...")   # own files instead
+                    box["res"] = analyze_source(g, m, False, say)
             except Exception as e:  # noqa: BLE001
                 box["err"] = str(e)
+            res_ = box.get("res")
+            close_ = getattr(res_.get("game"), "close", None) if isinstance(res_, dict) else None
+            if close_:
+                close_()                                             # don't keep the BIFs open afterwards
             root.after(0, lambda: finish(box.get("res"), box.get("err")))   # type: ignore[arg-type]
 
         threading.Thread(target=work, daemon=True).start()
 
-    def save_text() -> None:
+    def save_list() -> None:
         res = state["res"]
         if not res:
             return
-        p = filedialog.asksaveasfilename(defaultextension=".txt", initialfile=f"{res['mod']}-creatures.txt",   # type: ignore[index]
-                                         filetypes=[("Text", "*.txt")])
-        if p:
-            Path(p).write_text(as_text(res, sorted_rows(False)), encoding="utf-8")            # type: ignore[arg-type]
-            status.set(f"Saved {p}")
-
-    def save_csv() -> None:
-        res = state["res"]
-        if not res:
+        p = filedialog.asksaveasfilename(defaultextension=".txt", initialfile=f"{res['mod']}-creatures",    # type: ignore[index]
+                                         filetypes=[("Text", "*.txt"), ("Spreadsheet (CSV)", "*.csv")])
+        if not p:
             return
-        p = filedialog.asksaveasfilename(defaultextension=".csv", initialfile=f"{res['mod']}-creatures.csv",    # type: ignore[index]
-                                         filetypes=[("CSV", "*.csv")])
-        if p:
+        if p.lower().endswith(".csv"):
             write_csv(res, p, sorted_rows(False))                                             # type: ignore[arg-type]
-            status.set(f"Saved {p}")
+        else:
+            Path(p).write_text(as_text(res, sorted_rows(False)), encoding="utf-8")            # type: ignore[arg-type]
+        status.set(f"Saved {p}")
 
     share_btn.config(command=share_work)
     takein_btn.config(command=open_work)
@@ -7670,8 +10949,7 @@ def run_gui() -> None:
                         "their mod is grouped differently from yours. You are asked before anything you have "
                         "already chosen is replaced.")
     go_btn.config(command=analyze_clicked)
-    save_btn.config(command=save_text)
-    csv_btn.config(command=save_csv)
+    list_btn.config(command=save_list)
     refresh()                                                        # the table says what to do before the first run
     root.mainloop()
 
