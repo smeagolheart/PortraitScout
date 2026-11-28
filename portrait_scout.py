@@ -6567,9 +6567,11 @@ def run_gui() -> None:
         for sub_, nm_, size_, _u in KLEIN_FILES:
             if klein_found(sub_, nm_):
                 continue
-            for d_ in downloads_dirs():
-                f_ = d_ / nm_
-                if f_.is_file() and f_.stat().st_size >= size_:
+            stem_, suf_ = nm_.rsplit(".", 1)
+            for d_ in downloads_dirs():                              # also "name (1).safetensors", a second try
+                cands_ = [d_ / nm_] + sorted(d_.glob(f"{stem_} (*).{suf_}"))
+                f_ = next((c_ for c_ in cands_ if c_.is_file() and c_.stat().st_size >= size_), None)
+                if f_ is not None:
                     out_.append((f_, here_ / "engine-neo" / "models" / sub_ / nm_))
                     break
         return out_
@@ -6704,7 +6706,7 @@ def run_gui() -> None:
             into = where if where is not None else box
             pieces = [(text, False)] if isinstance(text, str) else list(text)   # type: ignore[arg-type]
             t = tk.Text(into, bg=BG, width=88, height=2, wrap="word", bd=0, highlightthickness=0,
-                        font=("TkDefaultFont", 9), cursor="arrow", spacing3=2)
+                        font=("TkDefaultFont", 9), cursor="xterm", spacing3=2, exportselection=True)
             t.tag_configure("b", font=("TkDefaultFont", 9, "bold"))
             for piece, bold in pieces:
                 t.insert("end", piece, ("b",) if bold else ())
@@ -6713,13 +6715,77 @@ def run_gui() -> None:
             for para in whole.split("\n"):
                 lines += len(para) // 84
             t.config(height=max(1, min(8, lines)), state="disabled")
-            t.grid(row=n, column=0, sticky="w", pady=2)
+            copyable(t)
+            t.grid(row=n * 2, column=0, sticky="w", pady=2)
             if buttons:
                 f = tk.Frame(into, bg=BG)
-                f.grid(row=n, column=1, sticky="w", padx=(10, 0), pady=(4, 4))
+                f.grid(row=n * 2, column=1, sticky="w", padx=(10, 0), pady=(4, 4))
                 for i_, (label, cmd) in enumerate(buttons):            # three to a row, so none is cut off
                     ttk.Button(f, text=label, command=cmd).grid(row=i_ // 3, column=i_ % 3, sticky="ew",
                                                                 padx=(0, 6), pady=(0, 3))   # type: ignore[arg-type]
+
+        def copy_all() -> None:
+            """Every step's text and every note in the window, for pasting into a message."""
+            out_: List[str] = []
+
+            def walk(wd_: object) -> None:
+                for c_ in wd_.winfo_children():                      # type: ignore[attr-defined]
+                    try:
+                        if not c_.winfo_ismapped():
+                            continue
+                        if isinstance(c_, tk.Text):
+                            out_.append(c_.get("1.0", "end-1c").strip())
+                        elif isinstance(c_, tk.Label) and str(c_.cget("text")).strip() not in ("", "\u2714", "\u2716"):
+                            out_.append(str(c_.cget("text")).strip())   # the check note says what is not done
+                    except tk.TclError:
+                        pass
+                    walk(c_)
+            walk(box)
+            root.clipboard_clear()
+            root.clipboard_append("\n\n".join(x for x in out_ if x))
+            status.set("Copied the setup steps and notes.")
+
+        def copyable(t_: tk.Text) -> None:
+            """Selectable read-only text: click focuses it, so Ctrl+C works; right-click to copy."""
+            t_.bind("<Button-1>", lambda e_: t_.focus_set(), add="+")
+            m_ = tk.Menu(t_, tearoff=0)
+            m_.add_command(label="Copy", command=lambda: (root.clipboard_clear(), root.clipboard_append(
+                t_.get("sel.first", "sel.last") if t_.tag_ranges("sel") else t_.get("1.0", "end-1c"))))
+            m_.add_command(label="Copy all steps", command=copy_all)
+            t_.bind("<Button-3>", lambda e_: m_.tk_popup(e_.x_root, e_.y_root))
+
+        def status_line(where: object, row: int) -> Tuple[tk.Frame, Callable[[str, Optional[bool]], None]]:
+            """A line under a step for what its button is doing, with a bar that moves while it works.
+            say(text, busy): busy True starts the bar, False stops it, None leaves it."""
+            f_ = tk.Frame(where, bg=BG)                              # type: ignore[arg-type]
+            f_.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+            bar_ = ttk.Progressbar(f_, mode="indeterminate", length=300)
+            tx_ = tk.Text(f_, bg=BG, fg="#1f5fa8", width=88, height=1, wrap="word", bd=0, highlightthickness=0,
+                          font=("TkDefaultFont", 9), cursor="xterm")
+            tx_.pack(side="top", anchor="w", fill="x")
+            copyable(tx_)
+            f_.grid_remove()
+
+            def say(text: str, busy: Optional[bool] = None) -> None:
+                def ui() -> None:
+                    if not f_.winfo_exists():
+                        return
+                    tx_.config(state="normal")
+                    tx_.delete("1.0", "end")
+                    tx_.insert("end", text)
+                    tx_.config(height=max(1, min(4, 1 + len(text) // 100)), state="disabled")
+                    if text:
+                        f_.grid()
+                    else:
+                        f_.grid_remove()
+                    if busy is True:
+                        bar_.pack(side="top", anchor="w", pady=(2, 0))
+                        bar_.start(15)
+                    elif busy is False:
+                        bar_.stop()
+                        bar_.pack_forget()
+                root.after(0, ui)
+            return f_, say
 
         def copy_cmd(text: str) -> None:
             """Put a command on the clipboard: it is typed into a command window, not run from here."""
@@ -6769,40 +6835,34 @@ def run_gui() -> None:
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[2][0]), str(here))),
               ("Move downloads", lambda: move_downloads())], neo_f)
 
-        def work_say(text: str) -> None:
-            """A line under the steps for what a button is busy doing (moving files, the first start)."""
-            def ui() -> None:
-                if wnote_.winfo_exists():
-                    wnote_.config(text=text)
-                    if text:
-                        wnote_.grid()
-                    else:
-                        wnote_.grid_remove()
-            root.after(0, ui)
+        _f4, say4 = status_line(neo_f, 3 * 2 + 1)                     # under step 4: the moves
 
         def move_downloads() -> None:
             """Move the model files from Downloads into engine-neo\\models, each into its own folder - in the
             background: to another drive a move is a copy, and 18 GB takes minutes."""
             todo_ = klein_downloaded()
             if not todo_:
-                messagebox.showinfo("Portrait Scout", "No whole model files waiting in Downloads. Each one is "
-                                    "moved once it has finished downloading.", parent=box)
+                left_ = [nm_ for sub_, nm_, _s, _u in KLEIN_FILES if not klein_found(sub_, nm_)]
+                say4("Nothing to move: " + (("not in Downloads yet, or not finished downloading: " + ", ".join(left_))
+                                            if left_ else "all three are in place already."), False)
                 check_neo()
                 return
 
             def work() -> None:
                 moved_, err_ = [], []
                 for k_, (src_, dst_) in enumerate(todo_):
-                    work_say(f"Moving {src_.name} ({k_ + 1} of {len(todo_)}, {src_.stat().st_size / 1e9:.1f} GB) "
-                             f"into {dst_.parent.name}\\... a minute or two if it goes to another drive.")
+                    say4(f"Moving {src_.name} ({k_ + 1} of {len(todo_)}, {src_.stat().st_size / 1e9:.1f} GB) "
+                         f"into {dst_.parent.name}\\ - please wait, to another drive this is a copy.", True)
                     try:
                         dst_.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(src_), str(dst_))
                         moved_.append(dst_.name)
                     except OSError as e_:
                         err_.append(f"{src_.name}: {e_}")
-                work_say(("Moved " + ", ".join(moved_) + "." if moved_ else "") +
-                         (("  Could not move: " + "; ".join(err_)) if err_ else ""))
+                left_ = [nm_ for sub_, nm_, _s, _u in KLEIN_FILES if not klein_found(sub_, nm_)]
+                say4(("Moved " + ", ".join(moved_) + "." if moved_ else "Nothing moved.") +
+                     (("  Could not move: " + "; ".join(err_) + ".") if err_ else "") +
+                     (("  Not in Downloads yet (or not finished): " + ", ".join(left_) + ".") if left_ else ""), False)
                 root.after(0, check_neo)
             threading.Thread(target=work, daemon=True).start()
 
@@ -6821,45 +6881,43 @@ def run_gui() -> None:
             status.set("Generator settings: Forge Neo with FLUX.2 Klein 9B, 4 steps, CFG 1.")
             check_neo()
             if not all(ok_ for ok_, _w in neo_checks()[:4]):
-                work_say("Settings written. Finish the steps above, then press Use Forge Neo again to start it "
-                         "for the first time.")
+                say5("Settings written. Finish the steps above, then press Use Forge Neo again to start it "
+                     "for the first time.", False)
                 return
             old_ = state.get("engine")
             if old_ is not None and getattr(old_, "proc", None) is not None:
-                work_say("Settings written. The engine is already running; it uses them from its next start.")
+                say5("Settings written. The engine is already running; it uses them from its next start.", False)
                 return
             eng_ = pg_.Engine(pg_.load_settings())                   # type: ignore[attr-defined]
             state["engine"] = eng_                                   # stopped with Portrait Scout, like any other
             eng_.keep = bool(st.get("engine_keep"))                  # type: ignore[attr-defined]
-            eng_.log = lambda m_: work_say(m_)                       # type: ignore[attr-defined]
-            eng_.progress = lambda f_, m_: work_say(m_)              # type: ignore[attr-defined]
+            eng_.log = lambda m_: say5(m_)                           # type: ignore[attr-defined]
+            eng_.progress = lambda f_, m_: say5(m_)                  # type: ignore[attr-defined]
+            say5("Starting Forge Neo for the first time - please wait...", True)
 
             def work() -> None:
                 try:
                     eng_.start()                                     # type: ignore[attr-defined]
-                    work_say("Forge Neo is set up and running. Press Check again at the top, then Generate.")
+                    say5("Forge Neo is set up and running. Press Check again at the top, then Generate.", False)
                 except Exception as e_:  # noqa: BLE001
-                    work_say(f"The engine did not start: {e_}")
+                    say5(f"The engine did not start: {e_}", False)
                 root.after(0, check_neo)
             threading.Thread(target=work, daemon=True).start()
         step(4, [("5.  Set Portrait Scout to Forge Neo and start it once. ", 0), ("Use Forge Neo", 1),
                  (" writes the start script, the Klein model, the encoder and the VAE, 4 steps at CFG 1 and the "
                   "Klein painterly style into generator\\settings.json, then starts the engine for the first time. "
-                  "That first start installs Forge's packages: 10 to 30 minutes, once. Later starts take about a "
-                  "minute.", 0)],
+                  "That first start installs Forge's packages and takes a while, once; later starts are quick.", 0)],
              [("Use Forge Neo", use_neo),
               ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
+        _f5, say5 = status_line(neo_f, 4 * 2 + 1)                     # under step 5: the first start
         step(5, "6.  Press Check again, at the top: it names the engine it found. From now on Portrait Scout starts "
                 "and stops it by itself.", [], neo_f)
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
-            m_.grid(row=i_, column=2, sticky="w", padx=(2, 0))
+            m_.grid(row=i_ * 2, column=2, sticky="w", padx=(2, 0))
         crow_ = tk.Frame(neo_f, bg=BG)
-        crow_.grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        crow_.grid(row=12, column=0, columnspan=3, sticky="w", pady=(4, 0))
         cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
-        wnote_ = tk.Label(neo_f, text="", bg=BG, fg="#1f5fa8", justify="left", wraplength=900)
-        wnote_.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        wnote_.grid_remove()
 
         def check_neo() -> None:
             """Tick each step that is done, and say what the first one that is not still needs."""

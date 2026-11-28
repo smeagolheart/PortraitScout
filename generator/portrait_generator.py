@@ -1920,7 +1920,7 @@ class Engine:
         mark = edir / ".portrait_scout_started"                      # a first start installs Forge's packages
         first_start = edir.is_dir() and not mark.exists()
         self.log("Starting the image engine for the first time: Forge installs its packages and sets itself up. "
-                 "This can take 10 to 30 minutes, once - later starts take about a minute..." if first_start else
+                 "Please wait - this takes a while, once; later starts are quick..." if first_start else
                  "Starting the image engine (loading the model can take a minute or two)...")
         show = bool(self.e.get("show_window"))                       # a window of its own, to watch it work
         flags = 0
@@ -1956,7 +1956,7 @@ class Engine:
             except OSError:
                 pass
             took = int(time.time() - began)
-            self.progress(None, (f"First start, setting up (10-30 min, only this once)... {took // 60}:{took % 60:02d}"
+            self.progress(None, (f"First start, setting up - please wait... {took // 60}:{took % 60:02d}"
                                  if first_start else f"Starting the image engine... {took} s")
                           + (f"   [{last}]" if last else ""))
             time.sleep(2)
