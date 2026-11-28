@@ -6594,10 +6594,10 @@ def run_gui() -> None:
         miss_ = [x for x in ("git", "uv") if not shutil.which(x, path=pth_)]
         out_.append((not miss_, "" if not miss_ else " and ".join(miss_) + " not found"))
         neo_ = here_ / "engine-neo"
-        out_.append(((neo_ / "webui.bat").is_file() or (neo_ / "webui.sh").is_file(),
-                     "engine-neo has no webui.bat yet"))
-        out_.append(((neo_ / "venv" / "Scripts" / "python.exe").is_file() or (neo_ / "venv" / "bin" / "python").is_file(),
-                     "engine-neo\\venv has no Python yet"))
+        cloned_ = (neo_ / "webui.bat").is_file() or (neo_ / "webui.sh").is_file()
+        venv_ = (neo_ / "venv" / "Scripts" / "python.exe").is_file() or (neo_ / "venv" / "bin" / "python").is_file()
+        out_.append((cloned_ and venv_, "engine-neo has no webui.bat yet - press Run it" if not cloned_ else
+                     "engine-neo\\venv has no Python yet - press Run it again"))
         bad_: List[str] = []
         for sub_, nm_, size_, _u in KLEIN_FILES:
             f_ = klein_found(sub_, nm_)
@@ -6666,7 +6666,7 @@ def run_gui() -> None:
         if not uses_neo_ and old_:
             return "Engine found: Forge (FLUX.1)"
         if neo_:
-            return "Engine found: Forge Neo - press Use Forge Neo (step 5) to use it"
+            return "Engine found: Forge Neo - press Use Forge Neo (step 4) to use it"
         if old_:
             return "Engine found: Forge - the settings point at Forge Neo, which is not here"
         return "No image generator here yet"
@@ -6817,15 +6817,18 @@ def run_gui() -> None:
         step(0, [("1.  Install ", 0), ("git", 1), (" and ", 0), ("uv", 1),
                  (". Both are free; the defaults of their installers will do.", 0)],
              [("git", lambda: webbrowser.open(GIT_DL)), ("uv", lambda: webbrowser.open(UV_DL))], neo_f)
-        step(1, [("2.  Clone Forge Neo into ", 0), ("engine-neo", 1), (" (Run it opens a command window in "
-                 + str(here) + " and types it):\n", 0), (NEO_GIT, 1)],
-             [("Run it", lambda: run_in_window(NEO_GIT, str(here), lambda: check_neo())), ("Copy", lambda: copy_cmd(NEO_GIT)),
+        neo_by_hand = f"{NEO_GIT}\ncd engine-neo\n{NEO_VENV}"          # what Run it does, for doing it by hand
+        neo_both = (f"if (-not (Test-Path 'engine-neo\\webui.bat')) {{ {NEO_GIT} }}; "
+                    f"if (Test-Path 'engine-neo\\webui.bat') {{ Set-Location engine-neo; {NEO_VENV} }}"
+                    if os.name == "nt" else
+                    f"([ -f engine-neo/webui.sh ] || {NEO_GIT}) && cd engine-neo && {NEO_VENV}")
+        step(1, [("2.  Get Forge Neo: clone it into ", 0), ("engine-neo", 1), (" and make its Python (Portrait Scout "
+                 "starts it with --uv). Run it opens a command window in " + str(here) + " and does both; by hand:\n", 0),
+                 (neo_by_hand, 1)],
+             [("Run it", lambda: run_in_window(neo_both, str(here), lambda: check_neo())),
+              ("Copy", lambda: copy_cmd(neo_by_hand)),
               ("About Neo", lambda: webbrowser.open(NEO_DOC))], neo_f)
-        step(2, [("3.  Make its Python, inside engine-neo:\n", 0), (NEO_VENV, 1),
-                 ("\n(Portrait Scout starts it with --uv.)", 0)],
-             [("Run it", lambda: run_in_window(NEO_VENV, str(here / "engine-neo"), lambda: check_neo())),
-              ("Copy", lambda: copy_cmd(NEO_VENV))], neo_f)
-        step(3, [("4.  Three files, about 18.4 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
+        step(2, [("3.  Three files, about 18.4 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
                  ("flux-2-klein-9b-fp8.safetensors", 1), (" (9.4 GB) in Stable-diffusion\\, ", 0),
                  ("qwen_3_8b_fp8mixed.safetensors", 1), (" (8.7 GB) in text_encoder\\, ", 0),
                  ("flux2-vae.safetensors", 1), (" (336 MB) in VAE\\. The buttons download each one; Hugging Face "
@@ -6839,7 +6842,7 @@ def run_gui() -> None:
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[2][0]), str(here))),
               ("Move downloads", lambda: move_downloads())], neo_f)
 
-        _f4, say4 = status_line(neo_f, 3 * 2 + 1)                     # under step 4: the moves
+        _f4, say4 = status_line(neo_f, 2 * 2 + 1)                     # under step 3: the moves
 
         def move_downloads() -> None:
             """Move the model files from Downloads into engine-neo\\models, each into its own folder - in the
@@ -6884,7 +6887,7 @@ def run_gui() -> None:
             save_settings(st)
             status.set("Generator settings: Forge Neo with FLUX.2 Klein 9B, 4 steps, CFG 1.")
             check_neo()
-            if not all(ok_ for ok_, _w in neo_checks()[:4]):
+            if not all(ok_ for ok_, _w in neo_checks()[:3]):
                 say5("Settings written. Finish the steps above, then press Use Forge Neo again to start it "
                      "for the first time.", False)
                 return
@@ -6907,16 +6910,16 @@ def run_gui() -> None:
                     say5(f"The engine did not start: {e_}", False)
                 root.after(0, check_neo)
             threading.Thread(target=work, daemon=True).start()
-        step(4, [("5.  Set Portrait Scout to Forge Neo and start it once. ", 0), ("Use Forge Neo", 1),
+        step(3, [("4.  Set Portrait Scout to Forge Neo and start it once. ", 0), ("Use Forge Neo", 1),
                  (" writes the start script, the Klein model, the encoder and the VAE, 4 steps at CFG 1 and the "
                   "Klein painterly style into generator\\settings.json, then starts the engine for the first time. "
                   "That first start installs Forge's packages and takes a while, once; later starts are quick.", 0)],
              [("Use Forge Neo", use_neo),
               ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
-        _f5, say5 = status_line(neo_f, 4 * 2 + 1)                     # under step 5: the first start
-        step(5, "6.  Press Check again, at the top: it names the engine it found. From now on Portrait Scout starts "
+        _f5, say5 = status_line(neo_f, 3 * 2 + 1)                     # under step 4: the first start
+        step(4, "5.  Press Check again, at the top: it names the engine it found. From now on Portrait Scout starts "
                 "and stops it by itself.", [], neo_f)
-        marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
+        marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(4)]
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
             m_.grid(row=i_ * 2, column=2, sticky="w", padx=(2, 0))
         crow_ = tk.Frame(box, bg=BG)                                 # under the face bank, so neither is missed
