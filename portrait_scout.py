@@ -6503,14 +6503,19 @@ def run_gui() -> None:
             return
         env_ = dict(os.environ, PATH=fresh_path())
         try:
-            if os.name == "nt":
-                subprocess.Popen(["powershell", "-NoExit", "-Command", cmd], cwd=cwd, env=env_,
+            if os.name == "nt":                                      # run it, then wait for a key and close
+                ps_ = (cmd + "; Write-Host ''; if ($?) { Write-Host 'Done.' -ForegroundColor Green } else "
+                       "{ Write-Host 'That did not work - read the messages above.' -ForegroundColor Red }; "
+                       "Write-Host 'Press any key to close this window.'; "
+                       "$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')")
+                subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_], cwd=cwd, env=env_,
                                  creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             else:
-                subprocess.Popen(["x-terminal-emulator", "-e", "bash", "-c", cmd + "; exec bash"], cwd=cwd, env=env_)
+                subprocess.Popen(["x-terminal-emulator", "-e", "bash", "-c",
+                                  cmd + "; echo; read -n 1 -s -p 'Press any key to close this window.'"], cwd=cwd, env=env_)
         except OSError:
             try:
-                subprocess.Popen(["cmd", "/K", cmd], cwd=cwd, env=env_,
+                subprocess.Popen(["cmd", "/C", cmd + " & echo. & pause"], cwd=cwd, env=env_,
                                  creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             except OSError as e_:
                 messagebox.showwarning("Portrait Scout", f"Could not open a command window:\n{e_}\n\n"
@@ -6536,6 +6541,34 @@ def run_gui() -> None:
             if (d_ / name).is_file():
                 return d_ / name
         return None
+
+    def downloads_dirs() -> List[Path]:
+        """The Downloads folder - where the browser put the model files - wherever Windows keeps it."""
+        out_ = [Path.home() / "Downloads"]
+        if os.name == "nt":
+            try:
+                import winreg
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as k_:
+                    v_ = os.path.expandvars(str(winreg.QueryValueEx(k_, "{374DE290-123F-4565-9164-39C4925E467B}")[0]))
+                    out_.insert(0, Path(v_))
+            except (ImportError, OSError):
+                pass
+        return [d_ for i_, d_ in enumerate(out_) if d_.is_dir() and d_ not in out_[:i_]]
+
+    def klein_downloaded() -> List[Tuple[Path, Path]]:
+        """Model files that are whole in Downloads but not in place yet: (where it is, where it goes)."""
+        here_ = Path(__file__).resolve().parent
+        out_: List[Tuple[Path, Path]] = []
+        for sub_, nm_, size_, _u in KLEIN_FILES:
+            if klein_found(sub_, nm_):
+                continue
+            for d_ in downloads_dirs():
+                f_ = d_ / nm_
+                if f_.is_file() and f_.stat().st_size >= size_:
+                    out_.append((f_, here_ / "engine-neo" / "models" / sub_ / nm_))
+                    break
+        return out_
 
     def neo_settings_patch() -> dict:
         """What generator/settings.json needs for Forge Neo with FLUX.2 Klein 9B."""
@@ -6564,7 +6597,10 @@ def run_gui() -> None:
             f_ = klein_found(sub_, nm_)
             if f_ is None:
                 stray_ = next(iter(sorted((neo_ / "models").rglob(nm_))), None) if (neo_ / "models").is_dir() else None
-                bad_.append(f"{nm_} is in {stray_.parent.name}\\, not {sub_}\\" if stray_ else f"{nm_} missing")
+                dl_ = next((d_ / nm_ for d_ in downloads_dirs() if (d_ / nm_).is_file()), None)
+                bad_.append(f"{nm_} is in {stray_.parent.name}\\, not {sub_}\\" if stray_ else
+                            f"{nm_} is in Downloads - press Move downloads" if dl_ and dl_.stat().st_size >= size_ else
+                            f"{nm_} is still downloading" if dl_ else f"{nm_} missing")
             elif f_.stat().st_size < size_:
                 bad_.append(f"{nm_} is only {f_.stat().st_size / 1e9:.1f} of {size_ / 1e9:.1f} GB (still downloading?)")
         out_.append((not bad_, "; ".join(bad_)))
@@ -6649,8 +6685,9 @@ def run_gui() -> None:
             if buttons:
                 f = tk.Frame(into, bg=BG)
                 f.grid(row=n, column=1, sticky="w", padx=(10, 0))
-                for label, cmd in buttons:
-                    ttk.Button(f, text=label, command=cmd).pack(side="left", padx=(0, 6))   # type: ignore[arg-type]
+                for i_, (label, cmd) in enumerate(buttons):            # three to a row, so none is cut off
+                    ttk.Button(f, text=label, command=cmd).grid(row=i_ // 3, column=i_ % 3, sticky="ew",
+                                                                padx=(0, 6), pady=(0, 3))   # type: ignore[arg-type]
 
         def copy_cmd(text: str) -> None:
             """Put a command on the clipboard: it is typed into a command window, not run from here."""
@@ -6690,11 +6727,34 @@ def run_gui() -> None:
                  ("flux-2-klein-9b-fp8.safetensors", 1), (" (9.4 GB) in Stable-diffusion\\, ", 0),
                  ("qwen_3_8b_fp8mixed.safetensors", 1), (" (8.7 GB) in text_encoder\\, ", 0),
                  ("flux2-vae.safetensors", 1), (" (336 MB) in VAE\\. The buttons download each one; Hugging Face "
-                  "may ask you to sign in and accept the model's license first.", 0)],
+                  "may ask you to sign in and accept the model's license first. Move downloads then puts "
+                  "each one in its folder.", 0)],
              [("Model", lambda: webbrowser.open(KLEIN_FILES[0][3])),
               ("Encoder", lambda: webbrowser.open(KLEIN_FILES[1][3])),
               ("VAE", lambda: webbrowser.open(KLEIN_FILES[2][3])),
+              ("Move downloads", lambda: move_downloads()),
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models"), str(here)))], neo_f)
+
+        def move_downloads() -> None:
+            """Move the model files from Downloads into engine-neo\\models, each into its own folder."""
+            todo_ = klein_downloaded()
+            if not todo_:
+                messagebox.showinfo("Portrait Scout", "No whole model files waiting in Downloads. Each one is "
+                                    "moved once it has finished downloading.", parent=box)
+                check_neo()
+                return
+            moved_, err_ = [], []
+            for src_, dst_ in todo_:
+                try:
+                    dst_.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src_), str(dst_))
+                    moved_.append(f"{dst_.name} -> {dst_.parent.name}\\")
+                except OSError as e_:
+                    err_.append(f"{src_.name}: {e_}")
+            status.set("Moved " + ", ".join(moved_) if moved_ else "Nothing moved.")
+            if err_:
+                messagebox.showwarning("Portrait Scout", "Could not move:\n" + "\n".join(err_), parent=box)
+            check_neo()
 
         def use_neo() -> None:
             try:
@@ -6958,6 +7018,16 @@ def run_gui() -> None:
                       text=f"The steps could not be drawn: {e.__class__.__name__}: {e}").pack(anchor="w")
         det = ttk.Frame(inner, padding=(0, 10, 0, 0))
         det.pack(fill="x")
+
+        def fit() -> None:
+            """As big as the steps need, so nothing scrolls - unless the screen is smaller than that."""
+            if not w.winfo_exists():
+                return
+            w.update_idletasks()
+            ww_ = min(inner.winfo_reqwidth() + sb_.winfo_reqwidth() + 8, w.winfo_screenwidth() - 40)
+            hh_ = min(inner.winfo_reqheight() + 8, w.winfo_screenheight() - 90)
+            w.geometry(f"{ww_}x{hh_}+{max(0, (w.winfo_screenwidth() - ww_) // 2)}+20")
+        w.after(50, fit)
         ttk.Label(det, foreground="#555", wraplength=840, justify="left",
                   text="The names, sizes and links above are what Portrait Scout was written against, as they stood "
                        "in November 2026. Addresses move: if a button opens nothing, search the file name - they are "
