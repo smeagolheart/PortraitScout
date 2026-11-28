@@ -170,6 +170,10 @@ picture where there is one, and names any it cannot place.
 
 **Export work...** on the Proposals tab writes one `.zip` holding the pictures you have chosen, which creature each one is for, the creatures you have set aside, which bunches you had decloned, and what each picture was asked for - plus a readable `how-these-were-made.txt`. **Import work...** takes one in: the pictures are copied into this copy's generated folder, the paths are rewritten and the creatures are matched to the ones here, which works even when the two of you read the mod differently. Anything you have already chosen is kept unless you say otherwise.
 
+### Preview page
+
+**Preview page...** on the Proposals tab saves a single web page of the proposed portraits, at game size, each with its name, race and gender. Open it in any browser to look the set over or send it to someone: there is a search box, and clicking a portrait shows it bigger. **Create mod...** also puts one in the mod, as `preview.html`.
+
 ### Create mod
 
 **Create mod...** turns your proposals into a ready-to-install WeiDU mod. It asks for a name and writes `mod\<name>\` next to `portrait_scout.py`, with a copy of WeiDU beside it (taken from your game folder):

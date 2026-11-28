@@ -199,6 +199,7 @@ DEFAULTS: dict = {
                       "<lora:Baldurs_Gate_Portrait_Flux:.3> Set against {background}."
         },
     },
+    "monster_edits": {"_about": "The second pass for monsters started from the face bank: what each is made into, in words. {skin}: the creature's own skin color, when its file has one.", "half-ogre": "a coarse brutish half-ogre: a much heavier jutting brow, small deep-set eyes, a thicker, wider jaw with two big tusks jutting up over the lip, a broad flat nose, rough thick {skin}", "orc": "a brutish orc: {skin}, a heavy jutting brow, small eyes, a broad flat pig-like nose, a heavy jaw with two big tusks jutting up over the lip, pointed ears", "orog": "a brutish orog: {skin}, an enormous long jaw with two big tusks, a heavy jutting brow", "hobgoblin": "a brutish hobgoblin: {skin}, large pointed ears, a heavy brow, a broad flat nose, a wide mouth of small yellowed fangs", "goblin": "a scrawny goblin: {skin}, very large pointed ears, a long sharp nose, small mean eyes, a wide mouth of small sharp teeth", "xvart": "a small wiry xvart: {skin}, large pointed ears, bright orange eyes, a wide mouth of small sharp teeth", "gnoll": "", "troll": "", "githyanki": "a gaunt githyanki: {skin}, a hard, hollow-cheeked face, small swept-back pointed ears"},
     "face_bank": {
         "_about": "Start from: a picture starts from a real face (img2img) so that faces differ - the model paints "
                   "nearly one face per description whatever the seed. folder = where the faces are, beside "
@@ -207,9 +208,11 @@ DEFAULTS: dict = {
                   "go. steps = the steps a picture from the bank is painted in: the engine runs steps x strength of "
                   "them, so 6 at 0.68 costs what 4 plain ones do, and 4 steps leave nothing between keeping the "
                   "photo (0.7) and ignoring it (0.75). A folder may hold male and female folders; the picture's "
-                  "gender picks one. skip = races left to their words unless they have a folder of their own: a "
+                  "gender picks one. scale = how big the face is painted against the bank picture (the bank's are a "
+                  "little bigger than a painted head and shoulders). skip = races left to their words unless they have a folder of their own: a "
                   "human face holds a dwarf's to human proportions and shaves his beard.",
-        "folder": "faces", "strength": 0.68, "steps": 6, "skip": ["dwarf", "duergar", "gnome", "svirfneblin"],
+        "monster": {"strength": 0.74, "steps": 8, "blur": 0, "hulk_strength": 0.85, "edit": 0.85},
+        "folder": "faces", "strength": 0.68, "steps": 6, "scale": 0.8, "skip": ["duergar", "svirfneblin"],
     },
     "candidates": 2,
     "payload": {
@@ -265,7 +268,7 @@ DEFAULTS: dict = {
     },
     "age_terms": {
         "_about": "Offered as 'Age' in the Generate window; the text goes into the description.",
-        "Child": "child", "Young": "young", "Adult": "adult", "Middle-aged": "middle-aged",
+        "Child": "child", "Young": "young", "Adult": "", "Middle-aged": "middle-aged",
         "Old": "old, lined face, gray hair", "Ancient": "very old, deeply wrinkled, thin white hair",
     },
     "look_terms": {
@@ -304,7 +307,7 @@ DEFAULTS: dict = {
         "_about": "Right-click a picture > Change expression / Change it...: the picture is repainted from itself in "
                   "edit mode (the model keeps the person and changes only what it is told). keep = what is said "
                   "after the change; expressions = the list offered, name: words.",
-        "keep": "Keep everything else exactly the same: the same person, pose, lighting, background and painting "
+        "keep": "Paint the whole picture crisp and sharp, the neck, shoulders and clothes in full detail with no haze or smudge. Keep everything else the same: the same person, pose, lighting, background and painting "
                 "style.",
         "expressions": {"Neutral": "a calm, neutral expression", "Smiling": "a warm smile", "Stern": "a stern, hard look", "Sad": "a sad, downcast look", "Anxious": "an anxious, worried look with a furrowed brow", "Tired": "a tired, weary look", "Smug": "a smug, sly half-smile", "Surprised": "a surprised look, raised eyebrows", "Angry": "an angry scowl"},
     },
@@ -375,17 +378,20 @@ DEFAULTS: dict = {
         "Thief": {"text": "a deep hood pulled up over the head"},
         "Harlot Woman": {"text": "her hair pulled up into a high ponytail, a medieval off-the-shoulder linen chemise with a front-laced bodice over it, the shoulders bare", "outfit": ""},
         "Orog": {"text": "a grotesquely long horse-like face twice as long as a man's with a huge long jaw, one pair of huge long pointed ears set high on the sides of the skull and sweeping straight upward, their tips rising well above the crown of the bald head, dull reddish-orange skin, heavy black spiked iron shoulder plates over a dark leather harness", "bald": True, "outfit": ""},
+        "Kobold Xvart": {"text": "a sleeveless brown leather jerkin, bare blue arms", "race": "xvart", "outfit": ""},
+        "Noble Woman": {"text": "a noblewoman's tall stiff embroidered cloth headdress rising into two soft pointed peaks above her forehead, a fifteenth-century lady's escoffion of padded fabric with a sheer veil, her long hair hanging down behind it, a wide collar over the shoulders, the headdress and the collar both the color of the gown's trim"},
+        "Noble Man": {"text": "a wide floppy velvet cap, a Renaissance beret worn tilted to one side, with a long curling plume feather pinned to it"},
         "Beggar Man": {"text": "bald, with a straggly unkempt beard, gaunt and bare-chested: no shirt, bony bare shoulders and chest", "bald": True, "outfit": ""},
         "Boy": {"text": "", "child": True, "race": "human"},
         "Girl": {"text": "", "child": True, "race": "human"},
-        "Ogre": {"text": "wearing a battered horned iron helmet", "outfit": ""},
-        "Ogre Mage": {"text": "reddish-brown skin, a bare, hairless head with two short curved horns on the brow, layered white and gray robes with pale padded shoulder pieces", "bald": True, "outfit": ""},
-        "Half Ogre": {"text": "wearing a battered horned iron helmet", "outfit": ""},
-        "Ogrillon": {"text": "", "outfit": ""},
+        "Ogre": {"text": "a small head sunk low between massive hunched shoulders, an enormous fat and muscular body filling the frame, a bare, hairless bald head, a crude sleeveless brown leather vest over a bare chest", "bald": True, "skin_colors": True, "outfit": ""},
+        "Ogre Mage": {"text": "a small head sunk low between massive hunched shoulders, an enormous fat and muscular body filling the frame, a bald head with two short curved horns on the brow and a tied high ponytail behind the head, layered robes with padded shoulder pieces", "bald": True, "skin_colors": True, "outfit": ""},
+        "Half Ogre": {"text": "wearing a battered horned iron helmet", "outfit": "", "skin_colors": True},
+        "Ogrillon": {"text": "", "outfit": "", "skin_colors": True},
         "Hobgoblin": {"text": "wearing a battered horned rusty steel helmet", "outfit": ""},
     },
     "young_lead": "A young {person} of about twenty, with youthful smooth skin.",
-    "child_lead": "A {person} of about nine years old, a small child with a soft, round child's face, smooth skin and big eyes.",
+    "child_lead": "A {person} of about nine years old, a small child with a soft, round child's face, smooth skin and big eyes, a small slight child's body with narrow little shoulders and a thin neck.",
     "young_drop": ["weathered appearance", "facial wrinkles and detail"],
     "_young_lead": "For a young character (Age: Young, or 'young' at the start of the description): young_lead goes "
                    "first in the prompt and the young_drop words are taken out of the style, or a style asking for "
@@ -519,13 +525,13 @@ DEFAULTS: dict = {
                   "seed). A list called beard is for men only. An empty choice adds nothing (a gnome without a "
                   "beard).",
         "drow": {"eyes": {"red eyes": 60, "violet eyes": 25, "pale lavender eyes": 15}},
-        "dwarf": {"beard": {"a full beard": 30, "a long beard": 30, "a bushy beard": 25, "a braided beard": 15}},
+        "dwarf": {"beard": {"a long, full, bushy beard reaching halfway down his chest": 35, "a long braided beard reaching halfway down his chest": 25, "a long beard reaching halfway down his chest, bound with metal rings": 25, "a long forked beard reaching halfway down his chest": 15}},
         "gnome": {"nose": {"a very large, long, pointed nose": 25, "a big bulbous nose": 20, "a long hooked nose": 15, "a broad round nose": 15, "a long upturned nose": 10, "a big crooked nose": 15}, "ears": {"big ears tapering to points": 40, "large pointed ears sticking out sideways": 30, "long swept-back pointed ears": 15, "big ears with round-tipped points": 15}, "eyes": {"bright twinkling eyes under bushy eyebrows": 25, "small sharp eyes under wild white eyebrows": 15, "large curious eyes": 20, "heavy-lidded sleepy eyes": 10, "keen dark eyes under thick brows": 20}, "lines": {"deep wrinkles and laugh lines": 30, "apple cheeks": 20, "a deeply lined forehead": 15, "crow's feet": 15, "": 20}, "beard": {"a short wispy beard": 50, "a thin goatee": 30, "": 20}},
         "kobold": {"hide": {"rust-red scaly hide": 35, "dull brick-red scaly hide": 20, "dark red-brown scaly hide": 20, "mottled orange and brown scaly hide": 15, "faded gray-red scaly hide": 10}, "horns": {"two small backswept horns": 40, "two short stubby horns": 25, "long curved horns": 20, "one horn broken off short": 15}, "eyes": {"small beady red eyes": 50, "small beady yellow eyes": 25, "small beady orange eyes": 25}, "mark": {"": 40, "a scar across the snout": 20, "a chipped tooth": 15, "a ragged frill behind the jaw": 10, "a notched horn": 15}},
         "halfling": {"face": {"a broad, round face with rosy cheeks": 30, "a broad face with freckled cheeks": 20, "a broad, weathered face": 25, "a broad, plump face with a double chin": 15, "a broad face with a strong jaw": 10}, "hair": {"a head of thick tight curls": 35, "loose brown curls": 20, "short curly hair": 20, "curly hair tied back": 10, "thinning curly hair": 15}, "nose": {"a button nose": 40, "a small upturned nose": 25, "a broad snub nose": 20, "": 15}},
         "hobgoblin": {"skin": {"coarse dusky orange-brown hide-like skin": 25, "rough brick-red skin": 20, "dark reddish-brown skin": 20, "mottled gray-orange skin": 15, "ruddy ochre skin": 20}, "nose": {"a swollen red tinted nose with thin blue veins": 25, "a flat, wide nose": 30, "a short upturned snout-like nose": 30, "a broad squashed nose": 15}, "eyes": {"small dark beady eyes": 30, "narrow yellow eyes": 25, "deep-set amber eyes": 20, "small red-rimmed eyes": 15, "pale watery eyes": 10}, "beard": {"a scraggly black beard": 25, "a thin drooping black mustache": 15, "coarse black stubble": 20, "a braided chin tuft": 10, "": 30}},
-        "goblin": {"skin": {"sickly green skin": 30, "olive-green skin": 20, "grayish-green skin": 20, "yellowish-green skin": 15, "mottled dark green skin": 15}, "ears": {"small pointed ears": 40, "long drooping pointed ears": 20, "large batlike ears": 20, "ragged notched pointed ears": 20}, "nose": {"a long hooked nose": 35, "a sharp pointed nose": 25, "a stubby snub nose": 20, "a warty bulbous nose": 20}, "eyes": {"small yellow eyes": 30, "beady red eyes": 20, "large bulging yellow eyes": 20, "narrow orange eyes": 15, "squinting dark eyes": 15}, "hair": {"a bald head with a few wiry hairs": 30, "a greasy black mop of hair": 20, "a thin wispy topknot": 20, "patchy gray stubble on the scalp": 15, "stringy dark hair": 15}},
-        "ogre": {"skin": {"pale yellow tinted skin blotched with warts": 25, "muddy gray-brown skin": 20, "sallow olive skin": 20, "ruddy pinkish skin": 15, "dull bluish-gray skin": 20}, "face": {"a heavy brow and a huge jutting jaw": 30, "a low sloping forehead": 20, "sagging jowls": 20, "a thick bull neck": 15, "": 15}, "eyes": {"small dumb mean eyes": 30, "tiny piggish eyes": 25, "deep-set dark eyes under a heavy brow": 20, "bloodshot yellow eyes": 15, "mismatched eyes, one larger": 10}, "nose": {"a flat smashed nose": 30, "a broad bulbous nose": 25, "a huge warty nose": 20, "a pig-like upturned nose": 15, "": 10}, "beard": {"": 40, "coarse black stubble": 20, "a ragged dark beard": 20, "a few long chin whiskers": 20}},
+        "goblin": {"skin": {"sallow yellowish skin": 30, "pale yellow-green skin": 25, "light green skin": 20, "mustard yellow skin": 15, "dull yellow-ochre skin": 10}, "ears": {"large pointed ears sticking out sideways": 40, "very large batlike ears": 25, "long drooping pointed ears": 20, "big ragged notched pointed ears": 15}, "nose": {"a long hooked nose": 30, "a sharp pointed nose": 25, "a stubby snub nose": 20, "a warty bulbous nose": 25}, "eyes": {"small yellow eyes": 30, "beady red eyes": 20, "large bulging yellow eyes": 20, "narrow orange eyes": 15, "squinting dark eyes": 15}, "hair": {"a bald head with a few wiry hairs": 35, "a greasy black mop of hair": 15, "a thin wispy topknot": 20, "patchy gray stubble on the scalp": 15, "stringy dark hair": 15}},
+        "ogre": {"face": {"a heavy brow and a huge jutting jaw": 30, "a low sloping forehead": 20, "sagging jowls": 20, "a thick bull neck": 15, "": 15}, "eyes": {"small dumb mean eyes": 30, "tiny piggish eyes": 25, "deep-set dark eyes under a heavy brow": 20, "bloodshot yellow eyes": 15, "mismatched eyes, one larger": 10}, "nose": {"a flat smashed nose": 30, "a broad bulbous nose": 25, "a huge warty nose": 20, "a pig-like upturned nose": 15, "": 10}, "beard": {"": 40, "coarse black stubble": 20, "a ragged dark beard": 20, "a few long chin whiskers": 20}},
         "duergar": {"beard": {"a long white beard": 60, "a braided white beard": 25, "a short white beard": 15}},
     },
     "_tusks": "Tusks are said as lower canines growing up from inside the mouth: said loosely ('jutting tusks'), "
@@ -598,8 +604,9 @@ DEFAULTS: dict = {
         "lich": "lich, a skull face with shrivelled gray skin drawn tight over it, points of light in the sockets",
         "mummy": "mummy, dried blackened skin wrapped in filthy bandages, sunken sockets",
         "orc": "orc, green skin, a heavy jutting brow and small eyes, a broad flat nose, two prominent tusks growing up from the lower jaw inside the mouth, in place of the lower canine teeth, resting over the upper lip, pointed ears, coarse black hair",
-        "goblin": "goblin, sharp teeth",
+        "goblin": "goblin, a small, scrawny goblin, not a lizard: a wide mouth of small sharp teeth",
         "hobgoblin": "hobgoblin, a brutish goblinoid with a wide face, large pointed ears and small yellowed fangs",
+        "xvart": "xvart, a small, wiry goblin-like humanoid, not a kobold and not a lizard: bright blue skin, a bald domed blue head with a ring of dark hair around the back and sides, large pointed ears, bright orange eyes, a wide mouth of small sharp teeth",
         "kobold": "kobold, a small dog-like reptile creature, not a human: a long narrow lizard snout with the nostrils at its tip, jaws lined with tiny sharp teeth",
         "gnoll": "gnoll, hyena head, coarse spotted fur, a long muzzle with bared teeth, dark eyes",
         "ogre": "close up of an ugly ogre: a broad humanoid face, a wide mouth with two thick tusks growing up from the lower jaw inside the mouth, in place of the lower canine teeth, resting over the upper lip",
@@ -840,7 +847,7 @@ _BEASTLY = re.compile(r"\b(were\w*|lycanthrope|wolf|wolf's|fur|furred|muzzle|sno
 
 _UNDEAD = re.compile(r"\b(ghoul|ghast|zombie|mummy|lich|revenant|wight|corpse|undead|skeleton|skull|spectre|ghost|"
                      r"wraith|vampire)\b")
-_MONSTROUS = re.compile(r"\b(goblin|hobgoblin|orc|ogre|ogrillon|half-ogre|troll|githyanki|gnoll|bugbear|"
+_MONSTROUS = re.compile(r"\b(goblin|hobgoblin|xvart|orc|ogre|ogrillon|half-ogre|troll|githyanki|gnoll|bugbear|"
                         r"minotaur|yuan-ti|imp|demon|devil|tanar'ri)\b")
 #   a face given in full by its race: a person's nose, eyes, skin tone and haircut on it make it a man painted red
 
@@ -1060,8 +1067,10 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "", outfit: s
     if kind and (rkey not in races or rkey in _VAGUE_RACES):         # a sirine's file says FAIRY and only its
         rkey = kind                                                  # sprite says sirine; the sprite wins there
     said_kind = str((row.get("colors") or {}).get("kind") or "")    # DrowSkin and the like: the surest of all
-    if said_kind in races and said_kind != rkey:
-        rkey = said_kind
+    if said_kind in races and said_kind != rkey and (not rkey or rkey in _VAGUE_RACES or rkey in _SPRITE_RACES
+                                                     or _SUBRACE.get(said_kind) == rkey):
+        rkey = said_kind                                             # a drow filed as an elf - but a goblin
+        #                                                              wearing a kobold's colors is still a goblin
     named = set(re.findall(r"[a-z]+", str(row.get("name") or "").lower()))
     kind = next((k for k in sorted((x for x in races if x and set(x.split()) <= named),
                                    key=lambda x: -len(x.split())) if k not in _NAME_BLIND), "")
@@ -1082,6 +1091,11 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "", outfit: s
     beard_pick = str((settings.get("beard_terms") or {}).get(beard, "")) if beard else ""
     picks_ = (settings.get("race_picks") or {}).get(rkey)
     spr_said_ = str((sprite(anim, settings) or {}).get("text") or "").lower()   # what the sprite shows wins:
+    if (sprite(anim, settings) or {}).get("skin_colors") and ((row.get("colors") or {}).get("skin")
+                                                            or (row.get("colors") or {}).get("skin_any")) \
+            and settings.get("use_creature_colors", True):           # its skin is the creature's own color (an
+        spr_said_ += ", skin"                                        # ogre is red in one game file, sallow in
+    #                                                                  another): not the race's own skin
     if isinstance(picks_, dict) and race_txt:                        # no pick for a part it already says                        # a drow's red eyes, a dwarf's braided beard:
         rng_ = random.Random(creature_seed(face_key(row)) ^ 0x5EED) if face_key(row) else random.Random()
         for slot_, pool_ in picks_.items():                          # one creature's own, the same every time
@@ -1103,20 +1117,36 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "", outfit: s
     if not race_txt and rkey:                                        # a race nobody has written a line for: the
         race_txt = (f"{rkey}, with the head and face of a {rkey} and not of a person"   # model paints a human
                     if rkey not in _HUMANOID else rkey)              # unless it is told plainly not to
-    if rkey and rkey not in _HUMANOID and rkey not in races and not gender:
+    if rkey and rkey not in _HUMANOID and rkey not in races and (not gender or _BEASTLY.search(rkey)):
+        #                                                              a wolf, male or not, wears no tunic: its
+        #                                                              file's colors are a sprite's, not clothes
         subject = anim.lower() or rkey                               # a wolf, a golem...: say what it is
+        w_ = subject.split()
+        if len(w_) > 1 and w_[0] == rkey:                           # "Wolf Winter" is a winter wolf
+            subject = " ".join(w_[1:] + w_[:1])
         return subject, subject
     age_txt = "child" if child else (settings.get("age_terms") or {}).get(age, age.lower()) if age else \
         ("young" if aw & {"boy", "girl", "child"} else "")       # a grown person is what it paints anyway:
     #                                                            only an age that is not the default is worth saying
     subject = " ".join(x for x in (gender, race_txt.split(",")[0]) if x) or "person"
+    if child:                                                        # a child, never "female": the face bank's
+        subject = f'{race_txt.split(",")[0]} child'.strip()           # child folder says which
     lead, _, extra = age_txt.partition(",")                          # "old, lined face" -> "old male human, lined face"
-    parts = [" ".join(x for x in (lead.strip(), gender, race_txt) if x) or "person"]   # a name and nothing else
+    if child:                                                        # "female human" paints a grown woman's body:
+        parts = [" ".join(x for x in (lead.strip(), race_txt) if x)]   # just a child; the start face is a girl's
+        #                                                              or a boy's (faces/child/female, male)
+    else:
+        parts = [" ".join(x for x in (lead.strip(), gender, race_txt) if x) or "person"]   # a name and nothing else
     if extra.strip():
         parts.append(extra.strip())
     manlike = rkey in ("", "human", "elf", "half elf", "dwarf", "halfling", "gnome", "half orc", "tiefling",
                        "drow", "aasimar", "duergar", "genasi")
-    col = row.get("colors") or {} if settings.get("use_creature_colors", True) else {}
+    col = dict(row.get("colors") or {}) if settings.get("use_creature_colors", True) else {}
+    for slot_ in ("skin", "hair"):                               # a random set in the file (OgreSkin): the game
+        any_ = [w for w in str(col.pop(slot_ + "_any", "") or "").split("|") if w]   # paints any of its colors;
+        if any_ and not col.get(slot_):                          # one of them, the same for this creature always
+            rng_c = random.Random(creature_seed(face_key(row)) ^ 0xC010) if face_key(row) else random.Random()
+            col[slot_] = rng_c.choice(any_)
     spr = sprite(anim, settings)
     bald = bool(spr.get("bald"))                                 # the sprite is bald; the file does not know it
     spr_txt = str(spr.get("text") or "")
@@ -1160,7 +1190,8 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "", outfit: s
     for slot in ("skin", "hair"):                                # hair on it. Right behind the race: at the end
         if slot == "hair" and hair_said:                         # of a long description the model ignores color
             continue
-        if not col.get(slot) or slot in said or covered:
+        own_ = slot == "skin" and bool((sprite(anim, settings) or {}).get("skin_colors"))   # a sprite colored
+        if not col.get(slot) or slot in said or (covered and not own_):                     # by its file
             continue
         if slot == "hair" and (bald or any(w in feat.lower() for w in _BALD)     # no hair color on a bald head, nor
                                or any(w in said for w in _COVERED_HEAD)):   # under a helm the sprite never takes off
@@ -1353,11 +1384,84 @@ def bank_root(settings: dict) -> Path:
     return p if p.is_absolute() else Path(__file__).resolve().parent.parent / p
 
 
+def bank_scale(settings: dict) -> float:
+    """How big a bank face is painted, against the bank picture: below 1 for a little more head and shoulders."""
+    try:
+        return max(0.6, min(1.0, float((settings.get("face_bank") or {}).get("scale", 0.8))))
+    except (TypeError, ValueError):
+        return 0.8
+
+
 def bank_strength(settings: dict) -> float:
     try:
         return max(0.05, min(1.0, float((settings.get("face_bank") or {}).get("strength", 0.68))))
     except (TypeError, ValueError):
         return 0.68
+
+
+def bank_monster(settings: dict, text: str, race: str = "") -> Optional[Tuple[float, int, float]]:
+    """(strength, steps, blur) for a monster with a face like a person's - an orc, ogre, goblin, hobgoblin,
+    xvart - started from the bank: the face blurred, so its shape, set and light carry over and not a person's
+    features, painted further and longer than a person's. None for anything else (a person, a beast, the
+    undead, a kobold's snout)."""
+    low = re.sub(r"\bnot (?:a |an |of a )?[\w-]+|\b[\w]+-like\b|\bpig snout\b|\bon (?:his|her|its|the) skull\b", "", str(text or "").lower())   # "not a kobold",
+    #                                                                  "a snout-like nose": no kobold, no snout
+    rc = str(race or "").lower()
+    if not (_MONSTROUS.search(low) or _MONSTROUS.search(rc)):
+        return None
+    if _NOT_A_FACE.search(low) or _UNDEAD.search(low) or incorporeal(low):
+        return None
+    m = (settings.get("face_bank") or {}).get("monster") or {}
+    if m.get("off"):
+        return None
+    hulk = bool(re.search(r"\bsmall head sunk\b|\bmassive hunched shoulders\b", low))
+    try:
+        return (max(0.3, min(1.0, float(m.get("hulk_strength" if hulk else "strength", 0.85 if hulk else 0.74)))),
+                max(1, min(60, int(m.get("steps", 8)))), max(0.0, float(m.get("blur", 0))), hulk)
+    except (TypeError, ValueError):
+        return (0.85 if hulk else 0.74), 8, 0.0, hulk
+
+
+_EDIT_SKIN = {"half-ogre": "sallow olive skin", "orc": "green skin", "orog": "dull reddish-orange skin", "hobgoblin": "dark reddish-brown skin", "goblin": "sallow yellow-green skin", "xvart": "bright blue skin", "githyanki": "jaundiced yellow skin"}
+
+
+def monster_edit(settings: dict, text: str, race: str = "", anim: str = "") -> Optional[Tuple[str, float, int]]:
+    """The second pass for a monster from the face bank: the first keeps the bank face (a person, but every one
+    different), this one makes it the monster in words, keeping the face's own shape. Painted straight from the
+    words, every orc or half-ogre comes out one face. (prompt, strength, steps), or None."""
+    mon = bank_monster(settings, text, race)
+    if not mon or mon[3]:
+        return None
+    m = (settings.get("face_bank") or {}).get("monster") or {}
+    try:
+        amt = float(m.get("edit", 0.85))
+    except (TypeError, ValueError):
+        amt = 0.85
+    if amt <= 0:
+        return None
+    low = str(text or "").lower()
+    kind = "half-ogre" if re.search(r"\bhalf.?ogre\b", (anim + " " + low).lower()) else \
+        (_MONSTROUS.search(low) or _MONSTROUS.search(str(race or "").lower()))
+    kind = kind if isinstance(kind, str) else kind.group(0) if kind else "monster"
+    tpl = str((settings.get("monster_edits") or {}).get(kind) or "")
+    if tpl:
+        skin_ = re.search(r"[^,:]*\bskin\b[^,]*", low)
+        sk_ = skin_.group(0).strip() if skin_ else _EDIT_SKIN.get(kind, "coarse skin")
+        who_ = "woman" if re.search(r"\b(female|woman)\b", low) else "man"
+        return (f"Make this {who_} {tpl.replace('{skin}', sk_)}. Paint the whole picture crisp and sharp, the neck, shoulders and clothes in full detail with no haze or smudge. Keep everything else the same: the same "
+                f"person, {'her' if who_ == 'woman' else 'his'} own face shape and features, the clothing, helmet, "
+                f"pose, lighting, background and painting style.", amt, max(1, int(m.get("steps", 8))))
+    rk = "ogre" if kind == "half-ogre" else kind
+    words = [w.strip() for w in str((settings.get("race_terms") or {}).get(rk) or "").split(":")[-1].split(",")[1:] if w.strip()]
+    words = [w for w in words if not re.search(r"\b(not|human|close up|tiny head|gigantic)\b", w)][:4]
+    skin = re.search(r"[^,]*\bskin\b[^,]*", low)
+    if skin and not any("skin" in w for w in words):
+        words.append(skin.group(0).split(":")[-1].strip())
+    who = "woman" if re.search(r"\b(female|woman)\b", low) else "man"
+    feats = ", ".join(words) or "a coarse brutish face"
+    return (f"Make this {who} a coarse brutish {kind}: {feats}. Paint the whole picture crisp and sharp, the neck, shoulders and clothes in full detail with no haze or smudge. Keep everything else the same: the same "
+            f"person, his own face shape and features, the clothing, helmet, pose, lighting, background and painting "
+            f"style.".replace("his own", "her own" if who == "woman" else "his own"), amt, max(1, int(m.get("steps", 8))))
 
 
 def bank_steps(settings: dict) -> int:
@@ -1367,7 +1471,8 @@ def bank_steps(settings: dict) -> int:
         return 6
 
 
-_CHILDISH = re.compile(r"\b(nine years old|(?<!not )a (?:small )?child\b|boy|girl|kid)\b")   # not "not a child"
+_CHILDISH = re.compile(r"\b(nine years old|(?<!not )a (?:small )?child\b|(?<!not a )(?<!not a small )child\b|boy|girl|kid)\b")
+#                                                                  "child male human" from Age, not "not a child"
 
 
 _NOT_A_FACE = re.compile(r"\b(were\w*|lycanthrope|muzzle|snout|beak|tentacles?|mandibles|hyena|gnoll|lizard\w*|"
@@ -1381,6 +1486,8 @@ def bank_fits(text: str, race: str = "") -> bool:
     """Whether a person's photo is a fair start: not for beasts, monsters, the undead or ghosts, whose faces the
     words have to make on their own."""
     low, rc = text.lower(), str(race or "").lower()
+    if rc and not re.search(rf"\b{re.escape(rc)}\b", low):          # Mia the lycanthrope walks about as a human
+        rc = ""                                                      # girl, and is described as one
     if rc and (_BEASTLY.search(rc) or _MONSTROUS.search(rc) or _UNDEAD.search(rc) or _NOT_A_FACE.search(rc)):
         return False
     if _BANK_LOOK.search(low):                                     # a photo's hair, shirt and clean chin win over
@@ -1388,8 +1495,8 @@ def bank_fits(text: str, race: str = "") -> bool:
     return not (_NOT_A_FACE.search(low) or _MONSTROUS.search(low) or incorporeal(low))   # beggar came out combed
 
 
-_BANK_LOOK = re.compile(r"\b(bald|shaven head|smooth shaven head|beard|bearded|bare-chested|shirtless|no shirt|"
-                        r"shoulders bare|bare shoulders|ponytail)\b")
+_BANK_LOOK = re.compile(r"\b(?!x)x\b")                             # nothing for now: bald, beards, bare chests and
+#                                                                  ponytails are painted in by bank_fill
 
 
 def bank_pick(settings: dict, race: str = "", text: str = "") -> Optional[Path]:
@@ -1397,7 +1504,7 @@ def bank_pick(settings: dict, race: str = "", text: str = "") -> Optional[Path]:
     child folder). Dealt like cards from a shuffled deck, so no face comes back until all have been used.
     None when nothing fits."""
     root = bank_root(settings)
-    if not bank_fits(text, race):
+    if not bank_fits(text, race) and not bank_monster(settings, text, race):
         return None
     child = bool(_CHILDISH.search(text.lower())) if text else False
     race_ = re.sub(r"[^a-z\-]", "", str(race or "").lower())
@@ -1445,6 +1552,299 @@ def edit_prompt(settings: dict, expression: str = "", change: str = "") -> str:
         return f"Change the person's facial expression to {words}. {keep}"
     change = change.strip().rstrip(".")
     return f"{change[:1].upper()}{change[1:]}. {keep}"
+
+
+def bank_bald(text: str) -> bool:
+    """Whether the words ask for a bald or shaven head: bank_fill then paints over the photo's hair."""
+    return bool(re.search(r"\b(bald|shaven head|hairless head|bare scalp)\b", str(text or "").lower()))
+
+
+def bank_wide(text: str) -> float:
+    """How much wider a bank face is made for the words: a fat man's from a thin man's photo."""
+    low = str(text or "").lower()
+    return 1.35 if re.search(r"\b(very fat|obese|enormously fat|grossly fat)\b", low) else 1.0   # plump or a
+    #                                                                  double chin is left to the words: covering the
+    #                                                                  photo's cheeks covers who it is (halflings all
+    #                                                                  came out one face)
+
+
+def bank_bare(text: str) -> bool:
+    """Whether the words ask for a bare chest or bare shoulders: bank_fill then paints skin below the chin."""
+    return bool(re.search(r"\b(bare-chested|shirtless|no shirt|bare chest|shoulders bare|bare shoulders)\b",
+                          str(text or "").lower()))
+
+
+def bank_nose(text: str) -> float:
+    """How much bigger a bank face's nose is made for the words: a gnome's long, pointed or hooked one."""
+    low = str(text or "").lower()
+    if not re.search(r"\bgnomes?\b", low):                           # a gnome's only: a human's "long, thin nose"
+        return 1.0                                                   # from the face words is the photo's to keep
+    return 1.5 if re.search(r"\b(very large|very long|long|hooked|crooked|pointed)\b[^,]{0,15}\bnose\b",
+                            low) else 1.0
+
+
+def bank_ears(text: str) -> bool:
+    """Whether the words ask for big pointed ears (a gnome's): bank_fill then paints them on."""
+    if not re.search(r"\bgnomes?\b", str(text or "").lower()):       # a gnome's only: an elf's or a drow's come
+        return False                                                 # out of the words well enough
+    return bool(re.search(r"\b(big|large|long)\b[^,]{0,10}\bears\b[^,]{0,20}\b(point|points|pointed)\b|"
+                          r"\b(big|large|long)\b[^,]{0,25}\bpointed ears\b", str(text or "").lower()))
+
+
+def bank_beard(text: str) -> bool:
+    """Whether the words ask for a long beard (a dwarf's, a wizard's): bank_fill then paints over the photo's
+    chin and neck, which would otherwise keep a short one."""
+    return bool(re.search(r"\b(long|very long|braided|forked|chest|waist)\b[^,]*\bbeard\b|\bbeard\b[^,]*\b(chest|waist)\b",
+                          str(text or "").lower()))
+
+
+def bank_body(settings: dict, face: str = "") -> Optional[bytes]:
+    """A painted head-and-shoulders picture from faces/_bodies for bank_fill, of the face's gender when the
+    face's path says it (male_*.png, female_*.png), any of them otherwise; None when there are none."""
+    d = bank_root(settings) / "_bodies"
+    parts = {x.lower() for x in Path(face).parts}
+    sex = "female" if "female" in parts else "male" if "male" in parts else ""
+    try:
+        got = [f for f in d.iterdir() if f.suffix.lower() in _FACE_EXT and (not sex or f.stem.startswith(sex + "_"))]
+        return random.choice(got).read_bytes() if got else None
+    except OSError:
+        return None
+
+
+def bank_fill(data: bytes, body: Optional[bytes] = None, scale: float = 1.0, beard: bool = False,
+              bald: bool = False, wide: float = 1.0, bare: bool = False, nose: float = 1.0,
+              ears: bool = False, blur: float = 0.0, chin: bool = False) -> bytes:
+    """A bank face with the blurred padding around it painted over. The faces were cut from photos that end at
+    the chin, so the bottom of each and often its sides are a smooth blur - and a picture started from a blur
+    keeps it: the bottom half washed out, or the face in a soft circle. The blur (smooth areas reaching the
+    edge) gets a dark shoulders-and-neck shape in the collar's color and brush-sized light and dark over a
+    blurred copy of the picture, which the painting turns into clothes and background. With body (a painted
+    head-and-shoulders picture, faces/_bodies), its light and dark - folds, straps, a hood's edge - go over
+    that shape instead: real painted shapes come back as clothes, where a soft fill came back as blur and a
+    made-up texture as blocks."""
+    try:
+        import io
+        from PIL import Image, ImageChops, ImageDraw, ImageFilter
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:  # noqa: BLE001
+        return data
+    w, h = im.size
+    if chin:                                                         # a child: a bigger head on a smaller body, and
+        scale = max(scale, 0.9)                                      # a boy's plain tunic folds - a woman's bodice
+        body = None                                                  # painting gave girls a grown woman's figure
+        try:
+            bd_ = sorted((Path(__file__).resolve().parent.parent / "faces" / "_bodies").glob("male_*.png"))
+            if bd_:
+                body = random.choice(bd_).read_bytes()
+        except OSError:
+            body = None
+    sw, sh = max(3, w // 8), max(3, h // 8)
+    sm = im.convert("L").filter(ImageFilter.FIND_EDGES).resize((sw, sh), Image.BOX).point(lambda v: 255 if v < 2 else 0)
+    sm = sm.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))
+    for box in ((0, 0, sw, 1), (0, sh - 1, sw, sh), (0, 0, 1, sh), (sw - 1, 0, sw, sh)):
+        sm.paste(255, box)                                           # the edge filter's own border is not detail
+    px = sm.load()
+    m = Image.new("L", (sw, sh), 0)
+    mp = m.load()
+    todo = [(x, y) for x in range(1, sw - 1) for y in (1, sh - 2)] + [(x, y) for y in range(1, sh - 1) for x in (1, sw - 2)]
+    while todo:                                                      # smooth blocks joined to the edge
+        x, y = todo.pop()
+        if not (0 <= x < sw and 0 <= y < sh) or mp[x, y] or not px[x, y]:
+            continue
+        mp[x, y] = 255
+        todo += [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+    if not any(m.getextrema()) and scale >= 1.0:
+        return data
+    if 0.5 < scale < 1.0:                                            # the face smaller, its eyes where they were:
+        at = ((w - round(w * scale)) // 2, round(0.335 * h * (1 - scale)))   # the bank's faces are a little
+        size = (round(w * scale), round(h * scale))                  # bigger than a painted head and shoulders
+        canvas = im.filter(ImageFilter.GaussianBlur(40))
+        canvas.paste(im.resize(size, Image.LANCZOS), at)
+        im = canvas
+        mm = Image.new("L", (w, h), 255)                             # the blur found before shrinking, shrunk with
+        inner = m.resize((w, h), Image.NEAREST).resize(size, Image.NEAREST)        # it: everything around is fill,
+        ImageDraw.Draw(inner).rectangle((0, 0, size[0] - 1, size[1] - 1), outline=255, width=max(8, w // 24))
+        mm.paste(inner, at)                                          # and its own edge too: no box around the head
+        m = mm.resize((sw, sh), Image.BOX).point(lambda v: 255 if v > 127 else 0)
+        mp = m.load()
+    yb = next((y for y in range(sh - 1, -1, -1) if sum(1 for x in range(sw) if not mp[x, y]) > sw * 0.25), sh - 1) * 8
+    eye_y = 0.335 * h                                                # where the bank puts the eyes
+    hair = im.crop((int(0.42 * w), max(0, int(eye_y - 0.42 * w * scale)), int(0.58 * w),
+                    max(1, int(eye_y - 0.35 * w * scale)))).resize((1, 1), Image.BOX).getpixel((0, 0))   # the crown
+    if beard or bare or chin:                                        # a long beard: the photo's chin and neck go
+        ym = int(eye_y + (0.2 if beard else 0.32 if chin else 0.34) * w * scale)   # too, from the mouth down, or the painting
+        #                                                              (chin: a child's photo - its bright T-shirt
+        #                                                              came back as a pale band under the chin)
+        #                                                              (a bare chest: from under the chin, or the
+        #                                                              photo's collar stays)
+        m.paste(255, (0, ym // 8, sw, sh))                           # keeps a short one
+        mp = m.load()
+        yb = min(yb, ym + 40)
+    m = m.filter(ImageFilter.MaxFilter(5))                           # over the photo's hard edge, not up to it
+    mp = m.load()
+    base = im.filter(ImageFilter.GaussianBlur(30))
+    back = (im.crop((0, 0, w, int(eye_y))).resize((w, h), Image.BILINEAR) if chin else im).filter(
+        ImageFilter.GaussianBlur(80 if chin else 70))                # the background: a child's from above its
+    #                                                                  shoulders only - its photo's pale shirt
+    #                                                                  smeared beside the narrow shoulders
+    try:                                                             # with a painted backdrop's light and brush
+        from PIL import ImageOps                                     # strokes on it: a plain blur is painted back
+        bds_ = sorted((Path(__file__).resolve().parent.parent / "faces" / "_backdrops").glob("*.png"))   # as haze
+        if bds_:
+            bl_ = ImageOps.autocontrast(Image.open(random.choice(bds_)).convert("L").resize((w, h), Image.LANCZOS))
+            bl_ = Image.blend(Image.new("L", (w, h), 128), bl_, 0.55)
+            back = ImageChops.add(back, Image.merge("RGB", (bl_, bl_, bl_)), 1.0, -128)
+    except Exception:  # noqa: BLE001 - no backdrops: the plain blur
+        pass
+    #                                                                  a photo's pale shirt blurred in came back as
+    #                                                                  a washed-out smear beside the shoulders
+    sc = im.crop((w // 3, max(0, yb - 40), 2 * w // 3, max(1, yb - 5))).resize((1, 1), Image.BOX).getpixel((0, 0))
+    sc = tuple(int(v * 0.6) for v in sc)                             # the collar's color, darker
+    if bare:                                                         # a bare chest: skin, from the chin down
+        sc = im.crop((int(0.46 * w), int(eye_y + 0.06 * w * scale), int(0.54 * w), int(eye_y + 0.13 * w * scale))
+                     ).resize((1, 1), Image.BOX).getpixel((0, 0))
+        body = None
+    d = ImageDraw.Draw(base)
+    sx0, sx1 = (0.0, 1.0) if chin else (-0.05, 1.05)                # a child: to the edges too (narrow ones came back blurred)
+    d.ellipse((int(sx0 * w), yb - 10, int(sx1 * w), yb + int(1.2 * h)), fill=sc)
+    d.rectangle((int(0.35 * w), yb - 60, int(0.65 * w), yb + 20), fill=sc)
+    base = base.filter(ImageFilter.GaussianBlur(12))
+    shape = Image.new("L", (w, h), 0)                                # where the shoulders go: the body picture's
+    ds = ImageDraw.Draw(shape)                                       # folds there only - its arches and walls
+    ds.ellipse((int(sx0 * w), yb - 10, int(sx1 * w), yb + int(1.2 * h)), fill=255)   # behind would come
+    ds.rectangle((int(0.35 * w), yb - 60, int(0.65 * w), yb + 20), fill=255)          # back as a background
+    shape = shape.filter(ImageFilter.GaussianBlur(16))
+    filled = None
+    if body:
+        try:
+            from PIL import ImageOps
+            lum = ImageOps.autocontrast(Image.open(io.BytesIO(body)).convert("L").resize((w, h), Image.LANCZOS))
+            lum = lum.point(lambda v: min(255, int(v * 1.6)))
+            lum = Image.blend(lum, Image.new("L", (w, h), 230), 0.35)   # folds, not a whole outfit to copy
+            filled = Image.composite(ImageChops.multiply(base, Image.merge("RGB", (lum, lum, lum))), back, shape)
+        except Exception:  # noqa: BLE001
+            filled = None
+    if filled is None:
+        lum = Image.effect_noise((w // 40 + 2, h // 40 + 2), 40).resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(14))
+        nz = Image.blend(Image.new("RGB", (w, h), (128, 128, 128)), Image.merge("RGB", (lum, lum, lum)), 0.6)
+        filled = Image.composite(ImageChops.add(base, nz, 1.0, -128), back, shape)
+    if beard:                                                        # a beard down the chest, in the hair's color,
+        bw, by = int(0.3 * w * scale), int(eye_y + 0.16 * w * scale)  # combed in long strands
+        bm = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(bm).ellipse((w // 2 - bw, by, w // 2 + bw, by + int(0.45 * h)), fill=255)
+        bm = bm.filter(ImageFilter.GaussianBlur(14))
+        strands = Image.effect_noise((w // 5 + 1, h // 60 + 1), 22).resize((w, h), Image.BICUBIC)
+        col = Image.new("RGB", (w, h), tuple(int(v * 0.75) for v in hair))
+        col = ImageChops.add(col, Image.merge("RGB", (strands, strands, strands)), 1.0, -128)
+        filled = Image.composite(col, filled, bm)
+    mask = m.resize((w, h), Image.BILINEAR).filter(ImageFilter.GaussianBlur(24))
+    out = Image.composite(filled, im, mask)
+    s_ = w * scale
+    skin_ = im.crop((int(0.46 * w), int(eye_y + 0.06 * s_), int(0.54 * w), int(eye_y + 0.13 * s_))
+                    ).resize((1, 1), Image.BOX).getpixel((0, 0))
+    if wide > 1.0:                                                   # a fat face: full cheeks, jowls and a double
+        fw = 0.27 * s_ * wide                                        # chin in the skin's color round the photo's
+        fat = Image.new("L", (w, h), 0)                              # own eyes, nose and mouth
+        ImageDraw.Draw(fat).ellipse((int(w / 2 - fw), int(eye_y - 0.02 * s_), int(w / 2 + fw), int(eye_y + 0.52 * s_)), fill=110)
+        keep = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(keep).ellipse((int(w / 2 - 0.25 * s_), int(eye_y - 0.16 * s_), int(w / 2 + 0.25 * s_), int(eye_y + 0.36 * s_)), fill=255)
+        fat = ImageChops.subtract(fat.filter(ImageFilter.GaussianBlur(12)), keep.filter(ImageFilter.GaussianBlur(16)))
+        jowl = Image.new("RGB", (w, h), skin_)
+        sh_ = Image.radial_gradient("L").resize((int(2 * fw), int(0.7 * s_)))
+        lay = Image.new("L", (w, h), 0)
+        lay.paste(sh_, (int(w / 2 - fw), int(eye_y - 0.05 * s_)))
+        jowl = ImageChops.subtract(jowl, Image.merge("RGB", (lay, lay, lay)).point(lambda v: v // 5))
+        out = Image.composite(jowl, out, fat)
+    if nose > 1.0:                                                   # a gnome's long nose: the photo's own, made
+        nb = (int(w / 2 - 0.09 * s_), int(eye_y + 0.02 * s_), int(w / 2 + 0.09 * s_), int(eye_y + 0.25 * s_))
+        part = out.crop(nb)                                          # bigger, hung from the same bridge
+        pw, ph = int(part.width * (1 + (nose - 1) * 0.6)), int(part.height * nose)
+        part = part.resize((pw, ph), Image.LANCZOS)
+        pm = Image.new("L", (pw, ph), 0)
+        ImageDraw.Draw(pm).ellipse((0, 0, pw - 1, ph - 1), fill=255)
+        out.paste(part, (w // 2 - pw // 2, nb[1]), pm.filter(ImageFilter.GaussianBlur(max(3, pw // 10))))
+    if ears:                                                         # big ears tapering to points, out and up
+        em = Image.new("L", (w, h), 0)
+        de = ImageDraw.Draw(em)
+        for sx in (-1, 1):
+            x0 = w / 2 + sx * 0.27 * s_
+            de.polygon([(x0, eye_y - 0.04 * s_), (x0 + sx * 0.06 * s_, eye_y + 0.18 * s_),
+                        (x0 + sx * 0.2 * s_, eye_y - 0.24 * s_)], fill=255)
+        em = em.filter(ImageFilter.GaussianBlur(5))
+        earc = Image.new("RGB", (w, h), tuple(int(v * 0.9) for v in skin_))
+        out = Image.composite(earc, out, em)
+    if bald:                                                         # the photo's hair painted over with a bare
+        skin = skin_                                                 # scalp in its own skin color, or the hair wins
+        hw = 0.29 * s_ * min(wide, 1.15)
+        dome = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(dome).ellipse((int(w / 2 - hw), int(eye_y - 0.43 * s_), int(w / 2 + hw), int(eye_y + 0.05 * s_)), fill=255)
+        dome = ImageChops.multiply(dome, Image.linear_gradient("L").resize((w, h)).point(   # down to the brow
+            lambda v, top=int(255 * (eye_y - 0.1 * s_) / h): 255 if v < top else max(0, 255 - (v - top) * 12)))
+        dome = dome.filter(ImageFilter.GaussianBlur(10))
+        shade = Image.radial_gradient("L").resize((int(2 * hw), int(0.6 * s_)))    # light on top, darker round
+        scalp = Image.new("RGB", (w, h), skin)
+        sh_full = Image.new("L", (w, h), 128)
+        sh_full.paste(shade, (int(w / 2 - hw), int(eye_y - 0.46 * s_)))
+        scalp = ImageChops.subtract(scalp, Image.merge("RGB", (sh_full, sh_full, sh_full)).point(lambda v: v // 4), 1, 16)
+        hair_ = ImageChops.difference(out, Image.new("RGB", (w, h), skin)).convert("L").point(   # only where there
+            lambda v: 255 if v > 38 else 0).filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(8))   # is
+        dome = ImageChops.multiply(dome, hair_)                      # hair: a head already bald keeps its own scalp
+        #                                                              (painted over, it came back a blurred patch)
+        fh_ = out.crop((int(w / 2 - 0.1 * s_), int(eye_y - 0.2 * s_), int(w / 2 + 0.1 * s_), int(eye_y - 0.08 * s_)))
+        tex_ = fh_.convert("L").resize((max(1, fh_.width // 2), max(1, fh_.height // 2))).resize(   # the forehead's own
+            (w, h), Image.BICUBIC)                                   # skin texture on it, not a flat patch
+        tex_ = Image.blend(Image.new("L", (w, h), 128), tex_.point(lambda v, m=int(sum(fh_.convert("L").getdata()) /
+                                                                              max(1, fh_.width * fh_.height)): 128 + (v - m)), 0.8)
+        scalp = ImageChops.add(scalp, Image.merge("RGB", (tex_, tex_, tex_)), 1.0, -128)
+        out = Image.composite(scalp, out, dome)
+    if blur > 0:                                                     # a monster's: the face's shape and light,
+        out = out.filter(ImageFilter.GaussianBlur(blur))             # not a person's features, and a sallow,
+        olive_ = ImageChops.multiply(out, Image.new("RGB", (w, h), (150, 150, 95))).point(lambda v: min(255, int(v * 1.5)))
+        out = Image.blend(out, olive_, 0.6)                          # coarser cast: the second pass takes it further
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def bank_hulk(data: bytes, text: str = "", rnd: Optional[random.Random] = None) -> bytes:
+    """A start picture for a hulking brute (an ogre): the bank face small and high, a huge body below it in the
+    face's skin color - wider or narrower, a bigger or smaller belly, a vest, robes or nothing as the words
+    say - so the painting comes out a small head sunk between massive shoulders, every one built a little
+    differently and with a face of its own."""
+    try:
+        import io
+        from PIL import Image, ImageDraw, ImageFilter
+        face = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:  # noqa: BLE001
+        return data
+    rnd = rnd or random.Random()
+    low = str(text or "").lower()
+    w, h = face.size
+    skin = face.crop((int(.46 * w), int(.36 * h), int(.54 * w), int(.42 * h))).resize((1, 1), Image.BOX).getpixel((0, 0))
+    c = face.filter(ImageFilter.GaussianBlur(80))
+    dr = ImageDraw.Draw(c)
+    wide = rnd.uniform(0.25, 0.45)                                   # how far past the frame the shoulders go
+    top = rnd.uniform(0.17, 0.24)                                    # how high they hunch
+    dr.ellipse((int(-wide * w), int(top * h), int((1 + wide) * w), int(1.5 * h)), fill=tuple(int(v * 0.85) for v in skin))
+    belly = rnd.uniform(0.0, 0.12)
+    dr.ellipse((int((0.05 - belly) * w), int(0.6 * h), int((0.95 + belly) * w), int(1.25 * h)),
+               fill=tuple(int(v * 0.92) for v in skin))
+    if "robe" in low:                                                # an ogre mage's robes, pale, over it all
+        x0 = rnd.uniform(0.08, 0.2)
+        dr.rectangle((int(x0 * w), int((top + 0.12) * h), int((1 - x0) * w), h), fill=(150, 140, 130))
+    elif "bare chest" not in low or "vest" in low:                   # a vest down the front
+        x0 = rnd.uniform(0.18, 0.26)
+        dr.rectangle((int(x0 * w), int(rnd.uniform(0.5, 0.58) * h), int((1 - x0) * w), h), fill=(70, 48, 32))
+    c = c.filter(ImageFilter.GaussianBlur(14))
+    sc = rnd.uniform(0.38, 0.46)                                     # the head: small, high, its own
+    small = face.resize((int(w * sc), int(h * sc)), Image.LANCZOS)
+    m = Image.new("L", small.size, 0)
+    ImageDraw.Draw(m).ellipse((int(.2 * small.width), int(.05 * small.height), int(.8 * small.width), int(.62 * small.height)), fill=255)
+    at = ((w - small.width) // 2 + int(rnd.uniform(-0.03, 0.03) * w), int((top + 0.02) * h - 0.335 * h * sc))
+    c.paste(small.filter(ImageFilter.GaussianBlur(5)), at, m.filter(ImageFilter.GaussianBlur(8)))
+    buf = io.BytesIO()
+    c.save(buf, "PNG")
+    return buf.getvalue()
 
 
 def fit_init(data: bytes, width: int, height: int) -> bytes:
@@ -1590,7 +1990,8 @@ class Engine:
     def generate(self, prompt: str, negative: str, count: int,
                  on_image: Callable[[int, bytes], None] = lambda i, b: None,
                  seed: Optional[int] = None, init: Optional[bytes] = None,
-                 strength: float = 0.77, steps: Optional[int] = None) -> List[bytes]:
+                 strength: float = 0.77, steps: Optional[int] = None,
+                 then_edit: Optional[Tuple[str, float, int]] = None) -> List[bytes]:
         """`count` candidate images (PNG bytes), one request each so they can be shown as they arrive. With `init`
         (an image's bytes) each one starts from that picture instead of from noise (img2img), `strength` being how
         far it may move away from it."""
@@ -1651,6 +2052,18 @@ class Engine:
             if not imgs:
                 raise GeneratorError("The engine returned no image.")
             data = base64.b64decode(imgs[0].split(",", 1)[-1])
+            if then_edit and not self.canceled.is_set():            # a second pass, told in words what to change
+                ep_ = {k: v for k, v in payload.items() if k not in ("init_images", "denoising_strength", "steps")}
+                ep_.update(prompt=then_edit[0], init_images=[base64.b64encode(data).decode("ascii")],
+                           denoising_strength=float(then_edit[1]), steps=int(then_edit[2]), resize_mode=0)
+                self.progress((i + 0.9) / count, f"Candidate {i + 1} of {count}: second pass...")
+                try:
+                    r2_ = self._call("/sdapi/v1/img2img", ep_, timeout=float(self.e.get("image_timeout_seconds", 900)))
+                    im2_ = r2_.get("images") or []
+                    if im2_:
+                        data = base64.b64decode(im2_[0].split(",", 1)[-1])
+                except (urllib.error.URLError, OSError, ValueError):
+                    pass                                             # the first pass stands
             out.append(data)
             on_image(i, data)
             self.progress((i + 1) / count, f"Candidate {i + 1} of {count} done")

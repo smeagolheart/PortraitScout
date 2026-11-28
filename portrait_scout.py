@@ -46,7 +46,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
-VERSION = "1.5"
+VERSION = "2.0"
 T_BMP, T_WAV, T_BCS, T_IDS, T_CRE, T_DLG, T_2DA = 0x0001, 0x0004, 0x03EF, 0x03F0, 0x03F1, 0x03F3, 0x03F4
 T_ARE, T_WMP = 0x03F2, 0x03F7
 EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre", T_DLG: ".dlg", T_2DA: ".2da",
@@ -54,6 +54,12 @@ EXT = {T_BMP: ".bmp", T_WAV: ".wav", T_BCS: ".bcs", T_IDS: ".ids", T_CRE: ".cre"
 SOURCE_EXTS = {".tra", ".d", ".baf", ".tph", ".tpa", ".tpp", ".tp2", ".tp3", ".tpl"}
 NO_PORTRAIT = {"", "NONE", "NO_PORT", "NOPORT"}
 SEX_NAMES = {1: "Male", 2: "Female", 3: "Other", 4: "Neither"}
+
+
+def shown_sex(sex: object) -> str:
+    """A creature's sex as shown: "Neither" says nothing worth showing."""
+    s = str(sex or "")
+    return "" if s.lower() == "neither" else s
 RACE_FALLBACK = {1: "Human", 2: "Elf", 3: "Half-Elf", 4: "Dwarf", 5: "Halfling", 6: "Gnome", 7: "Half-Orc", 183: "Tiefling"}
 Progress = Callable[[str], None]
 
@@ -615,7 +621,7 @@ def analyze(game_dir: str, mod_dir: str, merge_names: bool = False, progress: Pr
                 r["sex"] = SEX_NAMES.get(c["sex"], "")
                 an = anim_ids.get(c["anim"]) or anim_ids.get(c["anim"] & 0xFF00) or ""
                 r["anim"] = nice(an) or (f"0x{c['anim']:04X}" if c["anim"] else "")
-                r["colors"] = creature_colors(c.get("colors") or [], pal, rsets)
+                r["colors"] = creature_colors(c.get("colors") or [], pal, rsets, str(c.get("cre") or ""))
     # one row per NPC: dialogs of the same-named creature are one row when they share a creature file or portrait, or
     # do not differ in race / gender / animation (two different "Guard" creatures stay apart)
     merged: Dict[str, List[dict]] = defaultdict(list)
@@ -1621,7 +1627,7 @@ def analyze_source(game_dir: str, mod_dir: str, merge_names: bool = False, progr
             an = (anim_ids.get(c["anim"]) or anim_ids.get(c["anim"] & 0xFF00) or "") if c["anim"] else ""
             r["anim"] = nice(an) or (f"0x{c['anim']:04X}" if c["anim"] else "")
             if pal_ and c.get("colors"):
-                r["colors"] = creature_colors(c.get("colors") or [], pal_, rsets_)
+                r["colors"] = creature_colors(c.get("colors") or [], pal_, rsets_, str(c.get("cre") or ""))
         for c in infos:
             was = c.get("mod_large") or c.get("mod_small") or ""
             now = c["large"] or c["small"]
@@ -1718,12 +1724,13 @@ COLUMNS = [("name", "Creature"), ("lines", "Lines"), ("portrait", "Portrait"), (
 
 def as_text(res: dict, rows: Optional[List[dict]] = None) -> str:
     rows = res["rows"] if rows is None else rows
-    w = [max(len(h), *(len(str(r[k])) for r in rows)) if rows else len(h) for k, h in COLUMNS]
+    cell = lambda r, k: shown_sex(r[k]) if k == "sex" else str(r[k])   # noqa: E731
+    w = [max(len(h), *(len(cell(r, k)) for r in rows)) if rows else len(h) for k, h in COLUMNS]
     lines = [f"Creatures of {res['mod']}  ({len(rows)} creature(s), {sum(r['lines'] for r in rows):,} line(s))", ""]
     lines.append("  ".join(h.ljust(w[i]) if i != 1 else h.rjust(w[i]) for i, (k, h) in enumerate(COLUMNS)))
     lines.append("  ".join("-" * x for x in w))
     for r in rows:
-        lines.append("  ".join(str(r[k]).ljust(w[i]) if i != 1 else str(r[k]).rjust(w[i]) for i, (k, h) in enumerate(COLUMNS)))
+        lines.append("  ".join(cell(r, k).ljust(w[i]) if i != 1 else cell(r, k).rjust(w[i]) for i, (k, h) in enumerate(COLUMNS)))
     users: Dict[str, List[str]] = defaultdict(list)
     for r in rows:
         for p in filter(None, r["large"].split("/")):
@@ -1752,7 +1759,7 @@ def write_csv(res: dict, path: str, rows: Optional[List[dict]] = None) -> None:
                     "animation", "dialog", "cre", "areas", "notes"])
         for r in rows:
             w.writerow([r["name"], r["lines"], r["large"] or r["small"], r["small"], r.get("large_size", ""),
-                        r.get("small_size", ""), r["race"], r["sex"], r["anim"],
+                        r.get("small_size", ""), r["race"], shown_sex(r["sex"]), r["anim"],
                         ",".join(sorted(set(r["dialogs"]))), ",".join(sorted(set(r["cres"]))), areas_text(r),
                         " | ".join(x for x in r["origin"] if not x.startswith("Appears in: "))])
 
@@ -1919,7 +1926,8 @@ def _rgb_word(rgb: Tuple[int, int, int], slot: str = "cloth") -> str:
     h, c, v = _hsv(rgb)
     if slot == "skin":                                               # the ramp is a skin tone, not a garment
         if c > 0.18 and not 5 <= h < 50:                             # orcs, goblins, drow: skin that is not flesh
-            return _rgb_word(rgb) + " skin"
+            w_ = _rgb_word(rgb)                                      # gold skin is painted as metal
+            return {"gold": "sallow yellow", "orange": "ruddy orange"}.get(w_, w_) + " skin"
         if c < 0.07 and v < 0.55:                                    # a gray, bloodless ramp: drow, duergar, undead
             return ("deep charcoal-gray skin the color of wet slate" if v < 0.30 else
                     "charcoal-gray skin the color of wet slate" if v < 0.45 else
@@ -2011,8 +2019,23 @@ _SET_KIND = {"drow": "drow", "elf": "elf", "kobold": "kobold", "hobgoblin": "hob
              "duegar": "duergar", "duergar": "duergar"}                  # the game spells Duergar without the r
 
 
+def random_pick(who: str, slot: str, opts: List[int],
+                rsets: Optional[Dict[int, Tuple[str, List[int]]]] = None) -> int:
+    """Which of a random set's colors stands for this creature: the same one every time, and the same one the
+    sprite helper (SpriteShot) paints it in - CRC32 of "NAME:slot" - so the portrait and the sprite agree. A
+    roll of 200 or more is itself a set (OgreSkin holds DrowMajor's number), rolled again, as the game does."""
+    import zlib
+    o = opts[zlib.crc32(f"{who.upper()}:{slot}".encode("latin-1")) % len(opts)]
+    for depth_ in range(1, 8):
+        nxt_ = (rsets or {}).get(o)
+        if not nxt_ or not nxt_[1]:
+            break
+        o = nxt_[1][zlib.crc32(f"{who.upper()}:{slot}:{depth_}".encode("latin-1")) % len(nxt_[1])]
+    return o
+
+
 def creature_colors(raw: List[int], pal: Dict[int, Tuple[int, int, int]],
-                     rsets: Optional[Dict[int, Tuple[str, List[int]]]] = None) -> Dict[str, str]:
+                     rsets: Optional[Dict[int, Tuple[str, List[int]]]] = None, who: str = "") -> Dict[str, str]:
     """The seven color bytes of a creature file as words: what it wears, its hair and its skin. The sprite the
     player sees is painted from these, so a portrait that matches them looks like the same character.
 
@@ -2027,13 +2050,24 @@ def creature_colors(raw: List[int], pal: Dict[int, Tuple[int, int, int]],
         named = (rsets or {}).get(raw[i])
         if named:
             name, opts = named
-            rough = [(o, _rgb_word(pal[o])) for o in opts if o in pal]   # vote on the plain color name, so
+            got_ = [o for o in opts if o in pal]
+            if who and got_:                                     # the game rolls one of the set when it makes the
+                pk_ = random_pick(who, slot, got_, rsets)       # creature: this one stands in
+                if pk_ in pal:
+                    out[slot] = _rgb_word(pal[pk_], want)
+                out["_random"] = ", ".join(x for x in (out.get("_random", ""), f"{slot} ({name})") if x)
+                rough = []
+            else:
+                rough = [(o, _rgb_word(pal[o])) for o in got_]   # vote on the plain color name, so
             words = Counter(w for _, w in rough)                 # that shades of one color do not split it
             if words:                                            # the game picks one of these at random, so say
                 word, n = words.most_common(1)[0]                # nothing unless nearly all of them agree
                 if n >= len(rough) * 0.6:
                     same = sorted(o for o, w in rough if w == word)
                     out[slot] = _rgb_word(pal[same[len(same) // 2]], want)   # a middling one of them, in full
+                elif slot in ("skin", "hair"):                   # no one color: any of them, as the game does -
+                    out[slot + "_any"] = "|".join(sorted({_rgb_word(pal[o], want) for o, _ in rough}))   # the
+                    #                                              generator picks one for each creature
             low = name.lower()
             for key, kind in _SET_KIND.items():                      # DrowSkin, HobgoblinSkin, OgreSkin...
                 if low.startswith(key) and (slot in ("skin", "hair") or "kind" not in out):
@@ -2241,6 +2275,46 @@ def _read_set(listp: Path) -> Tuple[str, int, List[List[str]]]:
             if len(f) >= 2 and f[0].strip() and f[1].strip():
                 rows.append(([x.strip() for x in f] + [""] * 5)[:5])   # cre, picture, name, areas, ship
     return title, comp, rows
+
+
+def preview_html(title: str, items: List[dict]) -> str:
+    """A standalone web page of the chosen portraits, to look the set over or show it to someone: one card each,
+    the portrait (as JPEG, inside the page), the creature's name and what it is. items: name, kind, jpeg, cre."""
+    import base64
+    import html as _h
+    cards = []
+    for it in items:
+        src = "data:image/jpeg;base64," + base64.b64encode(it["jpeg"]).decode("ascii")
+        nm, kd, cr = (_h.escape(str(it.get(k) or "")) for k in ("name", "kind", "cre"))
+        cards.append(f'<div class="c" data-s="{(nm + " " + kd + " " + cr).lower()}"><img src="{src}" alt="{nm}">'
+                     f'<div class="n">{nm}</div><div class="k">{kd}</div></div>')
+    t = _h.escape(title)
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{t} - portraits</title>
+<style>
+body{{margin:0;background:#1c1b19;color:#e8e2d6;font-family:Georgia,"Palatino Linotype",serif}}
+header{{padding:18px 24px 8px;display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}}
+h1{{margin:0;font-size:26px;font-weight:normal;color:#e9c46a}}
+.m{{color:#9a9384;font-size:14px}}
+input{{margin-left:auto;padding:6px 10px;font-size:14px;background:#2a2824;color:#e8e2d6;border:1px solid #4a463e;border-radius:4px}}
+.g{{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:18px;padding:12px 24px 32px}}
+.c{{background:#2a2824;border:1px solid #3d3a33;border-radius:6px;padding:10px;text-align:center}}
+.c img{{width:169px;height:266px;display:block;margin:0 auto 8px;border:2px solid #4a463e;cursor:zoom-in}}
+.c img.big{{position:fixed;inset:0;margin:auto;width:auto;height:90vh;z-index:9;cursor:zoom-out;border-color:#e9c46a;box-shadow:0 0 0 100vmax rgba(0,0,0,.8)}}
+.n{{font-size:16px;color:#f2ead8}}
+.k{{font-size:13px;color:#9a9384;margin-top:2px}}
+</style></head><body>
+<header><h1>{t}</h1><span class="m">{len(items)} portrait(s)</span>
+<input id="q" placeholder="Search names, races..." oninput="f()"></header>
+<div class="g" id="g">{"".join(cards)}</div>
+<script>
+function f(){{const q=document.getElementById('q').value.toLowerCase().split(/\\s+/).filter(Boolean);
+document.querySelectorAll('.c').forEach(c=>{{c.style.display=q.every(w=>c.dataset.s.includes(w))?'':'none'}})}}
+document.getElementById('g').addEventListener('click',e=>{{if(e.target.tagName==='IMG')e.target.classList.toggle('big')}});
+document.addEventListener('keydown',e=>{{if(e.key==='Escape')document.querySelectorAll('img.big').forEach(i=>i.classList.remove('big'))}});
+</script></body></html>
+"""
 
 
 def export_mod(folder: str, set_name: str, entries: List[dict], convert: Optional[Callable] = None,
@@ -2622,10 +2696,10 @@ def spare_pictures(made_in: str, used: Set[str]) -> List[Path]:
     base = Path(made_in)
     if not base.is_dir():
         return []
-    try:
-        walk = list(base.rglob("*"))
-    except OSError:
-        return []
+    walk: List[Path] = []
+    for dir_, subs_, files_ in os.walk(base):                        # the creatures' sprites (_sprites) are
+        subs_[:] = [d_ for d_ in subs_ if d_.lower() != "_sprites"]  # drawn, not generated: not spares
+        walk += [Path(dir_) / f_ for f_ in files_]
     for q in walk:
         try:
             if not q.is_file() or q.suffix.lower() not in POOL_EXT:
@@ -2894,7 +2968,8 @@ TOUCH_MEMORY: Dict[str, dict] = {}        # what was last done to each picture, 
 
 def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, desc: str,
                     say: Callable[[str], None], on_done: Callable[..., None],
-                    touch_memory: Dict[str, dict], generic: bool = False) -> None:
+                    touch_memory: Dict[str, dict], generic: bool = False,
+                    change_it: Optional[Callable[[str], None]] = None) -> None:
     """Touch up a finished picture: the skin's color, how dark it is, the lips and the eyes. Opening it
     again on a picture already worked on starts from the plain one, with the sliders where they were -
     so it is the same touch up carried on, not one piled on top of another."""
@@ -3017,7 +3092,8 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
             wheel_on(ch)
     keep: Dict[str, object] = {}
     start_ = pg.suggest_tint(desc) if hasattr(pg, "suggest_tint") else ""   # type: ignore[attr-defined]
-    skin_v = tk.StringVar(value=mem.get("skin", start_ if start_ in skins else "Leave"))
+    skin_v = tk.StringVar(value="Leave")                             # always: a remembered or guessed color was
+    #                                                                  laid on before anything was asked for
     lips_v = tk.StringVar(value=mem.get("lips", "Leave"))
     amount = tk.DoubleVar(value=float(mem.get("amount", 0.9)))
     lipamt = tk.DoubleVar(value=float(mem.get("lipamt", 0.85)))
@@ -3413,6 +3489,19 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
             if redraw:
                 draw()
     nb.bind("<<NotebookTabChanged>>", tab_marks)
+    if change_it is not None:                                        # most of what this did, by asking the model
+        then_ = {"change": False}
+
+        def change_now() -> None:                                    # the touch up so far (a mirror, a color)
+            then_["change"] = True                                   # is saved first, and the change asked of
+            apply_()                                                 # that picture, not the one it started from
+        cbx_ = ttk.Button(t_skin, text="Change it...", command=change_now)
+        cbx_.pack(anchor="w", pady=(2, 4))
+        tooltip(cbx_, "Ask for any change in words (a darker skin, a scar, an eyepatch...) instead, "
+                      "with a strength.")
+    fl0_ = ttk.Checkbutton(t_skin, text="Mirror it", variable=flip_v, command=lambda: (remember(), draw()))
+    fl0_.pack(anchor="w", pady=(0, 4))                               # the same tick as on the Picture tab
+    tooltip(fl0_, "Flip the picture left to right.")
     t_color = group(t_skin, "Color it")
     sgrid = ttk.Frame(t_color)
     sgrid.pack(fill="x")
@@ -3751,6 +3840,9 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
         # the plain picture stays: Plain has something to go back to, and the next touch up starts from
         # the plain one rather than piling onto this one
         on_done(path, new_, "")
+        if change_it is not None and then_.get("change"):
+            change_it(new_)
+            return
         said = [f"{skin_v.get().lower()} skin" if amt > 0 else "",
                 f"{lips_v.get().lower()} lips" if lam > 0 else "",
                 f"{eyes_v.get().lower()} on {len(spots)} spot(s)" if eam > 0 else "",
@@ -3771,7 +3863,7 @@ def touch_up_window(dlg: object, path: str, *, pg: object, gs: dict, r: dict, de
     def reset_() -> None:
         """Every slider back where it started: nothing changed, the color the creature's own words ask for."""
         remember()
-        skin_v.set(start_ if start_ in skins else "Leave")
+        skin_v.set("Leave")
         lips_v.set("Leave")
         eyes_v.set("Leave")
         spots.clear()
@@ -4077,6 +4169,7 @@ def run_gui() -> None:
         ("10+ lines", lambda r: int(r.get("lines", 0) or 0) >= 10),
     ]
     chip_vars: Dict[str, tk.BooleanVar] = {}
+    race_pick = tk.StringVar(value="All")
     keep_vars: List[tk.BooleanVar] = []             # the cards' keep-this-face ticks, while they are on screen
     ttk.Label(fbar, text="Also show:", foreground="#666").pack(side="left")
     party_cb.pack(side="left", padx=(6, 0))
@@ -4091,9 +4184,24 @@ def run_gui() -> None:
     pic_chk = ttk.Checkbutton(fbar, text="Mod's portraits only", variable=modpic_var, command=modpic_changed)
     pic_chk.pack(side="left", padx=(24, 0))
     tooltip(pic_chk, pic_tip)
+    ttk.Label(fbar, text="Race:").pack(side="left", padx=(24, 4))
+
+    def race_list() -> None:
+        seen_: Dict[str, int] = {}
+        for o in (all_rows() if state.get("res") else []):
+            k_ = str(o.get("race") or "").strip()
+            if k_:
+                seen_[k_] = seen_.get(k_, 0) + 1
+        race_box.config(values=["All"] + [f for f in sorted(seen_, key=str.lower)])
+    race_box = ttk.Combobox(fbar, textvariable=race_pick, width=14, state="readonly", postcommand=race_list)
+    race_box.pack(side="left")
+    race_box.bind("<<ComboboxSelected>>", lambda e: chip_changed())
+    tooltip(race_box, "Show only creatures of one race (from their creature file), in the gallery and the "
+                      "Expanded view.")
 
     def chip_changed(*_a: object) -> None:
         state["page"] = 0
+        auto_ui["page"] = 0                                          # the Expanded view's pages too
         refresh()
         if view_var.get() == "export":
             fill_export()
@@ -4109,6 +4217,11 @@ def run_gui() -> None:
                       "(.csv) - pick the type in the save window. Analyze also saves it as text next to the program.")
     mod_btn = ttk.Button(ebar, text="Create mod...")
     mod_btn.pack(side="left", padx=(6, 0))
+    prev_btn = ttk.Button(ebar, text="Preview page...")
+    prev_btn.pack(side="left", padx=(6, 0))
+    tooltip(prev_btn, "Save a web page of the proposed portraits - each with its name, race and gender - to look "
+                      "the set over in a browser or share it. One file, the pictures inside it. Create mod... "
+                      "puts one in the mod too (preview.html).")
     clear_btn = ttk.Button(ebar, text="Clear all proposals")
     clear_btn.pack(side="left", padx=6)
     ttk.Label(ebar, textvariable=prop_label, foreground="#555", font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=10)
@@ -5400,33 +5513,63 @@ def run_gui() -> None:
         inner = tk.Frame(cv, bg=CARD)
         cv.create_window((0, 0), window=inner, anchor="nw")
         hold: List[object] = []
+        ticked: Dict[str, tk.BooleanVar] = {}
+        cur = {"i": 0, "cells": []}                                  # the keyboard's place: (cell, picture)
 
         def spare_gone(q: Path) -> None:
             """Delete a spare from inside the chooser: the ones that came out wrong go for good."""
-            if not messagebox.askyesno("Portrait Scout", f"Delete {q.name} from the disk?\n\n"
-                                       "This cannot be undone.", parent=w):
+            spares_gone([q])
+
+        def spares_gone(qs: List[Path]) -> None:
+            if not qs or not messagebox.askyesno(
+                    "Portrait Scout", (f"Delete {qs[0].name} from the disk?" if len(qs) == 1 else
+                                       f"Delete the {len(qs):,} ticked pictures from the disk?") +
+                    "\n\nThis cannot be undone.", parent=w):
                 return
             went = bad = 0
-            for f in {str(q)} | {str(x) for x in q.parent.glob(plain_of(str(q)).stem + "_*")
-                                 if x.is_file() and x.suffix.lower() in POOL_EXT}:
-                try:
-                    os.remove(f)
-                    went += 1
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    bad += 1
-            if q in spare:
-                spare.remove(q)
+            for q in qs:
+                for f in {str(q)} | {str(x) for x in q.parent.glob(plain_of(str(q)).stem + "_*")
+                                     if x.is_file() and x.suffix.lower() in POOL_EXT}:
+                    try:
+                        os.remove(f)
+                        went += 1
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        bad += 1
+                if q in spare:
+                    spare.remove(q)
+                ticked.pop(str(q), None)
             state["pool_files"] = None                           # the Pool tab reads the folder again
-            said.set(f"Deleted {went:,} file(s)." + (f" {bad:,} could not be deleted." if bad else ""))
             fill()
+            said.set(f"Deleted {went:,} file(s)." + (f" {bad:,} could not be deleted." if bad else ""))
+
+        def shown() -> List[Path]:
+            return ([q for q in spare if fit(q)] if only.get() else list(spare))[:300]
+
+        def tick_all() -> None:
+            on_ = not all(v.get() for v in ticked.values()) if ticked else True
+            for v in ticked.values():
+                v.set(on_)
+            tick_b.config(text="Untick all" if on_ else "Tick all")
+
+        tick_b = ttk.Button(top_, text="Tick all", command=lambda: tick_all())
+        del_b = ttk.Button(top_, text="Delete ticked",
+                           command=lambda: spares_gone([q for q in shown() if ticked.get(str(q)) and ticked[str(q)].get()]))
+        del_b.pack(side="right", padx=(10, 0))
+        tick_b.pack(side="right", padx=(10, 0))
+        tooltip(del_b, "Delete the ticked pictures from the disk, with the copies made from them.")
+        tooltip(tick_b, "Tick or untick every picture shown.")
 
         def spare_menu(event: object, q: Path) -> None:
             m = tk.Menu(w, tearoff=0)
             m.add_command(label=f"Use {q.name}", command=lambda: took(q))
             m.add_separator()
             m.add_command(label="Delete this picture", command=lambda: spare_gone(q))
+            n_ = sum(1 for v in ticked.values() if v.get())
+            if n_:
+                m.add_command(label=f"Delete the {n_:,} ticked", command=lambda: spares_gone(
+                    [y for y in shown() if ticked.get(str(y)) and ticked[str(y)].get()]))
             try:
                 m.tk_popup(event.x_root, event.y_root)           # type: ignore[attr-defined]
             finally:
@@ -5448,8 +5591,13 @@ def run_gui() -> None:
             hold.clear()
             lot = [q for q in spare if fit(q)] if only.get() else list(spare)
             said.set(f"{len(lot):,} spare picture(s) - click one")
+            keep_ = {k: v.get() for k, v in ticked.items()}
+            ticked.clear()
+            cur["cells"] = []
             for i, q in enumerate(lot[:300]):
-                cell = tk.Frame(inner, bg=CARD, padx=4, pady=4)
+                cell = tk.Frame(inner, bg=CARD, padx=4, pady=4, highlightthickness=3,
+                                highlightbackground=CARD, highlightcolor=CARD)
+                cur["cells"].append((cell, q))
                 cell.grid(row=i // 5, column=i % 5, padx=4, pady=4, sticky="n")
                 im = load_thumb(str(q))
                 lb_ = tk.Label(cell, image=im, bg=CARD, cursor="hand2") if im else \
@@ -5460,19 +5608,75 @@ def run_gui() -> None:
                 nm_ = tk.Label(cell, text=made_for(q.name), bg=CARD, wraplength=150,
                                font=("TkDefaultFont", 9, "bold"))
                 nm_.pack()
+                tv_ = tk.BooleanVar(value=keep_.get(str(q), False))
+                ticked[str(q)] = tv_
+                tk.Checkbutton(cell, text="Tick", variable=tv_, bg=CARD, activebackground=CARD,
+                               takefocus=0).pack()
                 for x in (cell, lb_, nm_):
                     x.bind("<Button-1>", lambda e, y=q: took(y))
                     x.bind("<Button-3>", lambda e, y=q: spare_menu(e, y))
-                tooltip(lb_, f"{q.name}\nClick to use it, right-click to delete it.")
+                tooltip(lb_, f"{q.name}\nClick to use it, right-click to delete it, tick to delete several.")
             wheel_over(inner, cv)
             inner.update_idletasks()
             cv.configure(scrollregion=cv.bbox("all"))
+            cur["i"] = min(cur["i"], max(0, len(cur["cells"]) - 1))
+            mark()
+
+        def mark(see: bool = False) -> None:
+            for k_, (c_, _q) in enumerate(cur["cells"]):
+                col_ = "#1a5fb4" if k_ == cur["i"] else CARD
+                try:
+                    c_.config(highlightbackground=col_, highlightcolor=col_)
+                except tk.TclError:
+                    pass
+            if see and cur["cells"]:
+                c_ = cur["cells"][cur["i"]][0]
+                tot_ = max(1, inner.winfo_height())
+                y0_, y1_ = c_.winfo_y() / tot_, (c_.winfo_y() + c_.winfo_height()) / tot_
+                top_, bot_ = cv.yview()
+                if y0_ < top_:
+                    cv.yview_moveto(y0_)
+                elif y1_ > bot_:
+                    cv.yview_moveto(max(0.0, y1_ - (bot_ - top_)))
+
+        def key(e: object) -> str:
+            """Arrows move, Space ticks, Enter uses it, Delete deletes the ticked ones (or this one)."""
+            n_ = len(cur["cells"])
+            if not n_:
+                return "break"
+            ks = getattr(e, "keysym", "")
+            step = {"Left": -1, "Right": 1, "Up": -5, "Down": 5, "Prior": -15, "Next": 15}.get(ks)
+            if step is not None:
+                cur["i"] = max(0, min(n_ - 1, cur["i"] + step))
+            elif ks == "Home":
+                cur["i"] = 0
+            elif ks == "End":
+                cur["i"] = n_ - 1
+            elif ks == "space":
+                v_ = ticked.get(str(cur["cells"][cur["i"]][1]))
+                if v_ is not None:
+                    v_.set(not v_.get())
+                cur["i"] = min(n_ - 1, cur["i"] + 1)
+            elif ks in ("Return", "KP_Enter"):
+                took(cur["cells"][cur["i"]][1])
+                return "break"
+            elif ks == "Delete":
+                many_ = [y for _c, y in cur["cells"] if ticked.get(str(y)) and ticked[str(y)].get()]
+                spares_gone(many_ or [cur["cells"][cur["i"]][1]])
+                return "break"
+            else:
+                return ""
+            mark(see=True)
+            return "break"
+        for ks_ in ("Left", "Right", "Up", "Down", "Prior", "Next", "Home", "End", "space", "Return", "KP_Enter", "Delete"):
+            w.bind(f"<{ks_}>", key)
         cb_.config(command=fill)
         wheel_over(cv, cv)
         wheel_over(w, cv)
         fill()
         state["pool_hold"] = hold                                # Tk drops a picture nothing holds
         w.grab_set()
+        w.focus_set()
 
     def auto_from_pool(r: dict) -> None:
         """A spare from the pool as one more choice on a creature's card (a copy, as the Propose tab takes it)."""
@@ -5550,7 +5754,7 @@ def run_gui() -> None:
         if cre_:
             nm_lab.bind("<Button-3>", lambda e: copy_text(cre_))
         tooltip(nm_lab, "Click: copy the name. Right-click: copy the creature file name" + (f" ({cre_})." if cre_ else "."))
-        sub = " ".join(x for x in (str(r.get("sex") or "").title(), str(r.get("race") or "").title()) if x)
+        sub = " ".join(x for x in (shown_sex(r.get("sex")).title(), str(r.get("race") or "").title()) if x)
         tk.Label(info, text=(sub + "\n" if sub else "") + str(r.get("anim") or ""), bg=CARD, fg="#555",
                  wraplength=145, justify="left", anchor="w").pack(fill="x")
         ln_ = tk.Label(info, text=f"{int(r.get('lines', 0) or 0)} lines", bg=CARD, fg="#1a5fb4", anchor="w",
@@ -5689,7 +5893,8 @@ def run_gui() -> None:
         else:
             searched_ = set()
         keys = [k for k, v in store_.items() if k in byk and k in listed_ and (k in searched_ or v.get("chosen") == "keep" or
-                                                              any(os.path.isfile(p) for p in v.get("paths", [])))]
+                                                              k in props or      # its spares deleted, its proposal
+                                                              any(os.path.isfile(p) for p in v.get("paths", [])))]   # stays
         if auto_hide.get():
             keys = [k for k in keys if not (auto_picked(byk[k], store_[k]) or store_[k].get("sel"))]
         keys.sort(key=lambda k: order.get(k, 1 << 30))
@@ -5867,8 +6072,11 @@ def run_gui() -> None:
                         imgs_ = None
                         for try_ in range(2):                        # the engine now and then refuses one (500):
                             try:                                     # try once more, then move on
-                                imgs_ = (eng.generate(pr_, ng_, 1, init=ini_, strength=start_strength(pg_, gs_),   # type: ignore[attr-defined]
-                                                      steps=start_steps(pg_, gs_))
+                                imgs_ = (eng.generate(pr_, ng_, 1, init=ini_,   # type: ignore[attr-defined]
+                                                      strength=start_strength(pg_, gs_, desc_, str(r.get("race") or "")),
+                                                      steps=start_steps(pg_, gs_, desc_, str(r.get("race") or "")),
+                                                      **start_edit(pg_, gs_, desc_, str(r.get("race") or ""),
+                                                                   str(r.get("anim") or ""), src_))
                                          if ini_ else eng.generate(pr_, ng_, 1))   # type: ignore[attr-defined]
                                 fails[0] = 0
                                 break
@@ -6042,13 +6250,27 @@ def run_gui() -> None:
     start_v.trace_add("write", start_keep)
     start_k.trace_add("write", start_keep)
 
-    def start_strength(pg_: object, gs_: dict) -> float:
+    def start_strength(pg_: object, gs_: dict, desc: str = "", race: str = "") -> float:
+        mon_ = pg_.bank_monster(gs_, desc, race) if desc and hasattr(pg_, "bank_monster") else None   # type: ignore[attr-defined]
+        if mon_:                                                     # a monster from the bank: further, always
+            return float(mon_[0])
         try:
             return max(0.3, min(1.0, float(start_k.get())))
         except (tk.TclError, ValueError):
             return float(pg_.bank_strength(gs_)) if hasattr(pg_, "bank_strength") else 0.68   # type: ignore[attr-defined]
 
-    def start_steps(pg_: object, gs_: dict) -> Optional[int]:
+    def start_edit(pg_: object, gs_: dict, desc: str = "", race: str = "", anim: str = "",
+                   src: str = "") -> dict:
+        """A monster started from the face bank is painted twice: the face, then the monster in words."""
+        if not desc or not hasattr(pg_, "monster_edit") or "faces" not in Path(str(src or "")).parts:
+            return {}
+        ed_ = pg_.monster_edit(gs_, desc, race, anim)                # type: ignore[attr-defined]
+        return {"then_edit": ed_} if ed_ else {}
+
+    def start_steps(pg_: object, gs_: dict, desc: str = "", race: str = "") -> Optional[int]:
+        mon_ = pg_.bank_monster(gs_, desc, race) if desc and hasattr(pg_, "bank_monster") else None   # type: ignore[attr-defined]
+        if mon_:
+            return int(mon_[1])
         return int(pg_.bank_steps(gs_)) if hasattr(pg_, "bank_steps") else None   # type: ignore[attr-defined]
 
     def own_portrait_src(r: Optional[dict]) -> str:
@@ -6093,8 +6315,23 @@ def run_gui() -> None:
             if data:
                 return data, src
         text = desc + (", nine years old" if "nine years old" in prompt.lower() else "")
+        sx_ = str((r or {}).get("sex") or "").lower()                # a child's words say no gender: its file
+        if sx_ in ("male", "female") and not re.search(r"\b(male|female|man|woman|boy|girl)\b", text.lower()):
+            text += ", " + sx_                                       # does, for the right pile of faces
         p_ = pg_.bank_pick(gs_, race, text)                        # type: ignore[attr-defined]
         data = init_bytes(str(p_)) if p_ else None
+        if data and hasattr(pg_, "bank_fill"):                       # its blurred padding painted over
+            mon_ = pg_.bank_monster(gs_, text, race) if hasattr(pg_, "bank_monster") else None   # type: ignore[attr-defined]
+            if mon_ and len(mon_) > 3 and mon_[3] and hasattr(pg_, "bank_hulk"):   # an ogre: a small head on a
+                data = pg_.bank_hulk(data, text)                     # huge body   # type: ignore[attr-defined]
+            elif mon_:                                               # a monster: only the face's shape and light
+                data = pg_.bank_fill(data, pg_.bank_body(gs_, str(p_)), pg_.bank_scale(gs_),   # type: ignore[attr-defined]
+                                     blur=float(mon_[2]))
+            else:
+                data = pg_.bank_fill(data, pg_.bank_body(gs_, str(p_)), pg_.bank_scale(gs_), pg_.bank_beard(text),   # type: ignore[attr-defined]
+                                     pg_.bank_bald(text), pg_.bank_wide(text), pg_.bank_bare(text),
+                                     pg_.bank_nose(text), pg_.bank_ears(text),
+                                 chin="child" in Path(str(p_)).parts)   # type: ignore[attr-defined]
         return (data, str(p_)) if data else (None, "")
 
     def start_note(path: str, src: str) -> None:
@@ -6556,6 +6793,9 @@ def run_gui() -> None:
         terms = search_var.get().lower().split() if filtered else []
         if terms:
             rows = [r for r in rows if all(t in row_text(r) for t in terms)]
+        rc_ = race_pick.get() if filtered else "All"
+        if rc_ and rc_ != "All":                                     # one race at a time: the goblins, the dwarves
+            rows = [r for r in rows if str(r.get("race") or "").strip().lower() == rc_.lower()]
         on_ = [fn for lbl, fn in CHIPS if chip_vars[lbl].get()]     # the chips narrow the same view
         if on_:
             rows = [r for r in rows if all(fn(r) for fn in on_)]
@@ -6763,7 +7003,7 @@ def run_gui() -> None:
         if pp:
             d = prop_dims(pp)
             prop_txt = Path(pp).name + (f" ({d})" if d else "")
-        out = [str(r[k]) for k in cols] + [psize, prop_txt]
+        out = [shown_sex(r[k]) if k == "sex" else str(r[k]) for k in cols] + [psize, prop_txt]
         if rowkey(r) in skip and "name" in cols:                     # listed only while Ignored is ticked
             out[cols.index("name")] += "   (ignored)"
         return out
@@ -7428,7 +7668,7 @@ def run_gui() -> None:
             ttk.Button(head_, text="Unselect", width=9, command=lambda: generate_dialog()).pack(side="left", padx=(8, 0))
         ttk.Label(head_, foreground="#666",
                   text=("no creature: type what you want below - nothing is proposed for a creature" if generic else
-                        "  ".join(x for x in (r["race"], r["sex"], r["anim"]) if x) or "(no creature details)")
+                        "  ".join(x for x in (r["race"], shown_sex(r["sex"]), r["anim"]) if x) or "(no creature details)")
                   ).pack(side="left", padx=10)
         for cn_ in (r.get("cre_list") or [])[:6]:
             cl_ = tk.Label(head_, text=cn_, fg="#1a5fb4", cursor="hand2",
@@ -7666,7 +7906,10 @@ def run_gui() -> None:
             if generic:
                 st["generic_pick"] = [race, sex, cls]                 # remembered until Reset
             else:                                                     # keep the creature's own face and files
-                row_ = dict(r, race=race, sex=sex, anim=f"{cls} {sex} {race}")
+                same_ = (cls == last[2] and race.lower() == str(last[0]).lower() and sex.lower() == str(last[1]).lower())
+                row_ = dict(r, race=race, sex=sex, anim=str(r.get("anim") or "") if same_ else f"{cls} {sex} {race}")
+                #   race, gender and role as the creature has them: its own animation, so the sprite's look
+                #   (a beggar's bald head and bare chest) stays when only the scars or the age are changed
                 if race.lower() != str(r.get("race") or "").lower():  # a race picked by hand beats what the
                     row_["colors"] = {k_: v_ for k_, v_ in (r.get("colors") or {}).items() if k_ != "kind"}   # colors hint
             st["last_age"], st["last_look"], st["last_mood"] = age_v.get(), look_v.get(), mood_v.get()
@@ -8757,7 +9000,8 @@ def run_gui() -> None:
             """Touch up this candidate. The window itself lives at module level, so the creature's own
             picture can be worked on from the lines window too."""
             touch_up_window(dlg, path, pg=pg, gs=gs, r=r, desc=desc_var.get(), say=gstat.set,
-                            on_done=swap_candidate, touch_memory=TOUCH_MEMORY, generic=generic)
+                            on_done=swap_candidate, touch_memory=TOUCH_MEMORY, generic=generic,
+                            change_it=edit_ask)
 
         def files_of(path: str) -> List[str]:
             """A generated picture and the game-size .bmp copies made from it."""
@@ -8922,8 +9166,10 @@ def run_gui() -> None:
                             eng.generate(pr_i, ng_i, 1,          # type: ignore[attr-defined]
                                          lambda _k, data, k=i_, w=words_, s=src_: on_image(k, data, w, s),
                                          (seed_ + i_) if seed_ is not None else None,
-                                         **({"init": ini_, "strength": start_strength(pg, gs),
-                                             "steps": start_steps(pg, gs)} if ini_ else {}))
+                                         **({"init": ini_, "strength": start_strength(pg, gs, desc_var.get(), race_v.get()),
+                                             "steps": start_steps(pg, gs, desc_var.get(), race_v.get()),
+                                             **start_edit(pg, gs, desc_var.get(), race_v.get(), str(r.get("anim") or ""), src_)}
+                                            if ini_ else {}))
                         save_settings(st)
                         root.after(0, done, "")
                         return
@@ -8932,10 +9178,21 @@ def run_gui() -> None:
                     # same four faces every time the tab was opened again - and spares already in the pool
                     # coming back as "new" candidates.
                     ini_ = init_bytes(init_was) if init_was else None   # "Use this face": its start face too
+                    if ini_ and Path(init_was).suffix.lower() == ".jpg" and hasattr(pg, "bank_fill") \
+                            and "faces" in Path(init_was).parts:
+                        mon_ = pg.bank_monster(gs, desc_var.get(), race_v.get())   # type: ignore[attr-defined]
+                        ini_ = pg.bank_hulk(ini_, desc_var.get()) if mon_ and len(mon_) > 3 and mon_[3] else \
+                            pg.bank_fill(ini_, pg.bank_body(gs, init_was), pg.bank_scale(gs), blur=float(mon_[2])) if mon_ else \
+                            pg.bank_fill(ini_, pg.bank_body(gs, init_was), pg.bank_scale(gs), pg.bank_beard(desc_var.get()),
+                                           pg.bank_bald(desc_var.get()), pg.bank_wide(desc_var.get()),
+                                           pg.bank_bare(desc_var.get()), pg.bank_nose(desc_var.get()),
+                                           pg.bank_ears(desc_var.get()), chin="child" in Path(init_was).parts)   # type: ignore[attr-defined]
                     eng.generate(pr, ng, n,                           # type: ignore[attr-defined]
                                  lambda k, d, s=(init_was if ini_ else ""): on_image(k, d, "", s), seed_,
-                                 **({"init": ini_, "strength": start_strength(pg, gs),
-                                     "steps": start_steps(pg, gs)} if ini_ else {}))
+                                 **({"init": ini_, "strength": start_strength(pg, gs, desc_var.get(), race_v.get()),
+                                     "steps": start_steps(pg, gs, desc_var.get(), race_v.get()),
+                                     **start_edit(pg, gs, desc_var.get(), race_v.get(), str(r.get("anim") or ""), init_was)}
+                                    if ini_ else {}))
                     root.after(0, done, "")
                 except Exception as e:  # noqa: BLE001 - GeneratorError texts are meant for the user
                     root.after(0, done, str(e) or e.__class__.__name__)
@@ -9960,6 +10217,65 @@ def run_gui() -> None:
         root.wait_window(w)
         return out.get("dir", ""), bool(ship_v.get()), bool(gen_v.get())
 
+    def preview_items(rows_: List[dict]) -> List[dict]:
+        """The chosen portraits at game size as JPEG, with names and what each is, for preview_html."""
+        pg_ = generator_module()
+        sz_ = st.get("portrait_size") if isinstance(st.get("portrait_size"), list) and len(st.get("portrait_size")) == 2 else [169, 266]
+        out_: List[dict] = []
+        tmp_ = Path(tempfile.mkdtemp(prefix="ps_preview_"))
+        try:
+            from PIL import Image as _I
+            for r_ in rows_:
+                src_ = str(props.get(rowkey(r_)) or "")
+                if not src_ or not os.path.isfile(src_):
+                    continue
+                dst_ = tmp_ / "p.bmp"
+                try:
+                    inf_ = image_info(src_)
+                    box_ = (crop_for(r_) or {}).get("box")
+                    if not box_ and inf_ and (inf_["w"], inf_["h"]) == (int(sz_[0]), int(sz_[1])):
+                        shutil.copyfile(src_, dst_)
+                    else:
+                        to_portrait_bmp(src_, str(dst_), int(sz_[0]), int(sz_[1]), getattr(pg_, "crop_box", None),
+                                        tuple(box_) if box_ else None)   # type: ignore[arg-type]
+                    buf_ = io.BytesIO()
+                    _I.open(dst_).convert("RGB").save(buf_, "JPEG", quality=90)
+                except Exception:  # noqa: BLE001 - one unreadable picture is left out
+                    continue
+                kind_ = " ".join(x for x in (str(r_.get("race") or ""), shown_sex(r_.get("sex"))) if x)
+                out_.append({"name": r_["name"], "kind": kind_, "jpeg": buf_.getvalue(),
+                             "cre": ", ".join(r_.get("cre_list") or [])})
+        finally:
+            shutil.rmtree(tmp_, ignore_errors=True)
+        return out_
+
+    def save_preview() -> None:
+        res = state["res"]
+        rows = [r for r in sorted_rows(False) if rowkey(r) in props]
+        if not res or not rows:
+            messagebox.showinfo("Portrait Scout", "No portraits proposed yet.")
+            return
+        p_ = filedialog.asksaveasfilename(parent=root, title="Save the preview page",
+                                          initialfile=f"{_safe_name(str(res['mod']))}-portraits.html",   # type: ignore[index]
+                                          defaultextension=".html", filetypes=[("Web page", "*.html")])
+        if not p_:
+            return
+        root.config(cursor="watch")
+        root.update_idletasks()
+        try:
+            items = preview_items(rows)
+            Path(p_).write_text(preview_html(str(res["mod"]), items), encoding="utf-8")   # type: ignore[index]
+        except OSError as e_:
+            messagebox.showwarning("Portrait Scout", f"Could not save the page:\n\n{e_}")
+            return
+        finally:
+            root.config(cursor="")
+        status.set(f"Saved a preview page of {len(items)} portrait(s): {p_}")
+        try:
+            os.startfile(p_)                                         # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            pass
+
     def export_as_mod() -> None:
         res = state["res"]
         rows = [r for r in sorted_rows(False) if rowkey(r) in props]
@@ -10015,6 +10331,10 @@ def run_gui() -> None:
                     e_["point_at"] = face                             # already in the game: just point at it
                 entries.append(e_)
             info = export_mod(d, str(res["mod"]), entries, convert, game_var.get())
+            try:                                                     # a page to look the set over, in the mod
+                Path(d, "preview.html").write_text(preview_html(str(res["mod"]), preview_items(rows)), encoding="utf-8")   # type: ignore[index]
+            except OSError:
+                pass
         except (OSError, ValueError) as e:
             messagebox.showwarning("Portrait Scout", f"Could not export the mod:\n\n{e}")
             return
@@ -10024,6 +10344,7 @@ def run_gui() -> None:
         msg = (f"Exported {info['portraits']} portrait(s) for {info['creatures']} creature file(s) of {res['mod']}"
                + (f", {pointed} of them already in the game and only pointed at" if pointed > 0 else "") + ".\n\n"   # type: ignore[index]
                f"{d}\n  setup-{name}.tp2   the installer\n  readme.txt, portraits.txt   what is in it\n"
+               + ("  preview.html   the portraits, to look over in a browser\n" if Path(d, "preview.html").is_file() else "") +
                f"  portraits\\...   the pictures\n\n"
                f"The mod now has {info['sets']} set(s). Each is offered twice in the installer: replace the portraits "
                "creatures already have, or only fill in missing ones.\n\nTo install: copy the folder and "
@@ -10038,6 +10359,7 @@ def run_gui() -> None:
 
     export_btn.config(command=export_props)
     mod_btn.config(command=export_as_mod)
+    prev_btn.config(command=save_preview)
     clear_btn.config(command=clear_all)
 
     def build_gallery(rows: List[dict]) -> None:
@@ -10235,7 +10557,7 @@ def run_gui() -> None:
                 _st.append("missing file" if not os.path.isfile(prop) else "proposed")   # already said above
             if rowkey(r) in skip:
                 _st.append("ignored")
-            sub = " ".join(x for x in (r["race"], r["sex"]) if x)
+            sub = " ".join(x for x in (r["race"], shown_sex(r["sex"])) if x)
             if _st:
                 tk.Label(card, text=" · ".join(_st), bg=CARD, fg="#a35a00",
                          font=("TkDefaultFont", 8, "bold")).pack()
@@ -10335,8 +10657,17 @@ def run_gui() -> None:
     def sprite_files(cre_: str) -> List[Path]:
         """The creature's sprite, one picture per direction (NAME_c0.png ...), in order."""
         got_ = []
+        try:                                                         # drawn by an older helper (random colors
+            new_ = (Path(__file__).resolve().parent / "generator" / "spriteshot.jar").stat().st_mtime   # rolled
+        except OSError:                                              # by Near Infinity, not as described): again
+            new_ = 0.0
         for q_ in SPRITE_DIR.glob(f"{cre_}_c*.png"):
             m_ = re.match(r".*_c(\d+)$", q_.stem)
+            try:
+                if q_.stat().st_mtime < new_:
+                    continue
+            except OSError:
+                continue
             if m_:
                 got_.append((int(m_.group(1)), q_))
         return [q_ for _n, q_ in sorted(got_)]
@@ -10382,10 +10713,19 @@ def run_gui() -> None:
             w_.destroy()
         nav_ = ttk.Frame(box)                                        # the arrows stay put at the foot (or the
         nav_.pack(side="right" if side else "bottom", padx=(4, 0) if side else 0, pady=0 if side else (2, 0))
+        rnd_ = str((r.get("colors") or {}).get("_random") or "")
+        BOXW, BOXH = size
+        if rnd_:                                                     # rolled by the game when it makes the creature:
+            slots_ = [s_.split(" (")[0] for s_ in rnd_.split(", ")]  # listed, not hidden in a tooltip
+            rl_ = tk.Label(box, text="Random in game: " + ", ".join(slots_), fg="#b5651d",
+                           font=("TkDefaultFont", 8, "bold"), wraplength=max(80, BOXW - 10), justify="center")
+            rl_.pack(side="bottom", fill="x", pady=(2, 0))
+            tooltip(rl_, f"The game rolls these each time it makes the creature: {rnd_}. Shown in one of them, "
+                         "the same one the portrait is described in.")
+            BOXH -= 30                                           # room for the list
         lab = tk.Label(box, bd=0, fg="#888", justify="center", cursor="hand2")   # side) whatever its size
         lab.pack(side="left" if side else "top", expand=True)
         at_ = {"i": 0}
-        BOXW, BOXH = size
 
         def put() -> None:
             files_ = sprite_files(cre_)
@@ -10568,7 +10908,7 @@ def run_gui() -> None:
         nml = ttk.Label(info, text=r["name"], font=("TkDefaultFont", 13, "bold"), cursor="hand2")
         nml.pack(anchor="w")
         nml.bind("<Button-1>", lambda e: copy_text(r["name"]))
-        ttk.Label(info, text="  ".join(x for x in (r["race"], r["sex"], r["anim"]) if x), foreground="#666").pack(anchor="w")
+        ttk.Label(info, text="  ".join(x for x in (r["race"], shown_sex(r["sex"]), r["anim"]) if x), foreground="#666").pack(anchor="w")
         sizes = ", ".join(x for x in ((f"large {r['large_size']}" if r.get("large_size") else ""),
                                       (f"medium {r['small_size']}" if r.get("small_size") else "")) if x)
         ttk.Label(info, text=f"Portrait: {r['portrait']}" + (f"  ({sizes})" if sizes else "")
