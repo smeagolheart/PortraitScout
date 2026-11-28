@@ -6516,6 +6516,19 @@ def run_gui() -> None:
                 messagebox.showwarning("Portrait Scout", f"Could not open a command window:\n{e_}\n\n"
                                        f"Open one in {cwd} and type:\n{cmd}")
 
+    FACES_URL = "https://github.com/smeagolheart/PortraitScout/releases/latest/download/PortraitScout-faces.zip"
+
+    def faces_count() -> int:
+        """How many adult faces the bank has (faces\\human\\male and female)."""
+        d_ = Path(__file__).resolve().parent / "faces" / "human"
+        n_ = 0
+        for sx_ in ("male", "female"):
+            try:
+                n_ += sum(1 for f_ in (d_ / sx_).iterdir() if f_.suffix.lower() in (".jpg", ".jpeg", ".png"))
+            except OSError:
+                pass
+        return n_
+
     def klein_found(sub: str, name: str) -> Optional[Path]:
         """Where a Klein file is: Forge Neo's own models folder, or the old Forge's (Neo reads both)."""
         here_ = Path(__file__).resolve().parent
@@ -6600,7 +6613,8 @@ def run_gui() -> None:
         box.columnconfigure(0, weight=1)
         head = tk.Frame(box, bg=BG)
         head.grid(row=0, column=0, columnspan=2, sticky="w")
-        tk.Label(head, text="No image generator here yet", bg=BG, font=("TkDefaultFont", 10, "bold")).pack(side="left")
+        tk.Label(head, text="Image generator setup" if engine_ready() else "No image generator here yet", bg=BG,
+                 font=("TkDefaultFont", 10, "bold")).pack(side="left")
         if callable(again):
             ttk.Button(head, text="Check again", command=again).pack(side="left", padx=10)   # type: ignore[arg-type]
         tk.Label(box, bg=BG, justify="left", wraplength=860, fg="#5a4a00",
@@ -6755,12 +6769,108 @@ def run_gui() -> None:
         step(4, "5.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after "
                 "that.", [], old_f)
         picked()
+        # ---- the face bank: for either engine ----
+        fbox = tk.Frame(box, bg=BG)
+        fbox.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        tk.Label(fbox, bg=BG, justify="left", wraplength=640, anchor="w",
+                 text="Face bank (about 550 MB): real-looking faces each portrait starts from, so no two look "
+                      "alike. Synthetic faces from SFHQ, MIT License. Downloaded and unpacked into the faces "
+                      "folder for you.").grid(row=0, column=0, sticky="w")
+        fbtn = ttk.Button(fbox, text="Download faces")
+        fbtn.grid(row=0, column=1, sticky="nw", padx=(10, 0))
+        fmark = tk.Label(fbox, text="", bg=BG, font=("TkDefaultFont", 12, "bold"))
+        fmark.grid(row=0, column=2, sticky="nw", padx=(6, 0))
+        fnote = tk.Label(fbox, text="", bg=BG, fg="#5a4a00", justify="left", anchor="w")
+        fnote.grid(row=1, column=0, columnspan=3, sticky="w")
+        fprog = ttk.Progressbar(fbox, maximum=1000, length=420)
+
+        def faces_state() -> None:
+            if not fnote.winfo_exists():
+                return
+            n_ = faces_count()
+            fmark.config(text="\u2714" if n_ else "\u2716", fg="#2e7d32" if n_ else "#b23b3b")
+            fnote.config(text=f"{n_:,} faces in the faces folder." if n_ else "No faces yet: portraits start from "
+                         "plain noise, and the same words paint the same face.")
+            fbtn.config(text="Download again" if n_ else "Download faces")
+
+        def faces_say(frac: Optional[float], text: str, done: bool = False) -> None:
+            def ui() -> None:
+                if not fnote.winfo_exists():
+                    return
+                if frac is None:
+                    fprog.grid_remove()
+                else:
+                    fprog.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
+                    fprog["value"] = int(frac * 1000)
+                fnote.config(text=text)
+                if done:
+                    fbtn.state(["!disabled"])
+                    fprog.grid_remove()
+                    faces_state()
+                    fnote.config(text=text)
+            root.after(0, ui)
+
+        def faces_get() -> None:
+            here_ = Path(__file__).resolve().parent
+            tmpd_ = here_ / "temp"
+            part_ = tmpd_ / "faces-download.zip"
+            try:
+                tmpd_.mkdir(exist_ok=True)
+                import urllib.request
+                req_ = urllib.request.Request(FACES_URL, headers={"User-Agent": "PortraitScout/" + VERSION})
+                with urllib.request.urlopen(req_, timeout=60) as r_, open(part_, "wb") as f_:
+                    total_ = int(r_.headers.get("Content-Length") or 0)
+                    got_ = 0
+                    while True:
+                        chunk_ = r_.read(1 << 20)
+                        if not chunk_:
+                            break
+                        f_.write(chunk_)
+                        got_ += len(chunk_)
+                        faces_say(got_ / total_ if total_ else 0.0,
+                                  f"Downloading: {got_ / 1e6:,.0f}" + (f" of {total_ / 1e6:,.0f} MB" if total_ else " MB"))
+                made_ = 0
+                with zipfile.ZipFile(part_) as z_:
+                    names_ = [i_ for i_ in z_.infolist() if not i_.is_dir()]
+                    for k_, i_ in enumerate(names_):
+                        rel_ = i_.filename.replace("\\", "/")
+                        if rel_.startswith("PortraitScout/"):         # packed to unzip beside the program's zip
+                            rel_ = rel_[len("PortraitScout/"):]
+                        if not rel_.startswith("faces/") or ".." in rel_.split("/"):
+                            continue
+                        dst_ = here_ / rel_
+                        if dst_.is_file() and dst_.stat().st_size == i_.file_size:
+                            continue                                 # already there
+                        dst_.parent.mkdir(parents=True, exist_ok=True)
+                        with z_.open(i_) as src_, open(dst_, "wb") as out_:
+                            shutil.copyfileobj(src_, out_)
+                        made_ += 1
+                        if k_ % 50 == 0:
+                            faces_say(k_ / max(1, len(names_)), f"Unpacking: {k_:,} of {len(names_):,} files")
+                faces_say(None, f"Done: {made_:,} new file(s) in the faces folder.", done=True)
+            except Exception as e_:  # noqa: BLE001 - no network, no release yet, a full disk...
+                faces_say(None, f"Could not get the faces: {e_}. Download PortraitScout-faces.zip from the "
+                                "release page and unzip it next to the program instead.", done=True)
+            finally:
+                try:
+                    part_.unlink()
+                except OSError:
+                    pass
+
+        def faces_start() -> None:
+            fbtn.state(["disabled"])
+            faces_say(0.0, "Starting the download...")
+            threading.Thread(target=faces_get, daemon=True).start()
+        fbtn.config(command=faces_start)
+        tooltip(fbtn, "Download the face bank from the latest release and unpack it into the faces folder. "
+                      "Faces already there are kept.")
+        faces_state()
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=860,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
                       "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
-                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         more = tk.Frame(box, bg=BG)
-        more.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        more.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
         ttk.Button(more, text="About Forge",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))
@@ -11505,7 +11615,7 @@ def run_gui() -> None:
     tooltip(setup_btn, "How to set up the image engine, with download links. Shown by itself the first "
                        "time Portrait Scout opens without one.")
     refresh()                                                        # the table says what to do before the first run
-    if not engine_ready() and not st.get("setup_shown"):             # first run with no engine: show the steps once
+    if (not engine_ready() or not faces_count()) and not st.get("setup_shown"):             # first run with no engine: show the steps once
         st["setup_shown"] = True
         save_settings(st)
         root.after(600, setup_window)

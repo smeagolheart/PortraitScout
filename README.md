@@ -4,7 +4,7 @@ Finds the speaking creatures of an Infinity Engine mod - or a whole install (BG1
 
 It only **reads** your game folder. Nothing there is installed, changed or deleted.
 
-**To generate portraits** you need an image engine (not included): see **[Setting up the portrait generator](generator/README.md)** for the steps and download links, and get the face bank from the [release](https://github.com/smeagolheart/PortraitScout/releases). The same steps open in Portrait Scout the first time it starts without an engine, and any time from **Generator setup** at the top right.
+**To generate portraits** you need an image engine (not included): see **[Setting up the portrait generator](generator/README.md)** for the steps and download links. The same steps, with a **Download faces** button for the face bank, open in Portrait Scout the first time it starts without an engine, and any time from **Generator setup** at the top right.
 
 | Creature | Lines | Portrait | Race | Gender | Animation | CRE file(s) | Area(s) |
 |---------------------------------------------------------------------------------|
@@ -117,11 +117,12 @@ picture starts from a real face, which the words then turn into the character.
   with a face like a person's (orcs, half-ogres, goblins, xvarts...) are painted in two passes: the bank face
   first, then the creature in words. Beasts, kobolds and the undead are left to the words.
 
-  **Getting the faces:** the face bank is not in the repository (about 550 MB). Download
-  `PortraitScout-2.0-faces.zip` from the [release](https://github.com/smeagolheart/PortraitScout/releases) and
-  unzip it in the same place as `PortraitScout-2.0.zip`: it adds `PortraitScout\faces`, beside `portrait_scout.py`. The photos
-  are synthetic faces from [SFHQ](https://github.com/SelfishGene/SFHQ-dataset) by David Beniaguev (MIT License).
-  Without them, Start from works as Nothing.
+  **Getting the faces:** the face bank is not in the repository (about 550 MB). Press **Download faces** in
+  Portrait Scout's setup window (**Generator setup**, top right; it opens by itself the first time): it fetches
+  `PortraitScout-faces.zip` from the latest [release](https://github.com/smeagolheart/PortraitScout/releases)
+  and unpacks it into `faces\`. Or download that zip yourself and unzip it where you unzipped Portrait Scout.
+  The photos are synthetic faces from [SFHQ](https://github.com/SelfishGene/SFHQ-dataset) by David Beniaguev
+  (MIT License). Without them, Start from works as Nothing.
 - **Its portrait**: starts from the creature's own portrait (the face bank if it has none).
 - **Nothing**: plain, as before.
 
