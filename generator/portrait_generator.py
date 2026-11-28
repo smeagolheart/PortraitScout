@@ -296,6 +296,8 @@ DEFAULTS: dict = {
         "Wounded": "fresh bleeding cuts across the face, a split lip, dried blood on the cheek",
     },
     "scar_default": "Few",
+    "grime_default": "Clean",
+    "_grime_default": "Used when no Grime is picked, like scar_default for Scars. Both can be set in Generator setup.",
     "grime_terms": {
         "_about": "Offered as 'Grime' in the Propose tab: how dirty the face is.",
         "Clean": "",
@@ -1225,7 +1227,7 @@ def describe(row: dict, settings: dict, age: str = "", look: str = "", outfit: s
         look_txt = _no_facial_hair(look_txt)                 # the lines and the gray, not the beard
     mood_txt = str((settings.get("mood_terms") or {}).get(mood, "")) if mood else ""
     scar_txt = str((settings.get("scar_terms") or {}).get(scars or ("" if child else str(settings.get("scar_default") or "")), ""))
-    grime_txt = str((settings.get("grime_terms") or {}).get(grime, "")) if grime else ""
+    grime_txt = str((settings.get("grime_terms") or {}).get(grime or ("" if child else str(settings.get("grime_default") or "")), ""))
     if not manlike and covered:                              # a gnoll's fur, a spectre's mist: no skin to mark
         scar_txt = grime_txt = ""
     for t in (mood_txt, grime_txt, scar_txt, look_txt):                           # right after the race, not at the end: Flux
