@@ -6844,8 +6844,9 @@ def run_gui() -> None:
         step(2, [("3.  Three files, about 18.4 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
                  ("flux-2-klein-9b-fp8.safetensors", 1), (" (9.4 GB) in Stable-diffusion\\, ", 0),
                  ("qwen_3_8b_fp8mixed.safetensors", 1), (" (8.7 GB) in text_encoder\\, ", 0),
-                 ("flux2-vae.safetensors", 1), (" (336 MB) in VAE\\. The buttons download each one; Hugging Face "
-                  "may ask you to sign in and accept the model's license first. Move downloads then puts "
+                 ("flux2-vae.safetensors", 1), (" (336 MB) in VAE\\. The buttons download each one. ", 0),
+                 ("The model needs a free Hugging Face account: press Accept license first, sign in and agree, "
+                  "then Model.", 1), (" Without that it shows \"Access ... is restricted\". Move downloads then puts "
                   "each one in its folder.", 0)],
              [("Model", lambda: webbrowser.open(KLEIN_FILES[0][3])),
               ("Encoder", lambda: webbrowser.open(KLEIN_FILES[1][3])),
@@ -6853,6 +6854,7 @@ def run_gui() -> None:
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[0][0]), str(here))),
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[1][0]), str(here))),
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[2][0]), str(here))),
+              ("Accept license", lambda: webbrowser.open(KLEIN_DL)),
               ("Move downloads", lambda: move_downloads())], neo_f)
 
         _f4, say4 = status_line(neo_f, 2 * 2 + 1)                     # under step 3: the moves

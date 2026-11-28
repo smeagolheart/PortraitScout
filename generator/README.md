@@ -41,7 +41,7 @@ graphics memory at fp8.
 
    | File | Copy to | From |
    |---|---|---|
-   | `flux-2-klein-9b-fp8.safetensors` (9.4 GB) | `engine-neo\models\Stable-diffusion\` | [black-forest-labs/FLUX.2-klein-9b-fp8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors?download=true) (sign in and accept the license first) |
+   | `flux-2-klein-9b-fp8.safetensors` (9.4 GB) | `engine-neo\models\Stable-diffusion\` | [black-forest-labs/FLUX.2-klein-9b-fp8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors?download=true) - sign in on [its page](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8) and accept the license first, or the link says "Access ... is restricted" |
    | `qwen_3_8b_fp8mixed.safetensors` (8.7 GB) | `engine-neo\models\text_encoder\` | [Comfy-Org/vae-text-encorder-for-flux-klein-9b](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors?download=true) |
    | `flux2-vae.safetensors` (336 MB) | `engine-neo\models\VAE\` | [the same repository](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/vae/flux2-vae.safetensors?download=true) |
 
