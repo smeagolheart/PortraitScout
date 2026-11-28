@@ -4,6 +4,8 @@ Finds the speaking creatures of an Infinity Engine mod - or a whole install (BG1
 
 It only **reads** your game folder. Nothing there is installed, changed or deleted.
 
+**To generate portraits** you need an image engine (not included): see **[Setting up the portrait generator](generator/README.md)** for the steps and download links, and get the face bank from the [release](https://github.com/smeagolheart/PortraitScout/releases). The same steps open in Portrait Scout the first time it starts without an engine, and any time from **Generator setup** at the top right.
+
 | Creature | Lines | Portrait | Race | Gender | Animation | CRE file(s) | Area(s) |
 |---------------------------------------------------------------------------------|
 | Skie | 21 | SKIEL | Human | Female | Thief Female Human | SKIE | AR0700 Docks District |

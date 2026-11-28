@@ -4,6 +4,7 @@
 
 ### Features
 
+- **Generator setup** at the top right opens the setup steps for the image engine, with their download links. The first time Portrait Scout opens with no engine, they open by themselves.
 - **Preview page.** Proposals > Preview page... saves one web page of the proposed portraits (game size, each with its name and race and gender), to look the set over in a browser or share it: a search box, click a portrait to see it bigger. The pictures are inside the page, so it is a single file. Create mod... puts one in the mod too, as preview.html. *Export work...* puts it in the work's .zip too (preview.html), for a look at an unfinished set at a glance.
 - **Race filter.** A Race list beside the gallery's filters shows one race at a time (goblins, dwarves...) in the gallery and the Expanded view.
 - **Pick from the pool: tick and delete.** The pool window in Propose and Expanded has a tick under each picture, Tick all, and Delete ticked, besides right-click Delete. And the keyboard: arrows (and Page Up/Down, Home, End) move a blue frame, Space ticks and moves on, Enter uses the framed picture, Delete deletes the ticked ones (or the framed one).

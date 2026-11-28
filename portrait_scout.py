@@ -4087,6 +4087,8 @@ def run_gui() -> None:
     loading_var = tk.StringVar(value="")
     ttk.Label(btns, textvariable=loading_var, foreground="#b45309",
               font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=14)
+    setup_btn = ttk.Button(btns, text="Generator setup")                # the steps to get an image engine
+    setup_btn.pack(side="right")
 
     fbar = ttk.Frame(root, padding=(8, 0, 8, 0))                     # what is listed: the same for Gallery, Table
     fbar.pack(fill="x")                                              # and Proposals, so it sits above all three
@@ -11359,7 +11361,14 @@ def run_gui() -> None:
                         "already chosen is replaced.")
     go_btn.config(command=analyze_clicked)
     list_btn.config(command=save_list)
+    setup_btn.config(command=setup_window)
+    tooltip(setup_btn, "How to set up the image engine, with download links. Shown by itself the first "
+                       "time Portrait Scout opens without one.")
     refresh()                                                        # the table says what to do before the first run
+    if not engine_ready() and not st.get("setup_shown"):             # first run with no engine: show the steps once
+        st["setup_shown"] = True
+        save_settings(st)
+        root.after(600, setup_window)
     root.mainloop()
 
 
