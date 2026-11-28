@@ -6805,6 +6805,10 @@ def run_gui() -> None:
             state["setup_engine"] = pick.get()
             (neo_f if pick.get() == "neo" else old_f).tkraise()
             (old_f if pick.get() == "neo" else neo_f).lower()
+            try:                                                     # Check files looks at Forge Neo's steps
+                crow_.grid() if pick.get() == "neo" else crow_.grid_remove()
+            except NameError:
+                pass
         for val, lab in (("neo", "Forge Neo (FLUX.2 Klein)"), ("old", "Forge (FLUX.1 dev, one file)")):
             tk.Radiobutton(picker, text=lab, value=val, variable=pick, bg=BG, activebackground=BG,
                            command=picked).pack(side="left", padx=(0, 12))
@@ -6915,8 +6919,8 @@ def run_gui() -> None:
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
             m_.grid(row=i_ * 2, column=2, sticky="w", padx=(2, 0))
-        crow_ = tk.Frame(neo_f, bg=BG)
-        crow_.grid(row=12, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        crow_ = tk.Frame(box, bg=BG)                                 # under the face bank, so neither is missed
+        crow_.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
 
         def check_neo() -> None:
@@ -6931,8 +6935,9 @@ def run_gui() -> None:
             for m_, (ok_, _w) in zip(marks_, res_):
                 m_.config(text="\u2714" if ok_ else "\u2716", fg="#2e7d32" if ok_ else "#b23b3b")
             todo_ = [f"Step {i_ + 1}: {w_}" for i_, (ok_, w_) in enumerate(res_) if not ok_]
-            cnote_.config(text=("All in place." + ("" if faces_count() else " Download the faces below, then close "
-                                "this window.")) if not todo_ else "\n".join(todo_))
+            if not faces_count():
+                todo_.append("Face bank: not downloaded yet - press Download faces above")
+            cnote_.config(text="All in place. Close this window and start proposing." if not todo_ else "\n".join(todo_))
         chk_btn = ttk.Button(crow_, text="Check files", command=check_neo)
         chk_btn.pack(side="left", anchor="n")
         tooltip(chk_btn, "Look for git, uv, Forge Neo, its Python and the three model files (whole, in the right "
@@ -7006,6 +7011,10 @@ def run_gui() -> None:
                     fprog.grid_remove()
                     faces_state()
                     fnote.config(text=text)
+                    try:
+                        check_neo()                                  # the check below counts the faces too
+                    except NameError:
+                        pass
             root.after(0, ui)
 
         def faces_get() -> None:
@@ -7065,7 +7074,7 @@ def run_gui() -> None:
         faces_state()
         # ---- defaults: where the Propose tab's picks start, and what Reset goes back to ----
         dbox = tk.Frame(box, bg=BG)
-        dbox.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        dbox.grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
         tk.Label(dbox, text="Defaults", bg=BG, font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, columnspan=10,
                                                                                        sticky="w")
         tk.Label(dbox, bg=BG, fg="#5a4a00", text="Where each pick on the Propose tab starts, and what Reset goes back "
@@ -7153,9 +7162,9 @@ def run_gui() -> None:
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=980,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
                       "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
-                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         more = tk.Frame(box, bg=BG)
-        more.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        more.grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
         ttk.Button(more, text="About Forge",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))
