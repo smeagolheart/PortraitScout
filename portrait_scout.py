@@ -6460,7 +6460,6 @@ def run_gui() -> None:
     FORGE_DOC = "https://github.com/lllyasviel/stable-diffusion-webui-forge"
     FLUX_DL = "https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4"
     LORA_DL = "https://civitai.com/models/850634"                     # the one the default style asks for
-    LORA_DL2 = "https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux"
     NEO_DOC = "https://github.com/Haoming02/sd-webui-forge-classic/tree/neo"   # Forge Neo: paints FLUX.2 Klein
     NEO_GIT = "git clone https://github.com/Haoming02/sd-webui-forge-classic engine-neo --branch neo"
     NEO_VENV = "uv venv venv --python 3.13 --seed"
@@ -6979,12 +6978,11 @@ def run_gui() -> None:
              [("Download model", lambda: webbrowser.open(FLUX_DL)),
               ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Stable-diffusion"),
                                                 str(here / "engine"), str(here)))], old_f)
-        step(3, [("4.  Optional: ", 0), ("chargen_oil_painting_v2.safetensors", 1),
-                 (" (86 MB, from Painterly Fantasy Portrait) in engine\\webui\\models\\Lora\\. The style Portrait "
-                  "Scout starts with asks for it by name - without it that style still runs, but the painted look is "
-                  "mostly gone.", 0)],
+        step(3, [("4.  Put ", 0), ("chargen_oil_painting_v2.safetensors", 1),
+                 (" (86 MB, from Painterly Fantasy Portrait) in engine\\webui\\models\\Lora\\, and pick the ", 0),
+                 ("BG2 oil painting", 1), (" style under Defaults below: it is the FLUX.1 style and asks for this LoRA "
+                  "by name (Klein painterly is for Forge Neo).", 0)],
              [("Download LoRA", lambda: webbrowser.open(LORA_DL)),
-              ("(other LoRA)", lambda: webbrowser.open(LORA_DL2)),
               ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Lora"),
                                                 str(here / "engine"), str(here)))], old_f)
         step(4, "5.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after "
@@ -8589,7 +8587,7 @@ def run_gui() -> None:
             lw_cb = ttk.Combobox(brow, textvariable=lora_w, values=LORA_WS, width=7, state="readonly")
             lw_cb.pack(side="right", padx=(2, 0))
             lw_cb.bind("<<ComboboxSelected>>", lambda e: (st.__setitem__("lora_weight", lora_w.get()), save_settings(st)))
-            tooltip(lw_cb, "How hard the LoRA pulls. Style's: what the style says (BG2 framing: 0.35). The "
+            tooltip(lw_cb, "How hard the LoRA pulls. Style's: what the style says (BG2 oil painting: 0.85). The "
                            "portrait LoRA was trained on armored adventurers, so it paints armor and a leather "
                            "coat over whatever clothes are asked for: at 0.35 rags come out as rags. Lower also "
                            "lets a creature keep its own features; higher looks more like the game's portraits.")
@@ -8612,7 +8610,7 @@ def run_gui() -> None:
                 pp_ = str(st.get("portrait_style_people") or "")
                 last_ = pp_ if pp_ in styles and not animal_style(pp_) else (
                     fallback_ if not animal_style(fallback_) else
-                    ("BG2 framing" if "BG2 framing" in styles else fallback_))
+                    ("Klein painterly" if "Klein painterly" in styles else fallback_))
         style_var = tk.StringVar(value=last_ if last_ in styles else fallback_)
         style_box = ttk.Combobox(brow, textvariable=style_var, values=styles, state="readonly", width=22)
         style_box.pack(side="right", padx=(4, 0))

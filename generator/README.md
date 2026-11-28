@@ -96,8 +96,7 @@ memory or more, and about 15 GB of disk with the engine.
    | File | Copy to | From |
    |---|---|---|
    | `flux1-dev-bnb-nf4-v2.safetensors` (12 GB) | `engine\webui\models\Stable-diffusion\` | [lllyasviel/flux1-dev-bnb-nf4](https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4) on Hugging Face |
-   | `chargen_oil_painting_v2.safetensors` (86 MB) | `engine\webui\models\Lora\` | [Painterly Fantasy Portrait](https://civitai.com/models/850634) on Civitai - **the "BG2 oil painting" style asks for this one** |
-   | `BG_Portrait.safetensors` (38 MB) | `engine\webui\models\Lora\` | [Baldur's Gate 2 Portrait Style Flux](https://civitai.com/models/2071031/baldurs-gate-2-portrait-style-flux) on Civitai - used by the "BG2 framing, light LoRA" style |
+   | `chargen_oil_painting_v2.safetensors` (86 MB) | `engine\webui\models\Lora\` | [Painterly Fantasy Portrait](https://civitai.com/models/850634) on Civitai - **the "BG2 oil painting" style asks for this one**; pick that style in Setup > Defaults, since Klein painterly is for Forge Neo |
 
    Other models work too: name the checkpoint in `payload.override_settings` and the LoRA in the style prompts
    of `settings.json`. FLUX.1 wants 20-30 steps, CFG 1 and distilled CFG about 1.6; SDXL and SD1.5 want CFG 5

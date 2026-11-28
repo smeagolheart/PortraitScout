@@ -25,6 +25,7 @@
 
 ### Changes
 
+- **Fewer styles, Klein painterly first.** The default style is Klein painterly, for Forge Neo with FLUX.2 Klein. Of the FLUX.1 styles only BG2 oil painting stays (pick it in Setup > Defaults with the older Forge); BG2 framing, BG2 framing light LoRA, BG2 oil painting long, Painterly and Painterly lighter LoRA are gone. Animal (no person) stays: it is used for beasts by itself.
 - **"Neither" is no longer shown** for a creature with no sex set: the Table, the gallery captions, the Propose header, the text and CSV exports and the preview page show just its race ("Ogre", not "Ogre Neither").
 - **Ogre looks like its sprite:** bald and bare-headed (the horned helmet is only the Half Ogre's), a crude sleeveless leather vest. Its skin is the creature's own skin color from its file (red for one, sallow yellow for another), and the ogre race no longer picks a random skin at all - Ogre, Half Ogre and Ogrillon all take the creature's own skin color. Other sprites can opt in with `"skin_colors": true` in sprite_terms.
 - **Animals wear no clothes:** a wolf, bear or other animal with no race line of its own was described as a man would be once its file had a gender - "adult male wolf ... a plain faded dark teal wool tunic", its sprite's colors read as clothes. It is now just the animal ("wolf", "winter wolf", "black bear").

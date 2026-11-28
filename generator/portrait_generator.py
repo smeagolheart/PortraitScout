@@ -81,28 +81,10 @@ DEFAULTS: dict = {
                             "colors, the way the game's own portraits are - a bright background pulls the eye "
                             "off the face. Add or remove freely; take {random} out of the background text to go "
                             "back to one fixed scheme.",
-    "style": "BG2 oil painting",
+    "style": "Klein painterly",
     "styles": {
         "_about": "Named looks to choose from in the Generate window. Each has its own 'prompt' (and optionally "
                   "'negative_prompt'); 'Current look' is the prompt above. Add your own here.",
-        "BG2 framing": {
-            "_about": "Needs the larger 292 MB LoRA (Baldur's Gate 1-2 Portrait Style), which is an extra download. "
-                      "Head filling the frame, the way Baldur's Gate portraits (and the HPS portrait project) are "
-                      "framed, so the picture needs little "
-                      "or no cropping afterwards (zoom 1). If faces still come out small, raise the LoRA weight "
-                      "(:.35 -> :.65) or crop with Head zoom. Its trigger word 'b2g8' is left out on purpose: it pulls hard "
-                      "towards the faces it was trained on and drops things like a tiefling's horns.",
-            "zoom": 1.0,
-            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
-                      "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
-                      "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
-                      "Nothing below the collarbone, no chest, no armor plates, no hands, no weapons. Head upright, "
-                      "eyes on the viewer. Painted as a classic Baldur's Gate character portrait: a realistic oil "
-                      "painting with visible brushstrokes and canvas texture, realistic facial proportions, natural "
-                      "skin tones, detailed weathered skin, expressive lifelike eyes, deep rich colors, warm light "
-                      "from one side with soft shadows. <lora:Baldurs_Gate_Portrait_Flux:.35> Behind the head, "
-                      "{background}."
-        },
         "Klein painterly": {
             "_about": "Written for Forge Neo with FLUX.2 Klein 9B (4 steps, CFG 1), and carrying no LoRA on "
                       "purpose: the painterly LoRA has a face baked into it, so every seed paints the same "
@@ -148,55 +130,6 @@ DEFAULTS: dict = {
                       "blending, no smooth skin, no sheen. The head fills most of the frame, cropped at the chest, "
                       "chin level, eyes on the viewer, shoulders and collar fully clothed. "
                       "<lora:chargen_oil_painting_v2:.85> Behind the head, {background}, kept off the face.",
-        },
-        "BG2 oil painting, long": {
-            "_about": "The longer wording this style had before: the same idea said at three times the length. "
-                      "Kept in case the short one is too terse for a character who needs a lot said about them; "
-                      "it frames looser and puts more shine on the skin.",
-            "zoom": 1.0,
-            "prompt": "in the style of chargen_oil_painting, extreme close-up face portrait of {character}, "
-                      "cropped at the collarbone. The head alone fills the picture: the hair nearly touches the "
-                      "top edge, the face reaches from edge to edge, the chin sits in the middle, and only a "
-                      "sliver of collar and shoulder shows along the bottom. Nothing below the collarbone, no "
-                      "chest, no hands, no weapons. Head upright, eyes on the viewer. A classic Baldur's Gate "
-                      "character portrait painted in oils: the face painted with the same loose brushwork as the "
-                      "clothing - broken color, visible brush edges on the cheek and brow, no smooth blending - "
-                      "the skin mottled and uneven, flecks, blotches and stubble worked into the paint rather "
-                      "than blended away. Matte paint, no glossy highlights on the skin, the shine on metal only. "
-                      "Thick paint, canvas texture, deep rich colors. <lora:chargen_oil_painting_v2:.85> Behind "
-                      "the head, {background}.",
-        },
-        "BG2 framing, light LoRA": {
-            "_about": "The same framing on the small BG2 LoRA (BG_Portrait, 38 MB) that the setup notes point to. "
-                      "It nudges the style instead of taking it over, so the description is followed more closely.",
-            "zoom": 1.0,
-            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Extreme close-up face portrait of {character}, cropped at the collarbone. The head alone "
-                      "fills the picture: the hair nearly touches the top edge, the face reaches from edge to edge, "
-                      "the chin sits in the middle, and only a sliver of collar and shoulder shows along the bottom. "
-                      "Nothing below the collarbone, no chest, no armor plates, no hands, no weapons. Head upright, "
-                      "eyes on the viewer. Painted as a classic Baldur's Gate character portrait: a realistic oil "
-                      "painting with visible brushstrokes and canvas texture, realistic facial proportions, natural "
-                      "skin tones, detailed weathered skin, expressive lifelike eyes, deep rich colors, warm light "
-                      "from one side with soft shadows. <lora:BG_Portrait:.8> Behind the head, {background}."
-        },
-        "Painterly": {
-            "_about": "Closer than the HPS portraits: crop it with Head zoom 1.25 or so.",
-            "zoom": 1.0,
-            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
-                      "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
-                      "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
-                      "and rich canvas texture, realistic facial proportions, natural skin tones, detailed weathered "
-                      "skin, expressive lifelike eyes, deep rich colors, warm light from one side with soft shadows. "
-                      "<lora:Baldurs_Gate_Portrait_Flux:.55> Set against {background}."
-        },
-        "Painterly, lighter LoRA": {
-            "zoom": 1.0,
-            "prompt": "A character from a medieval fantasy world, in clothes of the Middle Ages. Close-up head and shoulders portrait of {character}. The face fills most of the frame, front "
-                      "view, centered. Painterly fantasy character portrait in the manner of classic Dungeons & Dragons "
-                      "book illustrations and Baldur's Gate portraits: a realistic oil painting with visible brushstrokes "
-                      "and rich canvas texture, realistic facial proportions, natural skin tones, detailed weathered "
-                      "skin, expressive lifelike eyes, deep rich colors, warm light from one side with soft shadows. "
-                      "<lora:Baldurs_Gate_Portrait_Flux:.3> Set against {background}."
         },
     },
     "monster_edits": {"_about": "The second pass for monsters started from the face bank: what each is made into, in words. {skin}: the creature's own skin color, when its file has one.", "half-ogre": "a coarse brutish half-ogre: a much heavier jutting brow, small deep-set eyes, a thicker, wider jaw with two big tusks jutting up over the lip, a broad flat nose, rough thick {skin}", "orc": "a brutish orc: {skin}, a heavy jutting brow, small eyes, a broad flat pig-like nose, a heavy jaw with two big tusks jutting up over the lip, pointed ears", "orog": "a brutish orog: {skin}, an enormous long jaw with two big tusks, a heavy jutting brow", "hobgoblin": "a brutish hobgoblin: {skin}, large pointed ears, a heavy brow, a broad flat nose, a wide mouth of small yellowed fangs", "goblin": "a scrawny goblin: {skin}, very large pointed ears, a long sharp nose, small mean eyes, a wide mouth of small sharp teeth", "xvart": "a small wiry xvart: {skin}, large pointed ears, bright orange eyes, a wide mouth of small sharp teeth", "gnoll": "", "troll": "", "githyanki": "a gaunt githyanki: {skin}, a hard, hollow-cheeked face, small swept-back pointed ears"},
