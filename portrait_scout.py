@@ -6496,8 +6496,9 @@ def run_gui() -> None:
             parts_.append(os.path.expandvars(r"%USERPROFILE%\.local\bin"))   # where uv's installer puts it
         return os.pathsep.join(x for x in parts_ if x)
 
-    def run_in_window(cmd: str, cwd: str) -> None:
-        """Run a setup command in a command window of its own, which stays open so its output can be read."""
+    def run_in_window(cmd: str, cwd: str, on_done: Optional[Callable[[], None]] = None) -> None:
+        """Run a setup command in a command window of its own, which stays open until a key is pressed so its
+        output can be read. on_done runs here once that window has closed."""
         if not os.path.isdir(cwd):
             messagebox.showinfo("Portrait Scout", f"{cwd} is not there yet - do the step before this one first.")
             return
@@ -6508,18 +6509,21 @@ def run_gui() -> None:
                        "{ Write-Host 'That did not work - read the messages above.' -ForegroundColor Red }; "
                        "Write-Host 'Press any key to close this window.'; "
                        "$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')")
-                subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_], cwd=cwd, env=env_,
+                proc_ = subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_], cwd=cwd, env=env_,
                                  creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             else:
-                subprocess.Popen(["x-terminal-emulator", "-e", "bash", "-c",
+                proc_ = subprocess.Popen(["x-terminal-emulator", "-e", "bash", "-c",
                                   cmd + "; echo; read -n 1 -s -p 'Press any key to close this window.'"], cwd=cwd, env=env_)
         except OSError:
             try:
-                subprocess.Popen(["cmd", "/C", cmd + " & echo. & pause"], cwd=cwd, env=env_,
+                proc_ = subprocess.Popen(["cmd", "/C", cmd + " & echo. & pause"], cwd=cwd, env=env_,
                                  creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             except OSError as e_:
                 messagebox.showwarning("Portrait Scout", f"Could not open a command window:\n{e_}\n\n"
                                        f"Open one in {cwd} and type:\n{cmd}")
+                return
+        if on_done is not None:                                      # tick the step as soon as the window closes
+            threading.Thread(target=lambda: (proc_.wait(), root.after(0, on_done)), daemon=True).start()
 
     FACES_URL = "https://github.com/smeagolheart/PortraitScout/releases/latest/download/PortraitScout-faces.zip"
 
@@ -6717,11 +6721,11 @@ def run_gui() -> None:
              [("git", lambda: webbrowser.open(GIT_DL)), ("uv", lambda: webbrowser.open(UV_DL))], neo_f)
         step(1, [("2.  Clone Forge Neo into ", 0), ("engine-neo", 1), (" (Run it opens a command window in "
                  + str(here) + " and types it):\n", 0), (NEO_GIT, 1)],
-             [("Run it", lambda: run_in_window(NEO_GIT, str(here))), ("Copy", lambda: copy_cmd(NEO_GIT)),
+             [("Run it", lambda: run_in_window(NEO_GIT, str(here), lambda: check_neo())), ("Copy", lambda: copy_cmd(NEO_GIT)),
               ("About Neo", lambda: webbrowser.open(NEO_DOC))], neo_f)
         step(2, [("3.  Make its Python, inside engine-neo:\n", 0), (NEO_VENV, 1),
                  ("\n(Portrait Scout starts it with --uv.)", 0)],
-             [("Run it", lambda: run_in_window(NEO_VENV, str(here / "engine-neo"))),
+             [("Run it", lambda: run_in_window(NEO_VENV, str(here / "engine-neo"), lambda: check_neo())),
               ("Copy", lambda: copy_cmd(NEO_VENV))], neo_f)
         step(3, [("4.  Three files, about 18.4 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
                  ("flux-2-klein-9b-fp8.safetensors", 1), (" (9.4 GB) in Stable-diffusion\\, ", 0),
@@ -6801,14 +6805,7 @@ def run_gui() -> None:
         tooltip(chk_btn, "Look for git, uv, Forge Neo, its Python and the three model files (whole, in the right "
                          "folders), and whether the settings point at them.")
         cnote_.pack(side="left", padx=(10, 0))
-
-        def keep_checking() -> None:
-            """Look again every few seconds while the steps are on screen, so a step ticks as soon as it is done."""
-            if not cnote_.winfo_exists():
-                return
-            check_neo()
-            root.after(3000, keep_checking)
-        root.after(200, keep_checking)
+        root.after(200, check_neo)
 
         # ---- the older Forge: one package, one model file, no git ----
         step(0, [("1.  Download Forge's Windows one-click package (webui_forge_cu121_torch231.7z, 1.7 GB) and ", 0),
@@ -6930,14 +6927,6 @@ def run_gui() -> None:
             faces_say(0.0, "Starting the download...")
             threading.Thread(target=faces_get, daemon=True).start()
         fbtn.config(command=faces_start)
-
-        def faces_watch() -> None:
-            if not fnote.winfo_exists():
-                return
-            if "disabled" not in fbtn.state():                       # not while it is downloading
-                faces_state()
-            root.after(3000, faces_watch)
-        root.after(3000, faces_watch)
         tooltip(fbtn, "Download the face bank from the latest release and unpack it into the faces folder. "
                       "Faces already there are kept.")
         faces_state()
