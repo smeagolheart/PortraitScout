@@ -6773,8 +6773,9 @@ def run_gui() -> None:
                  (" writes all of it into generator\\settings.json.", 0)],
              [("Use Forge Neo", use_neo),
               ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
-        step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself after that.",
-             [], neo_f)
+        step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself after that. "
+                "The very first start is slow - Forge installs its packages, 10 to 30 minutes, once; after that it "
+                "starts in about a minute.", [], neo_f)
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
         for i_, m_ in enumerate(marks_):
             m_.grid(row=i_, column=2, sticky="nw", padx=(6, 0), pady=2)

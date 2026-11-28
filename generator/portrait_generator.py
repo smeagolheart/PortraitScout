@@ -1916,7 +1916,12 @@ class Engine:
                                  "models: they are many gigabytes and separately licensed. Put a copy of Forge in the "
                                  "'engine' folder (generator/README.md says how, and which two model files to add), or "
                                  "point engine.url in generator/settings.json at a generator you already run.")
-        self.log("Starting the image engine (the first start loads the model and can take several minutes)...")
+        edir = root / ("engine-neo" if "neo" in cmd.lower() else "engine")
+        mark = edir / ".portrait_scout_started"                      # a first start installs Forge's packages
+        first_start = edir.is_dir() and not mark.exists()
+        self.log("Starting the image engine for the first time: Forge installs its packages and sets itself up. "
+                 "This can take 10 to 30 minutes, once - later starts take about a minute..." if first_start else
+                 "Starting the image engine (loading the model can take a minute or two)...")
         show = bool(self.e.get("show_window"))                       # a window of its own, to watch it work
         flags = 0
         if os.name == "nt":
@@ -1931,10 +1936,16 @@ class Engine:
         except OSError as e:
             raise GeneratorError(f"The engine could not be started: {e}") from e
         began = time.time()
-        deadline = began + float(self.e.get("start_timeout_seconds", 600))
+        deadline = began + max(float(self.e.get("start_timeout_seconds", 600)), 3600 if first_start else 0)
         while time.time() < deadline:
             if self.alive():
                 self.log("Image engine is ready.")
+                if first_start:
+                    try:
+                        mark.write_text("Portrait Scout started this engine once; later starts are quick.\n",
+                                        encoding="utf-8")
+                    except OSError:
+                        pass
                 return
             if self.proc.poll() is not None:
                 raise GeneratorError("The image engine stopped while starting. See generator/engine.log for why.")
@@ -1944,7 +1955,10 @@ class Engine:
                 last = next((x.strip() for x in reversed(tail.splitlines()) if x.strip()), "")[:90]
             except OSError:
                 pass
-            self.progress(None, f"Starting the image engine... {int(time.time() - began)} s" + (f"   [{last}]" if last else ""))
+            took = int(time.time() - began)
+            self.progress(None, (f"First start, setting up (10-30 min, only this once)... {took // 60}:{took % 60:02d}"
+                                 if first_start else f"Starting the image engine... {took} s")
+                          + (f"   [{last}]" if last else ""))
             time.sleep(2)
         raise GeneratorError("The image engine did not answer in time. See generator/engine.log.")
 
