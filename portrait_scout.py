@@ -7063,39 +7063,92 @@ def run_gui() -> None:
         tooltip(fbtn, "Download the face bank from the latest release and unpack it into the faces folder. "
                       "Faces already there are kept.")
         faces_state()
-        # ---- defaults for new portraits ----
+        # ---- defaults: where the Propose tab's picks start, and what Reset goes back to ----
         dbox = tk.Frame(box, bg=BG)
         dbox.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        tk.Label(dbox, text="Portrait defaults:", bg=BG).pack(side="left", padx=(0, 8))
+        tk.Label(dbox, text="Defaults", bg=BG, font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, columnspan=10,
+                                                                                       sticky="w")
+        tk.Label(dbox, bg=BG, fg="#5a4a00", text="Where each pick on the Propose tab starts, and what Reset goes back "
+                 "to. Change any of them for one portrait there as usual.").grid(row=1, column=0, columnspan=10,
+                                                                                sticky="w", pady=(0, 4))
         try:
             pgd_ = generator_module()
             gsd_ = pgd_.load_settings()                              # type: ignore[attr-defined]
-            for key_, lab_, terms_, tip_ in (
-                    ("scar_default", "Scars", "scar_terms", "Scars a new portrait gets when you pick none: from None "
-                     "to Wounded. Few, the default, adds a thin healed scar on one cheek."),
-                    ("grime_default", "Grime", "grime_terms", "How dirty a new portrait's face is when you pick "
-                     "nothing: from Clean to Filthy.")):
-                names_ = [n_ for n_ in (gsd_.get(terms_) or {}) if not str(n_).startswith("_")]
+        except Exception:  # noqa: BLE001 - no generator here yet: nothing to set
+            pgd_ = gsd_ = None
+        if gsd_ is not None:
+            pdef_ = st.setdefault("pick_defaults", {})              # type: ignore[assignment]
+            items_ = [                                               # (label, choices, value now, save, tip)
+                ("Age", "age_terms", "age", "How old a new portrait is."),
+                ("Look", "look_terms", "look", "Weathered, freckled, sickly, well-kept..."),
+                ("Mood", "mood_terms", "mood", "The face's expression."),
+                ("Beard", "beard_terms", "beard", "By race: each race's own (a dwarf's long beard)."),
+                ("Clothes", "outfit_terms", "outfit", "By role: what the creature's class and sprite wear."),
+                ("Scars", "scar_terms", "scars", "Also what the gallery's Generate and Expanded give every "
+                 "creature. Few: a thin healed scar on one cheek."),
+                ("Grime", "grime_terms", "grime", "Also what the gallery's Generate and Expanded give every "
+                 "creature.")]
+            col_ = 0
+            for k_, (lab_, terms_, what_, tip_) in enumerate(items_):
+                names_ = pgd_.term_names(gsd_, terms_)               # type: ignore[union-attr]
                 if not names_:
                     continue
-                tk.Label(dbox, text=lab_ + ":", bg=BG).pack(side="left", padx=(8, 4))
-                v_ = tk.StringVar(value=str(gsd_.get(key_) or names_[0]))
-                cb_ = ttk.Combobox(dbox, textvariable=v_, values=names_, state="readonly", width=10)
-                cb_.pack(side="left")
+                if what_ in ("scars", "grime"):
+                    cur_ = str(gsd_.get("scar_default" if what_ == "scars" else "grime_default") or names_[0])
+                else:
+                    cur_ = str(pdef_.get(what_) or ("Adult" if what_ == "age" and "Adult" in names_ else names_[0]))   # type: ignore[union-attr]
+                r_, c_ = 2 + k_ // 4, (k_ % 4) * 2
+                tk.Label(dbox, text=lab_ + ":", bg=BG).grid(row=r_, column=c_, sticky="e", padx=(8, 4), pady=2)
+                v_ = tk.StringVar(value=cur_ if cur_ in names_ else names_[0])
+                cb_ = ttk.Combobox(dbox, textvariable=v_, values=names_, state="readonly", width=14)
+                cb_.grid(row=r_, column=c_ + 1, sticky="w", pady=2)
                 tooltip(cb_, tip_)
 
-                def set_default(_e: object = None, key_: str = key_, v_: tk.StringVar = v_, lab_: str = lab_) -> None:
-                    try:
-                        pgd_.save_patch(pgd_.load_settings(), {key_: v_.get()})   # type: ignore[attr-defined]
-                    except Exception as e_:  # noqa: BLE001
-                        messagebox.showwarning("Portrait Scout", str(e_), parent=box)
-                        return
-                    st["last_" + ("scars" if key_ == "scar_default" else "grime")] = v_.get()   # Propose's own pick
+                def set_default(_e: object = None, what_: str = what_, v_: tk.StringVar = v_, lab_: str = lab_) -> None:
+                    if what_ in ("scars", "grime"):
+                        try:
+                            pgd_.save_patch(pgd_.load_settings(),    # type: ignore[union-attr]
+                                            {"scar_default" if what_ == "scars" else "grime_default": v_.get()})
+                        except Exception as e_:  # noqa: BLE001
+                            messagebox.showwarning("Portrait Scout", str(e_), parent=box)
+                            return
+                    else:
+                        st.setdefault("pick_defaults", {})[what_] = v_.get()   # type: ignore[index]
                     save_settings(st)
                     state.pop("gen", None)                           # read again at the next Propose
-                    status.set(f"New portraits: {lab_} {v_.get()}.")
+                    status.set(f"Default {lab_.lower()}: {v_.get()}.")
                 cb_.bind("<<ComboboxSelected>>", set_default)
-        except Exception:  # noqa: BLE001 - no generator here yet: nothing to set
+                col_ = k_
+            r_ = 2 + (col_ + 1) // 4 + (1 if (col_ + 1) % 4 else 0)
+            styles_ = [n_ for n_ in (gsd_.get("styles") or {}) if not str(n_).startswith("_")]
+            if styles_:
+                tk.Label(dbox, text="Style:", bg=BG).grid(row=r_, column=0, sticky="e", padx=(8, 4), pady=2)
+                sv_ = tk.StringVar(value=str(st.get("portrait_style") or gsd_.get("style") or styles_[0]))
+                scb_ = ttk.Combobox(dbox, textvariable=sv_, values=styles_, state="readonly", width=24)
+                scb_.grid(row=r_, column=1, columnspan=3, sticky="w", pady=2)
+                tooltip(scb_, "The painting style for people. Klein painterly is what Forge Neo is set up for.")
+
+                def set_style(_e: object = None) -> None:
+                    st["portrait_style"] = st["portrait_style_people"] = sv_.get()
+                    save_settings(st)
+                    status.set(f"Default style: {sv_.get()}.")
+                scb_.bind("<<ComboboxSelected>>", set_style)
+            ex_ = tk.BooleanVar(value=st.get("gallery_mode", "plain") == "auto")
+
+            def set_expanded() -> None:
+                st["gallery_mode"] = "auto" if ex_.get() else "plain"
+                save_settings(st)
+                try:
+                    auto_mode_var.set(ex_.get())                     # the tick box at the top follows
+                    show_view()
+                except Exception:  # noqa: BLE001
+                    pass
+            exc_ = tk.Checkbutton(dbox, text="Expanded gallery", variable=ex_, command=set_expanded, bg=BG,
+                                  activebackground=BG)
+            exc_.grid(row=r_, column=4, columnspan=4, sticky="w", padx=(8, 0))
+            tooltip(exc_, "Open the gallery Expanded: each creature's card opened out with new pictures to pick "
+                          "from. The same as the Expanded tick box at the top.")
+        else:
             dbox.grid_remove()
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=980,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
@@ -8378,23 +8431,28 @@ def run_gui() -> None:
         class_v = tk.StringVar(value=str(saved.get("class") or last[2]))
         ages = pg.term_names(gs, "age_terms") or ["Adult"]           # type: ignore[attr-defined]
         looks = pg.term_names(gs, "look_terms") or ["Ordinary"]      # type: ignore[attr-defined]
-        age_v = tk.StringVar(value=str(saved.get("age") or st.get("last_age") or ("Adult" if "Adult" in ages else ages[0])))
         def kept(v: object, vals: List[str]) -> str:                 # a choice since taken out of settings
             return str(v) if str(v or "") in vals else vals[0]       # ("Noble" was a look once) starts over
-        look_v = tk.StringVar(value=kept(saved.get("look") or st.get("last_look"), looks))
         moods = pg.term_names(gs, "mood_terms") or ["Neutral"]      # type: ignore[attr-defined]
-        mood_v = tk.StringVar(value=kept(saved.get("mood") or st.get("last_mood"), moods))
         scars = pg.term_names(gs, "scar_terms") or ["None"]         # type: ignore[attr-defined]
-        scar0 = str(gs.get("scar_default") or "") if str(gs.get("scar_default") or "") in scars else scars[0]
-        scar_v = tk.StringVar(value=str(saved.get("scars")) if saved.get("scars") in scars else
-                              kept(st.get("last_scars") or scar0, scars))
         beards = pg.term_names(gs, "beard_terms") or ["By race"]   # type: ignore[attr-defined]
-        beard_v = tk.StringVar(value=kept(saved.get("beard"), beards))
         grimes = pg.term_names(gs, "grime_terms") or ["Clean"]      # type: ignore[attr-defined]
-        grime0 = str(gs.get("grime_default") or "") if str(gs.get("grime_default") or "") in grimes else grimes[0]
-        grime_v = tk.StringVar(value=kept(saved.get("grime") or st.get("last_grime") or grime0, grimes))
         cloths = pg.term_names(gs, "outfit_terms") or ["By role"]   # type: ignore[attr-defined]
-        cloth_v = tk.StringVar(value=kept(saved.get("outfit"), cloths))
+
+        def pick_default(what: str, vals: List[str]) -> str:
+            """Where a pick starts, and what Reset goes back to: the Defaults of Generator setup."""
+            if what in ("scars", "grime"):                           # also what every other picture gets
+                return kept(gs.get("scar_default" if what == "scars" else "grime_default"), vals)
+            v_ = (st.get("pick_defaults") or {}).get(what)          # type: ignore[union-attr]
+            return kept(v_ or ("Adult" if what == "age" and "Adult" in vals else ""), vals)
+        age_v = tk.StringVar(value=kept(saved.get("age") or pick_default("age", ages), ages))
+        look_v = tk.StringVar(value=kept(saved.get("look") or pick_default("look", looks), looks))
+        mood_v = tk.StringVar(value=kept(saved.get("mood") or pick_default("mood", moods), moods))
+        scar0 = pick_default("scars", scars)
+        scar_v = tk.StringVar(value=str(saved.get("scars")) if saved.get("scars") in scars else scar0)
+        beard_v = tk.StringVar(value=kept(saved.get("beard") or pick_default("beard", beards), beards))
+        grime_v = tk.StringVar(value=kept(saved.get("grime") or pick_default("grime", grimes), grimes))
+        cloth_v = tk.StringVar(value=kept(saved.get("outfit") or pick_default("outfit", cloths), cloths))
 
         def pick_changed(*_a: object) -> None:
             race, sex, cls = race_v.get() or "Human", sex_v.get() or "Male", class_v.get() or "Fighter"
@@ -8418,13 +8476,13 @@ def run_gui() -> None:
             race_v.set(last[0] if not generic else "Human")
             sex_v.set(last[1] if not generic else "Male")
             class_v.set(last[2] if not generic else "Fighter")
-            age_v.set("Adult" if "Adult" in ages else ages[0])
-            look_v.set(looks[0])
-            mood_v.set(moods[0])
+            age_v.set(pick_default("age", ages))                     # the Defaults of Generator setup
+            look_v.set(pick_default("look", looks))
+            mood_v.set(pick_default("mood", moods))
             scar_v.set(scar0)
-            beard_v.set(beards[0])
-            grime_v.set(grimes[0])
-            cloth_v.set(cloths[0])
+            beard_v.set(pick_default("beard", beards))
+            grime_v.set(pick_default("grime", grimes))
+            cloth_v.set(pick_default("outfit", cloths))
             if generic:
                 pick_changed()
             else:                                                    # the creature as its own file describes it
