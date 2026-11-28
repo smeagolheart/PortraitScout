@@ -119,7 +119,7 @@ picture starts from a real face, which the words then turn into the character.
 
   **Getting the faces:** the face bank is not in the repository (about 550 MB). Download
   `PortraitScout-2.0-faces.zip` from the [release](https://github.com/smeagolheart/PortraitScout/releases) and
-  unzip it into the Portrait Scout folder, so there is a `faces` folder beside `portrait_scout.py`. The photos
+  unzip it in the same place as `PortraitScout-2.0.zip`: it adds `PortraitScout\faces`, beside `portrait_scout.py`. The photos
   are synthetic faces from [SFHQ](https://github.com/SelfishGene/SFHQ-dataset) by David Beniaguev (MIT License).
   Without them, Start from works as Nothing.
 - **Its portrait**: starts from the creature's own portrait (the face bank if it has none).
