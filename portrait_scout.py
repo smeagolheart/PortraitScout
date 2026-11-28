@@ -6948,13 +6948,15 @@ def run_gui() -> None:
              [("Use Forge Neo", use_neo),
               ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
         _f5, say5 = status_line(neo_f, 3 * 2 + 1)                     # under step 4: the first start
-        step(4, "5.  Press Check again, at the top: it names the engine it found. From now on Portrait Scout starts "
-                "and stops it by itself.", [], neo_f)
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(4)]
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
             m_.grid(row=i_ * 2, column=2, sticky="w", padx=(2, 0))
-        crow_ = tk.Frame(box, bg=BG)                                 # under the face bank, so neither is missed
-        crow_.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        lastl_ = tk.Label(box, bg=BG, justify="left", anchor="w", font=("TkDefaultFont", 9, "bold"),
+                          text="Last: press Check again at the top - it names the engine it found. From then on "
+                               "Portrait Scout starts and stops the engine by itself.")
+        lastl_.grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))   # once the face bank and Near
+        crow_ = tk.Frame(box, bg=BG)                                 # Infinity are done too; then the check
+        crow_.grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 0))
         cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
 
         def check_neo() -> None:
@@ -7006,8 +7008,6 @@ def run_gui() -> None:
              [("Download LoRA", lambda: webbrowser.open(LORA_DL)),
               ("Open folder", lambda: open_make(str(here / "engine" / "webui" / "models" / "Lora"),
                                                 str(here / "engine"), str(here)))], old_f)
-        step(4, "5.  Press Check again, at the top. Portrait Scout starts and stops the generator by itself after "
-                "that.", [], old_f)
         picked()
         # ---- the face bank: for either engine ----
         fbox = tk.Frame(box, bg=BG)
@@ -7164,7 +7164,7 @@ def run_gui() -> None:
         state["sprites_state"] = sprites_state                       # Check files looks again too
         # ---- defaults: where the Propose tab's picks start, and what Reset goes back to ----
         dbox = tk.Frame(box, bg=BG)
-        dbox.grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        dbox.grid(row=9, column=0, columnspan=2, sticky="w", pady=(10, 0))
         tk.Label(dbox, text="Defaults", bg=BG, font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, columnspan=10,
                                                                                        sticky="w")
         tk.Label(dbox, bg=BG, fg="#5a4a00", text="Where each pick on the Propose tab starts, and what Reset goes back "
@@ -7252,9 +7252,9 @@ def run_gui() -> None:
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=980,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
                       "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
-                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
+                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 0))
         more = tk.Frame(box, bg=BG)
-        more.grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        more.grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
         ttk.Button(more, text="About Forge",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))
