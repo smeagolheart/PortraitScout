@@ -4087,7 +4087,7 @@ def run_gui() -> None:
     loading_var = tk.StringVar(value="")
     ttk.Label(btns, textvariable=loading_var, foreground="#b45309",
               font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=14)
-    setup_btn = ttk.Button(btns, text="Generator setup")                # the steps to get an image engine
+    setup_btn = ttk.Button(btns, text="Setup")               # the engine, the faces and the defaults
     setup_btn.pack(side="right")
 
     fbar = ttk.Frame(root, padding=(8, 0, 8, 0))                     # what is listed: the same for Gallery, Table
@@ -7212,7 +7212,7 @@ def run_gui() -> None:
         """The setup steps and their download links, on their own, for when the Propose tab is not where you are."""
         w = tk.Toplevel(root)
         esc_closes(w)
-        w.title("Setting up portrait generation")
+        w.title("Portrait Scout setup")
         w.geometry("920x560")
         cv_ = tk.Canvas(w, highlightthickness=0)
         sb_ = ttk.Scrollbar(w, orient="vertical", command=cv_.yview)
@@ -8440,7 +8440,7 @@ def run_gui() -> None:
         cloths = pg.term_names(gs, "outfit_terms") or ["By role"]   # type: ignore[attr-defined]
 
         def pick_default(what: str, vals: List[str]) -> str:
-            """Where a pick starts, and what Reset goes back to: the Defaults of Generator setup."""
+            """Where a pick starts, and what Reset goes back to: the Defaults of Setup."""
             if what in ("scars", "grime"):                           # also what every other picture gets
                 return kept(gs.get("scar_default" if what == "scars" else "grime_default"), vals)
             v_ = (st.get("pick_defaults") or {}).get(what)          # type: ignore[union-attr]
@@ -8476,7 +8476,7 @@ def run_gui() -> None:
             race_v.set(last[0] if not generic else "Human")
             sex_v.set(last[1] if not generic else "Male")
             class_v.set(last[2] if not generic else "Fighter")
-            age_v.set(pick_default("age", ages))                     # the Defaults of Generator setup
+            age_v.set(pick_default("age", ages))                     # the Defaults of Setup
             look_v.set(pick_default("look", looks))
             mood_v.set(pick_default("mood", moods))
             scar_v.set(scar0)
@@ -9824,7 +9824,7 @@ def run_gui() -> None:
         emenu.add_separator()
         emenu.add_command(label="Show the log...", command=open_log)
         emenu.add_command(label="Open the generator's own page...", command=lambda: webbrowser.open(eurl))
-        emenu.add_command(label="Set up the generator...", command=setup_window)
+        emenu.add_command(label="Setup...", command=setup_window)
         emenu.add_command(label="Edit settings.json...",
                           command=lambda: open_path(str(here_ / "generator" / "settings.json")))
         ebtn = ttk.Menubutton(erow2, text="Engine \u25be", menu=emenu, width=9)
@@ -11922,8 +11922,8 @@ def run_gui() -> None:
     go_btn.config(command=analyze_clicked)
     list_btn.config(command=save_list)
     setup_btn.config(command=setup_window)
-    tooltip(setup_btn, "How to set up the image engine, with download links. Shown by itself the first "
-                       "time Portrait Scout opens without one.")
+    tooltip(setup_btn, "Set up the image engine (steps and download links), get the face bank, and choose the "
+                       "defaults new portraits start from. Opens by itself the first time.")
     refresh()                                                        # the table says what to do before the first run
     if (not engine_ready() or not faces_count()) and not st.get("setup_shown"):             # first run with no engine: show the steps once
         st["setup_shown"] = True

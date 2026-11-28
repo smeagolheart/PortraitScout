@@ -297,7 +297,7 @@ DEFAULTS: dict = {
     },
     "scar_default": "Few",
     "grime_default": "Clean",
-    "_grime_default": "Used when no Grime is picked, like scar_default for Scars. Both can be set in Generator setup.",
+    "_grime_default": "Used when no Grime is picked, like scar_default for Scars. Both can be set in Setup.",
     "grime_terms": {
         "_about": "Offered as 'Grime' in the Propose tab: how dirty the face is.",
         "Clean": "",

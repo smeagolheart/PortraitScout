@@ -50,7 +50,7 @@ graphics memory at fp8.
    at about 50 steps and CFG 4 - slower, and not what the styles here are tuned for. FLUX.2 Klein is under
    Black Forest Labs' non-commercial license; read it before selling anything painted with it.
 
-5. Point `settings.json` at it. **Use Forge Neo** in Portrait Scout's setup window (Generator setup, top right)
+5. Point `settings.json` at it. **Use Forge Neo** in Portrait Scout's setup window (Setup, top right)
    does this for you, with your own paths; **Check files** there ticks each step that is done. By hand:
 
    ```json
@@ -115,7 +115,7 @@ To go back and forth, `settings.json` keeps the other one beside it - `_start_ol
 command and `_payload_old` the settings that go with it. Swap them into `start` and `payload`.
 
 The same steps, with buttons that open each download and folder, are on the **Propose** tab when no engine is
-found, and under **Engine > Set up the generator...**
+found, and under **Engine > Setup...**
 
 ## Changing the look
 

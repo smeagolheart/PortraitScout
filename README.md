@@ -4,7 +4,7 @@ Finds the speaking creatures of an Infinity Engine mod - or a whole install (BG1
 
 It only **reads** your game folder. Nothing there is installed, changed or deleted.
 
-**To generate portraits** you need an image engine (not included): see **[Setting up the portrait generator](generator/README.md)** for the steps and download links. The same steps, with a **Download faces** button for the face bank, open in Portrait Scout the first time it starts without an engine, and any time from **Generator setup** at the top right.
+**To generate portraits** you need an image engine (not included): see **[Setting up the portrait generator](generator/README.md)** for the steps and download links. The same steps, with a **Download faces** button for the face bank, open in Portrait Scout the first time it starts without an engine, and any time from **Setup** at the top right, along with the defaults new portraits start from.
 
 | Creature | Lines | Portrait | Race | Gender | Animation | CRE file(s) | Area(s) |
 |---------------------------------------------------------------------------------|
@@ -118,7 +118,7 @@ picture starts from a real face, which the words then turn into the character.
   first, then the creature in words. Beasts, kobolds and the undead are left to the words.
 
   **Getting the faces:** the face bank is not in the repository (about 550 MB). Press **Download faces** in
-  Portrait Scout's setup window (**Generator setup**, top right; it opens by itself the first time): it fetches
+  Portrait Scout's setup window (**Setup**, top right; it opens by itself the first time): it fetches
   `PortraitScout-faces.zip` from the latest [release](https://github.com/smeagolheart/PortraitScout/releases)
   and unpacks it into `faces\`. Or download that zip yourself and unzip it where you unzipped Portrait Scout.
   The photos are synthetic faces from [SFHQ](https://github.com/SelfishGene/SFHQ-dataset) by David Beniaguev
