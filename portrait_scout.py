@@ -6616,7 +6616,9 @@ def run_gui() -> None:
                    and all(os.path.isfile(str(m_)) for m_ in ov_.get("forge_additional_modules") or [None]))
         except Exception:  # noqa: BLE001 - no generator settings yet
             ok_ = False
-        out_.append((ok_, "not set to Forge Neo yet - press Use Forge Neo"))
+        started_ = (neo_ / ".portrait_scout_started").is_file()      # its slow first start is behind it
+        out_.append((ok_ and started_, "set, but not started once yet - press Use Forge Neo" if ok_ else
+                     "not set to Forge Neo yet - press Use Forge Neo"))
         return out_
 
     def lora_files() -> List[str]:
@@ -6736,31 +6738,51 @@ def run_gui() -> None:
              [("Model", lambda: webbrowser.open(KLEIN_FILES[0][3])),
               ("Encoder", lambda: webbrowser.open(KLEIN_FILES[1][3])),
               ("VAE", lambda: webbrowser.open(KLEIN_FILES[2][3])),
-              ("Move downloads", lambda: move_downloads()),
-              ("Open folder", lambda: open_make(str(here / "engine-neo" / "models"), str(here)))], neo_f)
+              ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[0][0]), str(here))),
+              ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[1][0]), str(here))),
+              ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[2][0]), str(here))),
+              ("Move downloads", lambda: move_downloads())], neo_f)
+
+        def work_say(text: str) -> None:
+            """A line under the steps for what a button is busy doing (moving files, the first start)."""
+            def ui() -> None:
+                if wnote_.winfo_exists():
+                    wnote_.config(text=text)
+                    if text:
+                        wnote_.grid()
+                    else:
+                        wnote_.grid_remove()
+            root.after(0, ui)
 
         def move_downloads() -> None:
-            """Move the model files from Downloads into engine-neo\\models, each into its own folder."""
+            """Move the model files from Downloads into engine-neo\\models, each into its own folder - in the
+            background: to another drive a move is a copy, and 18 GB takes minutes."""
             todo_ = klein_downloaded()
             if not todo_:
                 messagebox.showinfo("Portrait Scout", "No whole model files waiting in Downloads. Each one is "
                                     "moved once it has finished downloading.", parent=box)
                 check_neo()
                 return
-            moved_, err_ = [], []
-            for src_, dst_ in todo_:
-                try:
-                    dst_.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(src_), str(dst_))
-                    moved_.append(f"{dst_.name} -> {dst_.parent.name}\\")
-                except OSError as e_:
-                    err_.append(f"{src_.name}: {e_}")
-            status.set("Moved " + ", ".join(moved_) if moved_ else "Nothing moved.")
-            if err_:
-                messagebox.showwarning("Portrait Scout", "Could not move:\n" + "\n".join(err_), parent=box)
-            check_neo()
+
+            def work() -> None:
+                moved_, err_ = [], []
+                for k_, (src_, dst_) in enumerate(todo_):
+                    work_say(f"Moving {src_.name} ({k_ + 1} of {len(todo_)}, {src_.stat().st_size / 1e9:.1f} GB) "
+                             f"into {dst_.parent.name}\\... a minute or two if it goes to another drive.")
+                    try:
+                        dst_.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(src_), str(dst_))
+                        moved_.append(dst_.name)
+                    except OSError as e_:
+                        err_.append(f"{src_.name}: {e_}")
+                work_say(("Moved " + ", ".join(moved_) + "." if moved_ else "") +
+                         (("  Could not move: " + "; ".join(err_)) if err_ else ""))
+                root.after(0, check_neo)
+            threading.Thread(target=work, daemon=True).start()
 
         def use_neo() -> None:
+            """Write the settings, then start the engine once: its first start installs Forge's packages, and
+            that is best done here, not at the first Generate."""
             try:
                 pg_ = generator_module()
                 gs_ = pg_.load_settings()                            # type: ignore[attr-defined]
@@ -6772,20 +6794,46 @@ def run_gui() -> None:
             save_settings(st)
             status.set("Generator settings: Forge Neo with FLUX.2 Klein 9B, 4 steps, CFG 1.")
             check_neo()
-        step(4, [("5.  Point Portrait Scout at Forge Neo: its start script, the Klein model, the encoder and the "
-                  "VAE, 4 steps at CFG 1, and the Klein painterly style. ", 0), ("Use Forge Neo", 1),
-                 (" writes all of it into generator\\settings.json.", 0)],
+            if not all(ok_ for ok_, _w in neo_checks()[:4]):
+                work_say("Settings written. Finish the steps above, then press Use Forge Neo again to start it "
+                         "for the first time.")
+                return
+            old_ = state.get("engine")
+            if old_ is not None and getattr(old_, "proc", None) is not None:
+                work_say("Settings written. The engine is already running; it uses them from its next start.")
+                return
+            eng_ = pg_.Engine(pg_.load_settings())                   # type: ignore[attr-defined]
+            state["engine"] = eng_                                   # stopped with Portrait Scout, like any other
+            eng_.keep = bool(st.get("engine_keep"))                  # type: ignore[attr-defined]
+            eng_.log = lambda m_: work_say(m_)                       # type: ignore[attr-defined]
+            eng_.progress = lambda f_, m_: work_say(m_)              # type: ignore[attr-defined]
+
+            def work() -> None:
+                try:
+                    eng_.start()                                     # type: ignore[attr-defined]
+                    work_say("Forge Neo is set up and running. Press Check again at the top, then Generate.")
+                except Exception as e_:  # noqa: BLE001
+                    work_say(f"The engine did not start: {e_}")
+                root.after(0, check_neo)
+            threading.Thread(target=work, daemon=True).start()
+        step(4, [("5.  Set Portrait Scout to Forge Neo and start it once. ", 0), ("Use Forge Neo", 1),
+                 (" writes the start script, the Klein model, the encoder and the VAE, 4 steps at CFG 1 and the "
+                  "Klein painterly style into generator\\settings.json, then starts the engine for the first time. "
+                  "That first start installs Forge's packages: 10 to 30 minutes, once. Later starts take about a "
+                  "minute.", 0)],
              [("Use Forge Neo", use_neo),
               ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
-        step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself after that. "
-                "The very first start is slow - Forge installs its packages, 10 to 30 minutes, once; after that it "
-                "starts in about a minute.", [], neo_f)
+        step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself from now on.",
+             [], neo_f)
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
             m_.grid(row=i_, column=2, sticky="w", padx=(2, 0))
         crow_ = tk.Frame(neo_f, bg=BG)
         crow_.grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
         cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
+        wnote_ = tk.Label(neo_f, text="", bg=BG, fg="#1f5fa8", justify="left", wraplength=900)
+        wnote_.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        wnote_.grid_remove()
 
         def check_neo() -> None:
             """Tick each step that is done, and say what the first one that is not still needs."""
