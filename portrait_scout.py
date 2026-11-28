@@ -6647,6 +6647,28 @@ def run_gui() -> None:
             path = next((p for p in fallbacks if os.path.isdir(p)), path)
         open_path(path)
 
+    def engine_text() -> str:
+        """The setup window's heading: which engine is here, and whether the settings use it."""
+        here_ = Path(__file__).resolve().parent
+        neo_ = (here_ / "engine-neo" / "webui.bat").is_file() or (here_ / "engine-neo" / "webui.sh").is_file()
+        old_ = (here_ / "engine" / "webui" / "webui.bat").is_file() or (here_ / "engine" / "webui" / "webui.sh").is_file()
+        try:
+            eg_ = generator_module().load_settings().get("engine") or {}   # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            eg_ = {}
+        if eg_ and not eg_.get("autostart", True):
+            return f"Using your own generator at {eg_.get('url') or 'its address'}"
+        uses_neo_ = "neo" in str(eg_.get("start") or "").lower()
+        if uses_neo_ and neo_:
+            return "Engine found: Forge Neo (FLUX.2 Klein)"
+        if not uses_neo_ and old_:
+            return "Engine found: Forge (FLUX.1)"
+        if neo_:
+            return "Engine found: Forge Neo - press Use Forge Neo (step 5) to use it"
+        if old_:
+            return "Engine found: Forge - the settings point at Forge Neo, which is not here"
+        return "No image generator here yet"
+
     def setup_panel(parent: object, again: object = None) -> object:
         """What to download and where to put it, for someone who has just cloned the repository."""
         here = Path(__file__).resolve().parent
@@ -6655,10 +6677,14 @@ def run_gui() -> None:
         box.columnconfigure(0, weight=1)
         head = tk.Frame(box, bg=BG)
         head.grid(row=0, column=0, columnspan=2, sticky="w")
-        tk.Label(head, text="Image generator setup" if engine_ready() else "No image generator here yet", bg=BG,
-                 font=("TkDefaultFont", 10, "bold")).pack(side="left")
+        head_l = tk.Label(head, text=engine_text(), bg=BG, font=("TkDefaultFont", 10, "bold"))
+        head_l.pack(side="left")
         if callable(again):
-            ttk.Button(head, text="Check again", command=again).pack(side="left", padx=10)   # type: ignore[arg-type]
+            def again_() -> None:
+                again()                                              # type: ignore[operator]
+                if head_l.winfo_exists():                            # still open: say what was found
+                    head_l.config(text=engine_text())
+            ttk.Button(head, text="Check again", command=again_).pack(side="left", padx=10)
         tk.Label(box, bg=BG, justify="left", wraplength=980, fg="#5a4a00",
                  text="Portrait Scout builds the prompt, sends it, and turns the picture into a game portrait. The "
                       "generator itself and its models are many gigabytes and separately licensed, so they are not in "
@@ -6823,8 +6849,8 @@ def run_gui() -> None:
                   "minute.", 0)],
              [("Use Forge Neo", use_neo),
               ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
-        step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself from now on.",
-             [], neo_f)
+        step(5, "6.  Press Check again, at the top: it names the engine it found. From now on Portrait Scout starts "
+                "and stops it by itself.", [], neo_f)
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
             m_.grid(row=i_, column=2, sticky="w", padx=(2, 0))
@@ -6847,7 +6873,8 @@ def run_gui() -> None:
             for m_, (ok_, _w) in zip(marks_, res_):
                 m_.config(text="\u2714" if ok_ else "\u2716", fg="#2e7d32" if ok_ else "#b23b3b")
             todo_ = [f"Step {i_ + 1}: {w_}" for i_, (ok_, w_) in enumerate(res_) if not ok_]
-            cnote_.config(text="All in place. Press Check again at the top." if not todo_ else "\n".join(todo_))
+            cnote_.config(text=("All in place." + ("" if faces_count() else " Download the faces below, then close "
+                                "this window.")) if not todo_ else "\n".join(todo_))
         chk_btn = ttk.Button(crow_, text="Check files", command=check_neo)
         chk_btn.pack(side="left", anchor="n")
         tooltip(chk_btn, "Look for git, uv, Forge Neo, its Python and the three model files (whole, in the right "
@@ -7055,8 +7082,7 @@ def run_gui() -> None:
             """Look again, then build the Propose tab afresh so the notice and the Generate button follow suit."""
             state.pop("gen", None)                                   # drop the cache so the module is read again
                                                                      # (setting it to None means "there is none")
-            w.destroy()
-            ready = engine_ready()
+            ready = engine_ready()                                   # the window stays: the faces may be next
             if state.get("gen_built"):
                 r_ = state.get("gen_row")
                 generate_dialog(r_ if isinstance(r_, dict) else None)
