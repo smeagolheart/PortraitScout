@@ -172,7 +172,7 @@ picture where there is one, and names any it cannot place.
 
 ### Preview page
 
-**Preview page...** on the Proposals tab saves a single web page of the proposed portraits, at game size, each with its name, race and gender. Open it in any browser to look the set over or send it to someone: there is a search box, and clicking a portrait shows it bigger. **Create mod...** also puts one in the mod, as `preview.html`.
+**Preview page...** on the Proposals tab saves a single web page of the proposed portraits, at game size, each with its name, race and gender. Open it in any browser to look the set over or send it to someone: there is a search box, and clicking a portrait shows it bigger. **Create mod...** also puts one in the mod, and **Export work...** in the work's .zip, as `preview.html`.
 
 ### Create mod
 

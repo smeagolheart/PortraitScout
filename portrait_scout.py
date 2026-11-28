@@ -10010,10 +10010,17 @@ def run_gui() -> None:
                     told.append((r, nm, notes.get(k) or {}))
                 z.writestr(WORK_IN, json.dumps(man, indent=1))
                 z.writestr("how-these-were-made.txt", work_text(mod_name, told, str(st.get("portrait_style") or "")))
+                root.config(cursor="watch")                          # a page to look the work over at a glance
+                root.update_idletasks()
+                try:
+                    shown_ = [r for r in sorted_rows(False) if rowkey(r) in props]
+                    z.writestr("preview.html", preview_html(mod_name, preview_items(shown_)))
+                finally:
+                    root.config(cursor="")
         except OSError as e:
             messagebox.showerror("Portrait Scout", f"Could not write {p}:\n{e}")
             return
-        status.set(f"Shared {len(told)} picture(s) in {p}"
+        status.set(f"Shared {len(told)} picture(s) in {p}, with preview.html to look them over"
                    + (f" - {len(gone)} picture(s) are no longer on disk and were left out." if gone else ""))
 
     def open_work() -> None:
