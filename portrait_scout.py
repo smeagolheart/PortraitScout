@@ -4056,7 +4056,7 @@ def run_gui() -> None:
     sty.configure("View.Toolbutton", padding=(12, 4))
     ttk.Radiobutton(btns, text="Gallery", value="gallery", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(16, 0))
-    auto_mode_var = tk.BooleanVar(value=st.get("gallery_mode", "auto") != "plain")
+    auto_mode_var = tk.BooleanVar(value=st.get("gallery_mode", "plain") != "plain")
 
     def auto_mode_changed() -> None:
         st["gallery_mode"] = "auto" if auto_mode_var.get() else "plain"
@@ -4066,7 +4066,7 @@ def run_gui() -> None:
     am_cb = ttk.Checkbutton(btns, text="Expanded", variable=auto_mode_var, command=auto_mode_changed)
     am_cb.pack(side="left", padx=(2, 6))
     tooltip(am_cb, "Expanded: each creature's card opened out, with its new pictures to pick from, the crop and "
-                   "the batch tools (Generate for every creature listed). Off: the usual cards. Remembered.")
+                   "the batch tools (Generate for every creature listed). Off: the usual cards. Off at first; remembered.")
     ttk.Radiobutton(btns, text="Table", value="table", variable=view_var, style="View.Toolbutton",
                     command=lambda: show_view()).pack(side="left", padx=(2, 0))
     gen_tab_btn = ttk.Radiobutton(btns, text="Propose", value="generate", variable=view_var, style="View.Toolbutton",
@@ -4939,7 +4939,7 @@ def run_gui() -> None:
             view_var.set("gallery")
             st["gallery_mode"] = "auto"
             auto_mode_var.set(True)
-        if view_var.get() == "gallery" and st.get("gallery_mode", "auto") == "auto":
+        if view_var.get() == "gallery" and st.get("gallery_mode", "plain") == "auto":
             tab_auto.pack(fill="both", expand=True)                  # the gallery opens on the batch: two pictures
             build_auto()                                             # a creature, pick one; Plain gallery for the cards
             return
@@ -10874,7 +10874,7 @@ def run_gui() -> None:
     clear_btn.config(command=clear_all)
 
     def build_gallery(rows: List[dict]) -> None:
-        if st.get("gallery_mode", "auto") == "auto" and view_var.get() == "gallery":
+        if st.get("gallery_mode", "plain") == "auto" and view_var.get() == "gallery":
             auto_fill_soon()                                         # the Auto view is what shows: it is the one to
             return                                                   # draw (Plain gallery draws the cards when chosen)
         keep_vars.clear()                                            # the cards are about to be thrown away
