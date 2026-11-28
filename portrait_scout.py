@@ -6468,6 +6468,103 @@ def run_gui() -> None:
     UV_DL = "https://github.com/astral-sh/uv#installation"
     KLEIN_DL = "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8"
     KLEIN_BITS = "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b"   # encoder and VAE
+    KLEIN_FILES = (                                                  # (folder under models, file, bytes, link)
+        ("Stable-diffusion", "flux-2-klein-9b-fp8.safetensors", 9433061528,
+         "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors?download=true"),
+        ("text_encoder", "qwen_3_8b_fp8mixed.safetensors", 8664848742,
+         KLEIN_BITS + "/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors?download=true"),
+        ("VAE", "flux2-vae.safetensors", 336211292,
+         KLEIN_BITS + "/resolve/main/split_files/vae/flux2-vae.safetensors?download=true"))
+
+    def fresh_path() -> str:
+        """PATH as Windows has it now, not as it was when Portrait Scout started: git or uv installed a minute
+        ago are on it."""
+        parts_ = [os.environ.get("PATH", "")]
+        if os.name == "nt":
+            try:
+                import winreg
+                for hive_, key_ in ((winreg.HKEY_LOCAL_MACHINE,
+                                     r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                                    (winreg.HKEY_CURRENT_USER, "Environment")):
+                    try:
+                        with winreg.OpenKey(hive_, key_) as k_:
+                            parts_.append(os.path.expandvars(str(winreg.QueryValueEx(k_, "Path")[0])))
+                    except OSError:
+                        pass
+            except ImportError:
+                pass
+            parts_.append(os.path.expandvars(r"%USERPROFILE%\.local\bin"))   # where uv's installer puts it
+        return os.pathsep.join(x for x in parts_ if x)
+
+    def run_in_window(cmd: str, cwd: str) -> None:
+        """Run a setup command in a command window of its own, which stays open so its output can be read."""
+        if not os.path.isdir(cwd):
+            messagebox.showinfo("Portrait Scout", f"{cwd} is not there yet - do the step before this one first.")
+            return
+        env_ = dict(os.environ, PATH=fresh_path())
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["powershell", "-NoExit", "-Command", cmd], cwd=cwd, env=env_,
+                                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+            else:
+                subprocess.Popen(["x-terminal-emulator", "-e", "bash", "-c", cmd + "; exec bash"], cwd=cwd, env=env_)
+        except OSError:
+            try:
+                subprocess.Popen(["cmd", "/K", cmd], cwd=cwd, env=env_,
+                                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+            except OSError as e_:
+                messagebox.showwarning("Portrait Scout", f"Could not open a command window:\n{e_}\n\n"
+                                       f"Open one in {cwd} and type:\n{cmd}")
+
+    def klein_found(sub: str, name: str) -> Optional[Path]:
+        """Where a Klein file is: Forge Neo's own models folder, or the old Forge's (Neo reads both)."""
+        here_ = Path(__file__).resolve().parent
+        for d_ in (here_ / "engine-neo" / "models" / sub, here_ / "engine" / "webui" / "models" / sub):
+            if (d_ / name).is_file():
+                return d_ / name
+        return None
+
+    def neo_settings_patch() -> dict:
+        """What generator/settings.json needs for Forge Neo with FLUX.2 Klein 9B."""
+        mods_ = [str(klein_found(s_, n_) or Path(__file__).resolve().parent / "engine-neo" / "models" / s_ / n_)
+                 for s_, n_, _b, _u in KLEIN_FILES[1:]]
+        return {"engine": {"start": "generator\\start_engine_neo.bat {port}"},
+                "style": "Klein painterly",
+                "payload": {"steps": 4, "sampler_name": "Euler", "scheduler": "Simple", "cfg_scale": 1,
+                            "override_settings": {"sd_model_checkpoint": KLEIN_FILES[0][1],
+                                                  "forge_additional_modules": mods_}}}
+
+    def neo_checks() -> List[Tuple[bool, str]]:
+        """Each Forge Neo step: done or not, and what is missing."""
+        here_ = Path(__file__).resolve().parent
+        pth_ = fresh_path()
+        out_: List[Tuple[bool, str]] = []
+        miss_ = [x for x in ("git", "uv") if not shutil.which(x, path=pth_)]
+        out_.append((not miss_, "" if not miss_ else " and ".join(miss_) + " not found"))
+        neo_ = here_ / "engine-neo"
+        out_.append(((neo_ / "webui.bat").is_file() or (neo_ / "webui.sh").is_file(),
+                     "engine-neo has no webui.bat yet"))
+        out_.append(((neo_ / "venv" / "Scripts" / "python.exe").is_file() or (neo_ / "venv" / "bin" / "python").is_file(),
+                     "engine-neo\\venv has no Python yet"))
+        bad_: List[str] = []
+        for sub_, nm_, size_, _u in KLEIN_FILES:
+            f_ = klein_found(sub_, nm_)
+            if f_ is None:
+                stray_ = next(iter(sorted((neo_ / "models").rglob(nm_))), None) if (neo_ / "models").is_dir() else None
+                bad_.append(f"{nm_} is in {stray_.parent.name}\\, not {sub_}\\" if stray_ else f"{nm_} missing")
+            elif f_.stat().st_size < size_:
+                bad_.append(f"{nm_} is only {f_.stat().st_size / 1e9:.1f} of {size_ / 1e9:.1f} GB (still downloading?)")
+        out_.append((not bad_, "; ".join(bad_)))
+        try:
+            gs_ = generator_module().load_settings()                 # type: ignore[attr-defined]
+            ov_ = (gs_.get("payload") or {}).get("override_settings") or {}
+            ok_ = ("neo" in str((gs_.get("engine") or {}).get("start") or "").lower()
+                   and ov_.get("sd_model_checkpoint") == KLEIN_FILES[0][1]
+                   and all(os.path.isfile(str(m_)) for m_ in ov_.get("forge_additional_modules") or [None]))
+        except Exception:  # noqa: BLE001 - no generator settings yet
+            ok_ = False
+        out_.append((ok_, "not set to Forge Neo yet - press Use Forge Neo"))
+        return out_
 
     def lora_files() -> List[str]:
         here_ = Path(__file__).resolve().parent
@@ -6565,28 +6662,71 @@ def run_gui() -> None:
 
         # ---- Forge Neo: what the styles are written against now ----
         step(0, [("1.  Install ", 0), ("git", 1), (" and ", 0), ("uv", 1),
-                 (", then open a command window in " + str(here) + ".", 0)],
-             [("git", lambda: webbrowser.open(GIT_DL)), ("uv", lambda: webbrowser.open(UV_DL)),
-              ("Open folder", lambda: open_make(str(here)))], neo_f)
-        step(1, [("2.  Clone Forge Neo into ", 0), ("engine-neo", 1), (":\n", 0), (NEO_GIT, 1)],
-             [("Copy", lambda: copy_cmd(NEO_GIT)), ("About Neo", lambda: webbrowser.open(NEO_DOC))], neo_f)
-        step(2, [("3.  Make its Python, from inside engine-neo:\n", 0), (NEO_VENV, 1),
+                 (". Both are free; the defaults of their installers will do.", 0)],
+             [("git", lambda: webbrowser.open(GIT_DL)), ("uv", lambda: webbrowser.open(UV_DL))], neo_f)
+        step(1, [("2.  Clone Forge Neo into ", 0), ("engine-neo", 1), (" (Run it opens a command window in "
+                 + str(here) + " and types it):\n", 0), (NEO_GIT, 1)],
+             [("Run it", lambda: run_in_window(NEO_GIT, str(here))), ("Copy", lambda: copy_cmd(NEO_GIT)),
+              ("About Neo", lambda: webbrowser.open(NEO_DOC))], neo_f)
+        step(2, [("3.  Make its Python, inside engine-neo:\n", 0), (NEO_VENV, 1),
                  ("\n(Portrait Scout starts it with --uv.)", 0)],
-             [("Copy", lambda: copy_cmd(NEO_VENV))], neo_f)
-        step(3, [("4.  Three files, about 18 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
-                 ("flux-2-klein-9b-fp8.safetensors", 1), (" (8.8 GB) in Stable-diffusion\\, ", 0),
+             [("Run it", lambda: run_in_window(NEO_VENV, str(here / "engine-neo"))),
+              ("Copy", lambda: copy_cmd(NEO_VENV))], neo_f)
+        step(3, [("4.  Three files, about 18.4 GB together, into ", 0), ("engine-neo\\models\\", 1), (":\n", 0),
+                 ("flux-2-klein-9b-fp8.safetensors", 1), (" (9.4 GB) in Stable-diffusion\\, ", 0),
                  ("qwen_3_8b_fp8mixed.safetensors", 1), (" (8.7 GB) in text_encoder\\, ", 0),
-                 ("flux2-vae.safetensors", 1), (" (321 MB) in VAE\\. The last two are in one repository, under "
-                  "split_files.", 0)],
-             [("Model", lambda: webbrowser.open(KLEIN_DL)), ("Encoder + VAE", lambda: webbrowser.open(KLEIN_BITS)),
+                 ("flux2-vae.safetensors", 1), (" (336 MB) in VAE\\. The buttons download each one; Hugging Face "
+                  "may ask you to sign in and accept the model's license first.", 0)],
+             [("Model", lambda: webbrowser.open(KLEIN_FILES[0][3])),
+              ("Encoder", lambda: webbrowser.open(KLEIN_FILES[1][3])),
+              ("VAE", lambda: webbrowser.open(KLEIN_FILES[2][3])),
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models"), str(here)))], neo_f)
-        step(4, [("5.  In Generator settings, set ", 0), ("start", 1), (" to ", 0),
-                 ("generator\\start_engine_neo.bat {port}", 1), (", the checkpoint to the Klein file, and list the "
-                  "encoder and the VAE in ", 0), ("forge_additional_modules", 1),
-                 (" by their full paths. Klein is step-distilled: 4 steps, CFG 1.", 0)],
-             [("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
+
+        def use_neo() -> None:
+            try:
+                pg_ = generator_module()
+                gs_ = pg_.load_settings()                            # type: ignore[attr-defined]
+                pg_.save_patch(gs_, neo_settings_patch())            # type: ignore[attr-defined]
+            except Exception as e_:  # noqa: BLE001
+                messagebox.showwarning("Portrait Scout", f"Could not write generator/settings.json:\n{e_}")
+                return
+            st["portrait_style"] = st["portrait_style_people"] = "Klein painterly"
+            save_settings(st)
+            status.set("Generator settings: Forge Neo with FLUX.2 Klein 9B, 4 steps, CFG 1.")
+            check_neo()
+        step(4, [("5.  Point Portrait Scout at Forge Neo: its start script, the Klein model, the encoder and the "
+                  "VAE, 4 steps at CFG 1, and the Klein painterly style. ", 0), ("Use Forge Neo", 1),
+                 (" writes all of it into generator\\settings.json.", 0)],
+             [("Use Forge Neo", use_neo),
+              ("Setup notes", lambda: open_path(str(here / "generator" / "README.md")))], neo_f)
         step(5, "6.  Press Check again, at the top. Portrait Scout starts and stops the engine by itself after that.",
              [], neo_f)
+        marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
+        for i_, m_ in enumerate(marks_):
+            m_.grid(row=i_, column=2, sticky="nw", padx=(6, 0), pady=2)
+        crow_ = tk.Frame(neo_f, bg=BG)
+        crow_.grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
+
+        def check_neo() -> None:
+            """Tick each step that is done, and say what the first one that is not still needs."""
+            if not cnote_.winfo_exists():                            # the window was closed meanwhile
+                return
+            try:
+                res_ = neo_checks()
+            except Exception as e_:  # noqa: BLE001
+                cnote_.config(text=f"Could not check: {e_}")
+                return
+            for m_, (ok_, _w) in zip(marks_, res_):
+                m_.config(text="\u2714" if ok_ else "\u2716", fg="#2e7d32" if ok_ else "#b23b3b")
+            todo_ = [f"Step {i_ + 1}: {w_}" for i_, (ok_, w_) in enumerate(res_) if not ok_]
+            cnote_.config(text="All in place. Press Check again at the top." if not todo_ else "\n".join(todo_))
+        chk_btn = ttk.Button(crow_, text="Check files", command=check_neo)
+        chk_btn.pack(side="left", anchor="n")
+        tooltip(chk_btn, "Look for git, uv, Forge Neo, its Python and the three model files (whole, in the right "
+                         "folders), and whether the settings point at them.")
+        cnote_.pack(side="left", padx=(10, 0))
+        root.after(200, check_neo)
 
         # ---- the older Forge: one package, one model file, no git ----
         step(0, [("1.  Download Forge's Windows one-click package (webui_forge_cu121_torch231.7z, 1.7 GB) and ", 0),

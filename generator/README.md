@@ -20,12 +20,12 @@ against; the older **Forge** package is less to download and needs no git.
 
 [Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) is a maintained fork of Forge that
 paints FLUX.2 Klein, which the older Forge cannot. Klein is step-distilled: **4 steps at CFG 1**, about two to
-three seconds a picture on a fast card. Windows, an NVIDIA card, roughly 18 GB of model files and 16 GB of
+three seconds a picture on a fast card. Windows, an NVIDIA card, roughly 18.4 GB of model files and 16 GB of
 graphics memory at fp8.
 
 1. Install [git](https://git-scm.com/downloads) and [uv](https://github.com/astral-sh/uv#installation), then
    open a command window in the Portrait Scout folder.
-2. Clone Forge Neo into `engine-neo`:
+2. Clone Forge Neo into `engine-neo` (**Run it** in the setup window types this into a command window for you):
 
    ```
    git clone https://github.com/Haoming02/sd-webui-forge-classic engine-neo --branch neo
@@ -41,16 +41,17 @@ graphics memory at fp8.
 
    | File | Copy to | From |
    |---|---|---|
-   | `flux-2-klein-9b-fp8.safetensors` (8.8 GB) | `engine-neo\models\Stable-diffusion\` | [black-forest-labs/FLUX.2-klein-9b-fp8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8) |
-   | `qwen_3_8b_fp8mixed.safetensors` (8.7 GB) | `engine-neo\models\text_encoder\` | [Comfy-Org/vae-text-encorder-for-flux-klein-9b](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b), under `split_files` |
-   | `flux2-vae.safetensors` (321 MB) | `engine-neo\models\VAE\` | the same repository |
+   | `flux-2-klein-9b-fp8.safetensors` (9.4 GB) | `engine-neo\models\Stable-diffusion\` | [black-forest-labs/FLUX.2-klein-9b-fp8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors?download=true) (sign in and accept the license first) |
+   | `qwen_3_8b_fp8mixed.safetensors` (8.7 GB) | `engine-neo\models\text_encoder\` | [Comfy-Org/vae-text-encorder-for-flux-klein-9b](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors?download=true) |
+   | `flux2-vae.safetensors` (336 MB) | `engine-neo\models\VAE\` | [the same repository](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/vae/flux2-vae.safetensors?download=true) |
 
    Klein reads the text encoder and the VAE as separate files, unlike the old all-in-one nf4 checkpoint. The
    undistilled [FLUX.2-klein-base-9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B) works too,
    at about 50 steps and CFG 4 - slower, and not what the styles here are tuned for. FLUX.2 Klein is under
    Black Forest Labs' non-commercial license; read it before selling anything painted with it.
 
-5. Point `settings.json` at it:
+5. Point `settings.json` at it. **Use Forge Neo** in Portrait Scout's setup window (Generator setup, top right)
+   does this for you, with your own paths; **Check files** there ticks each step that is done. By hand:
 
    ```json
    "engine": { "start": "generator\\start_engine_neo.bat {port}" },
