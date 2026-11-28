@@ -2046,11 +2046,14 @@ class Engine:
                     frac = min(1.0, max(0.0, float(pr.get("progress") or 0)))
                     if stop.is_set():
                         break
-                    if step or frac:
+                    if step:                                         # Forge reports a token 1% while it loads
                         self.progress((i + frac) / count, f"Candidate {i + 1} of {count}: step {step} of {steps}" if steps
                                       else f"Candidate {i + 1} of {count}: {int(frac * 100)}%")
                     else:
-                        self.progress(i / count, f"Candidate {i + 1} of {count}: loading the model... {int(time.time() - began)} s")
+                        took = int(time.time() - began)
+                        self.progress(i / count, f"Candidate {i + 1} of {count}: loading the model... {took} s"
+                                      + (" (the first load reads the whole model from disk; later ones are quicker)"
+                                         if took > 45 else ""))
             threading.Thread(target=watch, daemon=True).start()
             try:
                 res = self._call(route, payload, timeout=float(self.e.get("image_timeout_seconds", 900)))

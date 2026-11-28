@@ -8559,6 +8559,14 @@ def run_gui() -> None:
             if not dlg.winfo_exists():
                 return
             gstat.set(text)
+            try:                                                     # the engine line follows what is happening
+                if text.startswith(("Starting the image engine", "First start")):
+                    eng_var.set("starting...")
+                elif text.startswith("Candidate"):
+                    eng_var.set("running")
+                    web_btn.config(state="normal")
+            except (NameError, tk.TclError):
+                pass
             if not gbar_.winfo_ismapped():
                 gbar_.pack(side="right", fill="x", expand=True, padx=(14, 0))
             if frac is None:
