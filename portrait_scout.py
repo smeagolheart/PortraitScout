@@ -6695,6 +6695,11 @@ def run_gui() -> None:
         box.columnconfigure(0, weight=1)
         head = tk.Frame(box, bg=BG)
         head.grid(row=0, column=0, columnspan=2, sticky="w")
+        top_ = box.winfo_toplevel()
+        if top_ is not root:                                         # the Setup window: right-click anywhere copies
+            menu_all_ = tk.Menu(top_, tearoff=0)                     # every step and note (labels cannot be selected)
+            menu_all_.add_command(label="Copy all steps", command=lambda: copy_all())
+            top_.bind("<Button-3>", lambda e_: menu_all_.tk_popup(e_.x_root, e_.y_root))
         head_l = tk.Label(head, text=engine_text(), bg=BG, font=("TkDefaultFont", 10, "bold"))
         head_l.pack(side="left")
         if callable(again):
@@ -6737,8 +6742,11 @@ def run_gui() -> None:
                 f = tk.Frame(into, bg=BG)
                 f.grid(row=n * 2, column=1, sticky="w", padx=(10, 0), pady=(4, 4))
                 for i_, (label, cmd) in enumerate(buttons):            # three to a row, so none is cut off
-                    ttk.Button(f, text=label, command=cmd).grid(row=i_ // 3, column=i_ % 3, sticky="ew",
-                                                                padx=(0, 6), pady=(0, 3))   # type: ignore[arg-type]
+                    if label.startswith("!"):                          # the step's main action: blue
+                        b_ = blue_button(f, label[1:], cmd)
+                    else:
+                        b_ = ttk.Button(f, text=label, command=cmd)    # type: ignore[arg-type]
+                    b_.grid(row=i_ // 3, column=i_ % 3, sticky="ew", padx=(0, 6), pady=(0, 3))
 
         def copy_all() -> None:
             """Every step's text and every note in the window, for pasting into a message."""
@@ -6763,12 +6771,13 @@ def run_gui() -> None:
 
         def copyable(t_: tk.Text) -> None:
             """Selectable read-only text: click focuses it, so Ctrl+C works; right-click to copy."""
+            t_.config(selectbackground="#9cc3f0", inactiveselectbackground="#9cc3f0", selectforeground="black")
             t_.bind("<Button-1>", lambda e_: t_.focus_set(), add="+")
             m_ = tk.Menu(t_, tearoff=0)
             m_.add_command(label="Copy", command=lambda: (root.clipboard_clear(), root.clipboard_append(
                 t_.get("sel.first", "sel.last") if t_.tag_ranges("sel") else t_.get("1.0", "end-1c"))))
             m_.add_command(label="Copy all steps", command=copy_all)
-            t_.bind("<Button-3>", lambda e_: m_.tk_popup(e_.x_root, e_.y_root))
+            t_.bind("<Button-3>", lambda e_: (m_.tk_popup(e_.x_root, e_.y_root), "break")[1])   # not the window's too
 
         def status_line(where: object, row: int) -> Tuple[tk.Frame, Callable[[str, Optional[bool]], None]]:
             """A line under a step for what its button is doing, with a bar that moves while it works.
@@ -6802,6 +6811,10 @@ def run_gui() -> None:
                         bar_.pack_forget()
                 root.after(0, ui)
             return f_, say
+
+        def blue_button(where: object, text: str, cmd: object) -> tk.Button:
+            return tk.Button(where, text=text, command=cmd, bg="#2f6fb5", fg="white", activebackground="#245a94",   # type: ignore[arg-type]
+                             activeforeground="white", relief="raised", padx=8)
 
         def copy_cmd(text: str) -> None:
             """Put a command on the clipboard: it is typed into a command window, not run from here."""
@@ -6858,7 +6871,7 @@ def run_gui() -> None:
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[1][0]), str(here))),
               ("Open folder", lambda: open_make(str(here / "engine-neo" / "models" / KLEIN_FILES[2][0]), str(here))),
               ("Accept license", lambda: webbrowser.open(KLEIN_DL)),
-              ("Move downloads", lambda: move_downloads())], neo_f)
+              ("!Move downloads", lambda: move_downloads())], neo_f)
 
         _f4, say4 = status_line(neo_f, 2 * 2 + 1)                     # under step 3: the moves
 
@@ -7102,14 +7115,35 @@ def run_gui() -> None:
         tk.Label(sbox, bg=BG, justify="left", wraplength=720, anchor="w",
                  text="Sprite view: each creature's in-game sprite beside its portrait, so you can match its look. "
                       "Portrait Scout draws it with Near Infinity (free), which needs Java. Either install Near "
-                      "Infinity with its Windows installer (it brings its own Java), or put NearInfinity.jar in "
-                      + str(here) + " and install Java.").grid(row=0, column=0, sticky="w")
+                      "Infinity with its Windows installer (it brings its own Java), or download NearInfinity.jar, "
+                      "press Move download to put it in this Portrait Scout folder (" + str(here) + "), and install "
+                      "Java.").grid(row=0, column=0, sticky="w")
         sbt = tk.Frame(sbox, bg=BG)
         sbt.grid(row=0, column=1, sticky="nw", padx=(10, 0))
+        def ni_move() -> None:
+            """NearInfinity*.jar from Downloads into the Portrait Scout folder, as NearInfinity.jar."""
+            got_ = None
+            for d_ in downloads_dirs():
+                got_ = next(iter(sorted(d_.glob("NearInfinity*.jar"), key=lambda p_: p_.stat().st_mtime, reverse=True)), None)
+                if got_:
+                    break
+            if got_ is None:
+                snote.config(text="No NearInfinity .jar in Downloads. Press Near Infinity and download the .jar "
+                                  "(or its Windows installer, and run that).")
+                return
+            try:
+                shutil.move(str(got_), str(here / "NearInfinity.jar"))
+            except OSError as e_:
+                snote.config(text=f"Could not move {got_.name}: {e_}")
+                return
+            st.pop("ni_jar", None)
+            sprites_state()
+            status.set(f"Moved {got_.name} into {here} as NearInfinity.jar.")
         for i_, (lab_, cmd_) in enumerate((("Near Infinity", lambda: webbrowser.open(NI_DL)),
                                            ("Java", lambda: webbrowser.open(JAVA_DL)),
                                            ("Open folder", lambda: open_path(str(here))))):
-            ttk.Button(sbt, text=lab_, command=cmd_).grid(row=0, column=i_, padx=(0, 6))
+            ttk.Button(sbt, text=lab_, command=cmd_).grid(row=0, column=i_, padx=(0, 6), pady=(0, 3))
+        blue_button(sbt, "Move download", ni_move).grid(row=1, column=0, sticky="ew", padx=(0, 6))
         smark = tk.Label(sbox, text="", bg=BG, font=("TkDefaultFont", 12, "bold"))
         smark.grid(row=0, column=2, sticky="nw", padx=(2, 0))
         snote = tk.Label(sbox, text="", bg=BG, fg="#5a4a00", justify="left", anchor="w")
