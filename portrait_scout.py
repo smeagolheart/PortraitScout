@@ -6801,7 +6801,14 @@ def run_gui() -> None:
         tooltip(chk_btn, "Look for git, uv, Forge Neo, its Python and the three model files (whole, in the right "
                          "folders), and whether the settings point at them.")
         cnote_.pack(side="left", padx=(10, 0))
-        root.after(200, check_neo)
+
+        def keep_checking() -> None:
+            """Look again every few seconds while the steps are on screen, so a step ticks as soon as it is done."""
+            if not cnote_.winfo_exists():
+                return
+            check_neo()
+            root.after(3000, keep_checking)
+        root.after(200, keep_checking)
 
         # ---- the older Forge: one package, one model file, no git ----
         step(0, [("1.  Download Forge's Windows one-click package (webui_forge_cu121_torch231.7z, 1.7 GB) and ", 0),
@@ -6923,6 +6930,14 @@ def run_gui() -> None:
             faces_say(0.0, "Starting the download...")
             threading.Thread(target=faces_get, daemon=True).start()
         fbtn.config(command=faces_start)
+
+        def faces_watch() -> None:
+            if not fnote.winfo_exists():
+                return
+            if "disabled" not in fbtn.state():                       # not while it is downloading
+                faces_state()
+            root.after(3000, faces_watch)
+        root.after(3000, faces_watch)
         tooltip(fbtn, "Download the face bank from the latest release and unpack it into the faces folder. "
                       "Faces already there are kept.")
         faces_state()
