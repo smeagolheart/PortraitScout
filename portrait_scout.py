@@ -6653,7 +6653,7 @@ def run_gui() -> None:
                  font=("TkDefaultFont", 10, "bold")).pack(side="left")
         if callable(again):
             ttk.Button(head, text="Check again", command=again).pack(side="left", padx=10)   # type: ignore[arg-type]
-        tk.Label(box, bg=BG, justify="left", wraplength=860, fg="#5a4a00",
+        tk.Label(box, bg=BG, justify="left", wraplength=980, fg="#5a4a00",
                  text="Portrait Scout builds the prompt, sends it, and turns the picture into a game portrait. The "
                       "generator itself and its models are many gigabytes and separately licensed, so they are not in "
                       "the repository. Set one up once:").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
@@ -6671,7 +6671,7 @@ def run_gui() -> None:
             """text: a string, or pieces of one where (piece, True) is shown in bold."""
             into = where if where is not None else box
             pieces = [(text, False)] if isinstance(text, str) else list(text)   # type: ignore[arg-type]
-            t = tk.Text(into, bg=BG, width=78, height=2, wrap="word", bd=0, highlightthickness=0,
+            t = tk.Text(into, bg=BG, width=88, height=2, wrap="word", bd=0, highlightthickness=0,
                         font=("TkDefaultFont", 9), cursor="arrow", spacing3=2)
             t.tag_configure("b", font=("TkDefaultFont", 9, "bold"))
             for piece, bold in pieces:
@@ -6679,12 +6679,12 @@ def run_gui() -> None:
             whole = "".join(p for p, _b in pieces)                   # as tall as the text needs, counted by hand:
             lines = whole.count("\n") + 1                            # asking Tk before it is drawn gives nonsense
             for para in whole.split("\n"):
-                lines += len(para) // 74
+                lines += len(para) // 84
             t.config(height=max(1, min(8, lines)), state="disabled")
             t.grid(row=n, column=0, sticky="w", pady=2)
             if buttons:
                 f = tk.Frame(into, bg=BG)
-                f.grid(row=n, column=1, sticky="w", padx=(10, 0))
+                f.grid(row=n, column=1, sticky="w", padx=(10, 0), pady=(4, 4))
                 for i_, (label, cmd) in enumerate(buttons):            # three to a row, so none is cut off
                     ttk.Button(f, text=label, command=cmd).grid(row=i_ // 3, column=i_ % 3, sticky="ew",
                                                                 padx=(0, 6), pady=(0, 3))   # type: ignore[arg-type]
@@ -6777,8 +6777,8 @@ def run_gui() -> None:
                 "The very first start is slow - Forge installs its packages, 10 to 30 minutes, once; after that it "
                 "starts in about a minute.", [], neo_f)
         marks_ = [tk.Label(neo_f, text="", bg=BG, font=("TkDefaultFont", 12, "bold")) for _i in range(5)]
-        for i_, m_ in enumerate(marks_):
-            m_.grid(row=i_, column=2, sticky="nw", padx=(6, 0), pady=2)
+        for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
+            m_.grid(row=i_, column=2, sticky="w", padx=(2, 0))
         crow_ = tk.Frame(neo_f, bg=BG)
         crow_.grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
         cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
@@ -6833,7 +6833,7 @@ def run_gui() -> None:
         # ---- the face bank: for either engine ----
         fbox = tk.Frame(box, bg=BG)
         fbox.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        tk.Label(fbox, bg=BG, justify="left", wraplength=640, anchor="w",
+        tk.Label(fbox, bg=BG, justify="left", wraplength=720, anchor="w",
                  text="Face bank (about 550 MB): real-looking faces each portrait starts from, so no two look "
                       "alike. Synthetic faces from SFHQ, MIT License. Downloaded and unpacked into the faces "
                       "folder for you.").grid(row=0, column=0, sticky="w")
@@ -6926,7 +6926,7 @@ def run_gui() -> None:
         tooltip(fbtn, "Download the face bank from the latest release and unpack it into the faces folder. "
                       "Faces already there are kept.")
         faces_state()
-        tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=860,
+        tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=980,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
                       "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
                       "with an Automatic1111 / Forge API will do, with any model.").grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
@@ -7021,14 +7021,16 @@ def run_gui() -> None:
         det.pack(fill="x")
 
         def fit() -> None:
-            """As big as the steps need, so nothing scrolls - unless the screen is smaller than that."""
+            """As big as the steps need, so nothing scrolls - unless the screen is smaller than that. Measured
+            again once the file check has filled in its notes; it only ever grows."""
             if not w.winfo_exists():
                 return
             w.update_idletasks()
-            ww_ = min(inner.winfo_reqwidth() + sb_.winfo_reqwidth() + 8, w.winfo_screenwidth() - 40)
-            hh_ = min(inner.winfo_reqheight() + 8, w.winfo_screenheight() - 90)
-            w.geometry(f"{ww_}x{hh_}+{max(0, (w.winfo_screenwidth() - ww_) // 2)}+20")
+            ww_ = min(max(w.winfo_width(), inner.winfo_reqwidth() + sb_.winfo_reqwidth() + 40), w.winfo_screenwidth() - 40)
+            hh_ = min(max(w.winfo_height(), inner.winfo_reqheight() + 30), w.winfo_screenheight() - 90)
+            w.geometry(f"{ww_}x{hh_}+{max(0, (w.winfo_screenwidth() - ww_) // 2)}+10")
         w.after(50, fit)
+        w.after(700, fit)
         ttk.Label(det, foreground="#555", wraplength=840, justify="left",
                   text="The names, sizes and links above are what Portrait Scout was written against, as they stood "
                        "in November 2026. Addresses move: if a button opens nothing, search the file name - they are "
