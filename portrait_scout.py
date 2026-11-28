@@ -6504,13 +6504,26 @@ def run_gui() -> None:
             return
         env_ = dict(os.environ, PATH=fresh_path())
         try:
-            if os.name == "nt":                                      # run it, then wait for a key and close
-                ps_ = (cmd + "; Write-Host ''; if ($?) { Write-Host 'Done.' -ForegroundColor Green } else "
-                       "{ Write-Host 'That did not work - read the messages above.' -ForegroundColor Red }; "
-                       "Write-Host 'Press any key to close this window.'; "
-                       "$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')")
-                proc_ = subprocess.Popen(["powershell", "-NoProfile", "-Command", ps_], cwd=cwd, env=env_,
-                                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+            if os.name == "nt":                                      # run it, then wait for a key and close:
+                tmp_ = Path(__file__).resolve().parent / "temp"      # from a script file, the pause in a finally,
+                tmp_.mkdir(exist_ok=True)                            # so an error is never closed away unread
+                ps1_ = tmp_ / "setup-step.ps1"
+                ps1_.write_text(
+                    "$host.UI.RawUI.WindowTitle = 'Portrait Scout setup'\r\n"
+                    "try {\r\n"
+                    f"    Write-Host '> {cmd.replace(chr(39), chr(39) * 2)}' -ForegroundColor DarkGray\r\n"
+                    f"    {cmd}\r\n"
+                    "    Write-Host ''\r\n"
+                    "    if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) { Write-Host 'Done.' -ForegroundColor Green }\r\n"
+                    "    else { Write-Host 'That did not work - read the messages above.' -ForegroundColor Red }\r\n"
+                    "} catch {\r\n"
+                    "    Write-Host $_ -ForegroundColor Red\r\n"
+                    "} finally {\r\n"
+                    "    Write-Host ''\r\n"
+                    "    cmd /c pause\r\n"
+                    "}\r\n", encoding="utf-8-sig")
+                proc_ = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1_)],
+                                         cwd=cwd, env=env_, creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             else:
                 proc_ = subprocess.Popen(["x-terminal-emulator", "-e", "bash", "-c",
                                   cmd + "; echo; read -n 1 -s -p 'Press any key to close this window.'"], cwd=cwd, env=env_)
