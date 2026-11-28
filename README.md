@@ -18,6 +18,7 @@ It only **reads** your game folder. Nothing there is installed, changed or delet
 - Python 3.8+ with tkinter (included in the normal Windows/macOS installers; Linux: `python3-tk`).
 - A game folder (one with `chitin.key`), and the mod's own folder. Not IWD2 or Planescape: Torment.
 - Optional: [ffmpeg](https://ffmpeg.org) on PATH to play compressed sounds (WAVC/ACM, Ogg); plain WAV plays without it.
+- Optional: [Near Infinity](https://github.com/Argent77/NearInfinity/releases) for the sprite view (each creature's in-game sprite beside its portrait). Either install it with its Windows installer, which brings its own Java, or put `NearInfinity.jar` in the Portrait Scout folder and install [Java](https://adoptium.net/). Setup checks for it.
 - Optional: `pip install pillow` for JPG previews and slightly sharper generated portraits.
 
 ## Use

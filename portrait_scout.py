@@ -4087,7 +4087,9 @@ def run_gui() -> None:
     loading_var = tk.StringVar(value="")
     ttk.Label(btns, textvariable=loading_var, foreground="#b45309",
               font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=14)
-    setup_btn = ttk.Button(btns, text="Setup")               # the engine, the faces and the defaults
+    setup_btn = tk.Button(btns, text="Setup", bg="#2f6fb5", fg="white", activebackground="#245a94",   # the engine,
+                          activeforeground="white", font=("TkDefaultFont", 10, "bold"), padx=14, pady=1,   # the faces,
+                          relief="raised")                                                                 # the defaults
     setup_btn.pack(side="right")
 
     fbar = ttk.Frame(root, padding=(8, 0, 8, 0))                     # what is listed: the same for Gallery, Table
@@ -6538,6 +6540,8 @@ def run_gui() -> None:
             threading.Thread(target=lambda: (proc_.wait(), root.after(0, on_done)), daemon=True).start()
 
     FACES_URL = "https://github.com/smeagolheart/PortraitScout/releases/latest/download/PortraitScout-faces.zip"
+    NI_DL = "https://github.com/Argent77/NearInfinity/releases"
+    JAVA_DL = "https://adoptium.net/"
 
     def faces_count() -> int:
         """How many adult faces the bank has (faces\\human\\male and female)."""
@@ -6937,7 +6941,7 @@ def run_gui() -> None:
         for i_, m_ in enumerate(marks_):                             # level with the step's own buttons
             m_.grid(row=i_ * 2, column=2, sticky="w", padx=(2, 0))
         crow_ = tk.Frame(box, bg=BG)                                 # under the face bank, so neither is missed
-        crow_.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        crow_.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
         cnote_ = tk.Label(crow_, text="", bg=BG, fg="#5a4a00", justify="left", wraplength=700)
 
         def check_neo() -> None:
@@ -6954,6 +6958,10 @@ def run_gui() -> None:
             todo_ = [f"Step {i_ + 1}: {w_}" for i_, (ok_, w_) in enumerate(res_) if not ok_]
             if not faces_count():
                 todo_.append("Face bank: not downloaded yet - press Download faces above")
+            try:
+                state["sprites_state"]()                             # type: ignore[operator]
+            except Exception:  # noqa: BLE001
+                pass
             cnote_.config(text="All in place. Close this window and start proposing." if not todo_ else "\n".join(todo_))
         chk_btn = ttk.Button(crow_, text="Check files", command=check_neo)
         chk_btn.pack(side="left", anchor="n")
@@ -7088,9 +7096,41 @@ def run_gui() -> None:
         tooltip(fbtn, "Download the face bank from the latest release and unpack it into the faces folder. "
                       "Faces already there are kept.")
         faces_state()
+        # ---- sprites: Near Infinity draws them ----
+        sbox = tk.Frame(box, bg=BG)
+        sbox.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        tk.Label(sbox, bg=BG, justify="left", wraplength=720, anchor="w",
+                 text="Sprite view: each creature's in-game sprite beside its portrait, so you can match its look. "
+                      "Portrait Scout draws it with Near Infinity (free), which needs Java. Either install Near "
+                      "Infinity with its Windows installer (it brings its own Java), or put NearInfinity.jar in "
+                      + str(here) + " and install Java.").grid(row=0, column=0, sticky="w")
+        sbt = tk.Frame(sbox, bg=BG)
+        sbt.grid(row=0, column=1, sticky="nw", padx=(10, 0))
+        for i_, (lab_, cmd_) in enumerate((("Near Infinity", lambda: webbrowser.open(NI_DL)),
+                                           ("Java", lambda: webbrowser.open(JAVA_DL)),
+                                           ("Open folder", lambda: open_path(str(here))))):
+            ttk.Button(sbt, text=lab_, command=cmd_).grid(row=0, column=i_, padx=(0, 6))
+        smark = tk.Label(sbox, text="", bg=BG, font=("TkDefaultFont", 12, "bold"))
+        smark.grid(row=0, column=2, sticky="nw", padx=(2, 0))
+        snote = tk.Label(sbox, text="", bg=BG, fg="#5a4a00", justify="left", anchor="w")
+        snote.grid(row=1, column=0, columnspan=3, sticky="w")
+
+        def sprites_state() -> None:
+            if not snote.winfo_exists():
+                return
+            try:
+                jv_, ni_, hp_ = sprite_tools()
+            except Exception:  # noqa: BLE001
+                jv_ = ni_ = hp_ = ""
+            ok_ = bool(jv_ and ni_ and hp_)
+            smark.config(text="\u2714" if ok_ else "\u2716", fg="#2e7d32" if ok_ else "#b23b3b")
+            snote.config(text=f"Near Infinity: {ni_}" if ok_ else "Missing: " + ", ".join(
+                x for x, h_ in (("NearInfinity.jar", ni_), ("Java", jv_), ("generator\\spriteshot.jar", hp_)) if not h_))
+        sprites_state()
+        state["sprites_state"] = sprites_state                       # Check files looks again too
         # ---- defaults: where the Propose tab's picks start, and what Reset goes back to ----
         dbox = tk.Frame(box, bg=BG)
-        dbox.grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        dbox.grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
         tk.Label(dbox, text="Defaults", bg=BG, font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, columnspan=10,
                                                                                        sticky="w")
         tk.Label(dbox, bg=BG, fg="#5a4a00", text="Where each pick on the Propose tab starts, and what Reset goes back "
@@ -7178,9 +7218,9 @@ def run_gui() -> None:
         tk.Label(box, bg=BG, fg="#5a4a00", justify="left", wraplength=980,
                  text="Already run a generator of your own? None of the above is needed: open Generator settings on "
                       "the Propose tab, put its address in url, and turn \"start it for me\" off. Anything "
-                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+                      "with an Automatic1111 / Forge API will do, with any model.").grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
         more = tk.Frame(box, bg=BG)
-        more.grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        more.grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
         tk.Label(more, text="More information:", bg=BG, fg="#5a4a00").pack(side="left", padx=(0, 6))
         ttk.Button(more, text="About Forge",
                    command=lambda: webbrowser.open(FORGE_DOC)).pack(side="left", padx=(0, 6))
@@ -11209,12 +11249,33 @@ def run_gui() -> None:
                 return hit_
         return ""
 
+    def ni_installed() -> Tuple[str, str]:
+        """Near Infinity put in by its Windows installer: (its jar, the Java it brings), "" if not there."""
+        import glob as _gl
+        for base_ in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("LOCALAPPDATA", "")):
+            if not base_:
+                continue
+            for d_ in sorted(_gl.glob(os.path.join(base_, "*", "NearInfinity*")) + _gl.glob(os.path.join(base_, "NearInfinity*"))):
+                jar_ = next(iter(sorted(_gl.glob(os.path.join(d_, "app", "*.jar")) + _gl.glob(os.path.join(d_, "*.jar")))), "")
+                jv_ = next(iter(_gl.glob(os.path.join(d_, "runtime", "bin", "java.exe"))), "")
+                if jar_:
+                    return jar_, jv_
+        return "", ""
+
     def sprite_tools() -> Tuple[str, str, str]:
-        """(java, Near Infinity's jar, our helper jar), "" for whatever is missing."""
+        """(java, Near Infinity's jar, our helper jar), "" for whatever is missing. Near Infinity: in the Portrait
+        Scout folder, or installed with its own installer (which brings its own Java)."""
         here_ = Path(__file__).resolve().parent
         ni_ = str(st.get("ni_jar") or here_ / "NearInfinity.jar")
+        java_ = find_java()
+        if not os.path.isfile(ni_):
+            ni_ = next(iter(sorted(str(p_) for p_ in here_.glob("NearInfinity*.jar"))), "")
+        if not ni_ or not java_:
+            ij_, iv_ = ni_installed()
+            ni_ = ni_ or ij_
+            java_ = java_ or iv_
         helper_ = here_ / "generator" / "spriteshot.jar"
-        return (find_java(), ni_ if os.path.isfile(ni_) else "", str(helper_) if helper_.is_file() else "")
+        return (java_, ni_ if ni_ and os.path.isfile(ni_) else "", str(helper_) if helper_.is_file() else "")
 
     def sprite_make(cres: List[str], done_: Callable[[Set[str], str], None]) -> None:
         """Draw the creatures' in-game sprites (Near Infinity's own decoder, standing, first direction) into
@@ -11373,6 +11434,11 @@ def run_gui() -> None:
                     rest_ = [c for c in rest_ if not sprite_files(c)]
                     if rest_:                                        # to open the game, so once, not per creature
                         sprite_make(rest_, lambda g_, w_: status.set(f"Sprites drawn for {len(g_)} creature(s)."))
+            elif why_.startswith("needs") and ("Java" in why_ or "NearInfinity" in why_):
+                lab.config(text="Sprite view\nneeds Near Infinity\n(click for Setup)", fg="#1f5fa8", cursor="hand2")
+                lab.bind("<Button-1>", lambda e_: setup_window())
+                tooltip(lab, f"The game has a sprite for {cre_}; Portrait Scout draws it with Near Infinity, which "
+                             f"is not set up here ({why_}). Setup says how.")
             else:
                 lab.config(text="no sprite")
                 tooltip(lab, f"Could not draw {cre_}'s sprite: {why_ or 'unknown'}.")
